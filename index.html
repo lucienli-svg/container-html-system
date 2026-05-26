@@ -1,0 +1,1656 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
+  <title>集装箱智能监控管理系统</title>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; }
+    .login-container { display: flex; justify-content: center; align-items: center; min-height: 100vh; background: linear-gradient(135deg, #1e3c72, #2a5298); }
+    .login-card { background: white; border-radius: 16px; padding: 40px; width: 380px; max-width: 90%; text-align: center; }
+    .login-title { font-size: 22px; font-weight: 600; margin-bottom: 30px; color: #1e3c72; }
+    .login-input, .form-control { width: 100%; padding: 12px; border: 1px solid #dcdfe6; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+    .login-btn, .btn { padding: 10px 18px; border-radius: 8px; border: none; cursor: pointer; font-size: 14px; background: #f5f7fa; }
+    .btn-primary, .login-btn { background: #2a5298; color: white; }
+    .btn-success { background: #67c23a; color: white; }
+    .btn-warning { background: #e6a23c; color: white; }
+    .btn-danger { background: #f56c6c; color: white; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
+    .navbar { background: linear-gradient(135deg, #1e3c72, #2a5298); color: white; padding: 0 24px; height: 60px; display: flex; align-items: center; justify-content: space-between; }
+    .logo { font-size: 18px; font-weight: 600; }
+    .user-info { display: flex; align-items: center; gap: 15px; }
+    .role-badge, .logout-btn { background: rgba(255,255,255,0.2); padding: 5px 12px; border-radius: 20px; font-size: 13px; cursor: pointer; border: none; color: white; }
+    .app-container { display: flex; min-height: calc(100vh - 60px); }
+    .sidebar { width: 260px; background: white; border-right: 1px solid #e4e7ed; padding: 16px 0; position: sticky; top: 0; height: calc(100vh - 60px); overflow-y: auto; align-self: flex-start; }
+    .menu-item { padding: 12px 20px; margin: 4px 12px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 12px; font-size: 14px; color: #5a6a7e; }
+    .menu-item:hover, .menu-item.active { background: #e8f0fe; color: #2a5298; }
+    .main-content { flex: 1; padding: 20px; overflow-y: auto; }
+    .card { background: white; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #eef2f6; flex-wrap: wrap; gap: 10px; }
+    .card-title { font-size: 18px; font-weight: 700; color: #1f2d3d; }
+    .data-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+    .data-table th,
+    .data-table td { padding: 12px 10px; text-align: center !important; vertical-align: middle; border-bottom: 1px solid #ebeef5; line-height: 1.45; }
+    .data-table th { background: #f5f7fa; font-weight: 700; color: #303133; white-space: nowrap; }
+    .data-table td { color: #606266; word-break: break-word; }
+    .data-table tbody tr:hover { background: #f7faff; }
+    .data-table input,
+    .data-table select { text-align: center; height: 32px; border: 1px solid #dcdfe6; border-radius: 6px; padding: 4px 8px; }
+    .table-wrapper { overflow-x: auto; border-radius: 8px; border: 1px solid #ebeef5; }
+    .status-badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; }
+    .status-ready, .channel-green { background: #e8f8f2; color: #67c23a; }
+    .status-clearing { background: #e6f7ff; color: #1890ff; }
+    .status-transport { background: #fff7e6; color: #e6a23c; }
+    .status-pending { background: #f4f4f5; color: #909399; }
+    .status-warning, .channel-yellow { background: #fef0e6; color: #e6a23c; }
+    .channel-red { background: #fef0f0; color: #f56c6c; }
+    .status-return-pending { background: #fef0e6; color: #e6a23c; }
+    .status-completed { background: #e8f8f2; color: #67c23a; }
+    .status-produced { background: #e6f0ff; color: #2a5298; }
+    .status-at-location { background: #e6f0ff; color: #2a5298; }
+    .dest-rg-yard { background: #e6f7ff; color: #1890ff; font-weight: 600; }
+    .dest-rio-claro { background: #fef0e6; color: #e6a23c; font-weight: 600; }
+    .dest-ira { background: #f0f5ff; color: #722ed1; font-weight: 600; }
+    .dest-factory { background: #e8f8f2; color: #67c23a; font-weight: 600; }
+    .search-bar { background: #f5f7fa; padding: 12px; border-radius: 8px; margin-bottom: 16px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; margin-bottom: 20px; }
+    .stat-card { background: white; border-radius: 12px; padding: 16px; text-align: center; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: all 0.2s; }
+    .stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    .stat-number { font-size: 28px; font-weight: 700; color: #2a5298; }
+    .stat-label { font-size: 12px; color: #909399; margin-top: 5px; }
+    .warning-card { background: #fef0e6; border-left: 4px solid #e6a23c; }
+    .warning-number { color: #e6a23c; }
+    .danger-card { background: #fef0f0; border-left: 4px solid #f56c6c; }
+    .danger-number { color: #f56c6c; }
+    .location-stock-grid { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 15px; }
+    .location-stock-item { background: #f8f9fc; padding: 15px; border-radius: 8px; text-align: center; min-width: 100px; }
+    .location-stock-count { font-size: 28px; font-weight: 700; color: #2a5298; }
+    .modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; }
+    .modal-content { background: white; border-radius: 12px; width: 900px; max-width: 90%; max-height: 80vh; overflow-y: auto; padding: 24px; }
+    .modal-header { display: flex; justify-content: space-between; margin-bottom: 20px; }
+    .close-btn { cursor: pointer; font-size: 24px; }
+    /* table-wrapper style merged into professional table style above */
+    .form-group { margin-bottom: 12px; }
+    .form-group label { display: block; margin-bottom: 4px; font-size: 13px; color: #5a6a7e; }
+    .export-btn { background: #409eff; color: white; }
+    .section-divider { border-top: 2px solid #e4e7ed; margin: 20px 0; padding-top: 10px; }
+    .section-label { font-size: 14px; font-weight: 600; color: #5a6a7e; margin-bottom: 10px; }
+    .fee-card { background: #f8f9fc; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+    .fee-row { display: flex; justify-content: space-between; margin-bottom: 8px; }
+    .fee-label { color: #5a6a7e; font-size: 13px; }
+    .fee-value { font-weight: 600; font-size: 18px; }
+    .fee-value.storage { color: #e6a23c; }
+    .fee-value.demurrage { color: #f56c6c; }
+    hr { margin: 16px 0; border-color: #eef2f6; }
+    .rate-period-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; padding: 10px; background: #f8f9fc; border-radius: 8px; }
+    .bl-hint { font-size: 12px; color: #909399; margin-top: 4px; }
+
+    .module-section-title { margin: 18px 0 12px; font-size: 15px; font-weight: 700; color: #303133; }
+    .empty-section { display: none; }
+    .status-badge { text-align: center; min-width: 56px; }
+
+  </style>
+</head>
+<body>
+  <div id="loginPage" class="login-container">
+    <div class="login-card">
+      <div class="login-title">📦 集装箱智能监控</div>
+      <input type="text" id="loginUsername" class="login-input" placeholder="用户名" value="dinggou">
+      <input type="password" id="loginPassword" class="login-input" placeholder="密码" value="123456">
+      <button class="login-btn" onclick="login()">登录系统</button>
+      <div style="margin-top: 20px; font-size: 12px; color: #909399;">
+        <div>订购科: dinggou / 123456</div>
+        <div>关务: guanwu / 123456</div>
+        <div>RG运输: yunshu_rg / 123456</div>
+        <div>JSL运输: yunshu_jsl / 123456</div>
+        <div>堆场/Rio/IRA/工厂管理员: rg_admin 等 / 123456</div>
+      </div>
+    </div>
+  </div>
+  <div id="mainApp" style="display: none;">
+    <div class="navbar">
+      <div class="logo">📦 集装箱智能监控</div>
+      <div class="user-info">
+        <span class="role-badge" id="currentRole"></span>
+        <span id="currentUser"></span>
+        <button class="logout-btn" onclick="logout()">退出</button>
+      </div>
+    </div>
+    <div class="app-container">
+      <div class="sidebar" id="sidebar"></div>
+      <div class="main-content" id="mainContent"></div>
+    </div>
+  </div>
+  <div id="modal" class="modal"><div class="modal-content"><div class="modal-header"><h3 id="modalTitle">标题</h3><span class="close-btn" onclick="closeModal()">&times;</span></div><div id="modalBody"></div></div></div>
+  <script>
+    // ==================== 用户配置 ====================
+    const users = {
+      'dinggou':{password:'123456',role:'订购科',name:'张经理'},
+      'guanwu':{password:'123456',role:'关务',name:'李专员'},
+      'yunshu_rg':{password:'123456',role:'运输公司RG',name:'王司机',carrier:'RG'},
+      'yunshu_jsl':{password:'123456',role:'运输公司JSL',name:'赵司机',carrier:'JSL'},
+      'rg_admin':{password:'123456',role:'RG堆场管理员',name:'刘管理员',location:'RG堆场'},
+      'rioclaro_admin':{password:'123456',role:'Rio Claro管理员',name:'陈管理员',location:'Rio Claro'},
+      'ira_admin':{password:'123456',role:'IRA库房管理员',name:'林管理员',location:'IRA库房'},
+      'factory_admin':{password:'123456',role:'工厂管理员',name:'黄管理员',location:'工厂'}
+    };
+
+    // ==================== 菜单配置 ====================
+    const allMenus = [
+      { id:'dashboard', name:'工作台', icon:'📊', roles:['订购科','关务','运输公司RG','运输公司JSL','RG堆场管理员','Rio Claro管理员','IRA库房管理员','工厂管理员'] },
+      { id:'containers', name:'基础数据', icon:'📦', roles:['订购科'] },
+      { id:'blIra', name:'提单/IRA管理', icon:'📋', roles:['订购科','关务'] },
+      { id:'customs', name:'清关维护', icon:'🛃', roles:['订购科','关务'] },
+      { id:'pickupPlan', name:'提箱计划', icon:'🚚', roles:['订购科'] },
+      { id:'transportTasks', name:'运输任务', icon:'🚛', roles:['运输公司RG','运输公司JSL'] },
+      { id:'locationConfirm', name:'到货确认', icon:'✅', roles:['RG堆场管理员','Rio Claro管理员','IRA库房管理员','工厂管理员'] },
+      { id:'returnConfirm', name:'还箱确认', icon:'🔄', roles:['运输公司RG','运输公司JSL'] },
+      { id:'dynamicPlan', name:'动态运输计划', icon:'🎯', roles:['订购科'] },
+      { id:'locationStock', name:'库存看板', icon:'📍', roles:['订购科','RG堆场管理员','Rio Claro管理员','IRA库房管理员','工厂管理员'] },
+      { id:'productionConfirm', name:'生产完成确认', icon:'🏭', roles:['工厂管理员'] },
+      { id:'rateConfig', name:'费率配置', icon:'💰', roles:['订购科'] },
+      { id:'feeReport', name:'费用报表', icon:'📈', roles:['订购科','关务'] }
+    ];
+
+    // ==================== 全局变量 ====================
+    let containers=[], blList=[], containerBlMap=[], transportTasks=[], locationStock=[], returnRecords=[], pickupPlans=[], productionRecords=[];
+    let currentUser=null, currentMenu='dashboard';
+    let nextIds={container:1,task:1,plan:1,production:1};
+    
+    // 预警配置
+    let warningConfig = { storageWarningDays: 5, demurrageWarningDays: 7 };
+    
+    // 费率配置（支持多时间段）- 默认为空，不自动生成演示数据
+    let storageConfig = [];
+    let demurrageConfig = [];
+   
+    // 缓存费用计算结果
+    let cachedFeeData = { date: null, fees: {}, totalStorage: 0, totalDemurrage: 0, storageWarningList: [], demurrageWarningList: [] };
+
+    // ==================== 辅助函数 ====================
+    function fmtDate(dateStr) {
+      if (!dateStr && dateStr !== 0) return '-';
+      if (!isNaN(dateStr) && Number(dateStr) > 1 && Number(dateStr) < 100000) {
+        let d = new Date((Number(dateStr) - 25569) * 86400 * 1000);
+        let y = d.getFullYear(); let m = String(d.getMonth() + 1).padStart(2, '0'); let dd = String(d.getDate()).padStart(2, '0');
+        return y + '/' + m + '/' + dd;
+      }
+      let s = String(dateStr);
+      let match = s.match(/(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
+      if (match) { return match[1] + '/' + match[2].padStart(2, '0') + '/' + match[3].padStart(2, '0'); }
+      let d = new Date(s);
+      if (!isNaN(d.getTime())) { let y = d.getFullYear(); let m = String(d.getMonth() + 1).padStart(2, '0'); let dd = String(d.getDate()).padStart(2, '0'); return y + '/' + m + '/' + dd; }
+      return s;
+    }
+    
+
+    // ==================== 数据联动辅助函数（修复：基础数据导入后后续模块不显示） ====================
+    function normalizeText(v){ return (v === null || v === undefined) ? '' : String(v).trim(); }
+    function safeId(v){ return normalizeText(v).replace(/[^a-zA-Z0-9_\u4e00-\u9fa5-]/g, '_'); }
+    function getBlIdentifier(bl){ return bl.houseBlNo || bl.blNo || ''; }
+    function getRelatedContainersByBl(bl){
+      let key = getBlIdentifier(bl);
+      return containerBlMap
+        .filter(m => m.blNo === key)
+        .map(m => containers.find(c => c.id === m.containerId))
+        .filter(Boolean);
+    }
+    function getRelatedBatchText(bl){
+      return [...new Set(getRelatedContainersByBl(bl).map(c => c.batch).filter(Boolean))].join(',');
+    }
+    function getBlDisplayNo(bl){
+      if(bl.carrier === '长荣') return `${bl.masterBlNo || '-'} / ${bl.houseBlNo || '-'}`;
+      return bl.blNo || '-';
+    }
+    function createBlForContainer(containerId, vessel, blText, containerNo){
+      let carrier = normalizeText(vessel) || '未维护';
+      let raw = normalizeText(blText);
+      let isPlaceholder = false;
+      if(!raw){
+        raw = `待补充提单-${normalizeText(containerNo)}`;
+        isPlaceholder = true;
+      }
+      if(carrier === '长荣'){
+        let parts = raw.split('|');
+        let masterBl = normalizeText(parts[0]) || raw;
+        let houseBl = normalizeText(parts[1]) || masterBl;
+        if(!blList.find(b => b.houseBlNo === houseBl)){
+          blList.push({carrier:'长荣',masterBlNo:masterBl,houseBlNo:houseBl,iraNo:'',isCleared:false,channel:'绿色',clearanceDate:null,isPlaceholder});
+        }
+        if(!containerBlMap.some(m => m.containerId === containerId && m.blNo === houseBl)){
+          containerBlMap.push({containerId, blNo: houseBl});
+        }
+      } else {
+        let blNo = raw;
+        if(!blList.find(b => b.blNo === blNo)){
+          blList.push({carrier,blNo,iraNo:'',isCleared:false,channel:'绿色',clearanceDate:null,isPlaceholder});
+        }
+        if(!containerBlMap.some(m => m.containerId === containerId && m.blNo === blNo)){
+          containerBlMap.push({containerId, blNo});
+        }
+      }
+    }
+
+    function toDateInput(dateStr) {
+      if (!dateStr) return '';
+      let s = String(dateStr);
+      let match = s.match(/(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
+      if (match) { return match[1] + '-' + match[2].padStart(2, '0') + '-' + match[3].padStart(2, '0'); }
+      return s;
+    }
+    
+    function getTodayStr() {
+      let d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+    
+    function getDaysDiff(startDate, endDate) {
+      let start = new Date(startDate);
+      let end = new Date(endDate);
+      let diffTime = end - start;
+      return Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+    }
+    
+    function getStorageConfigByDate(etaDate) {
+      if(storageConfig.length === 0) return null;
+      let eta = etaDate.replace(/\//g, '-');
+      for (let config of storageConfig) {
+        let start = config.startDate.replace(/\//g, '-');
+        let end = config.endDate.replace(/\//g, '-');
+        if (eta >= start && eta <= end) return config;
+      }
+      return storageConfig[storageConfig.length - 1];
+    }
+    
+    function getDemurrageConfigByDate(container, etaDate) {
+      if(demurrageConfig.length === 0) return null;
+      let eta = etaDate.replace(/\//g, '-');
+      for (let config of demurrageConfig) {
+        if (config.carrier !== container.vessel) continue;
+        if (config.type !== container.containerType) continue;
+        let start = config.startDate.replace(/\//g, '-');
+        let end = config.endDate.replace(/\//g, '-');
+        if (eta >= start && eta <= end) return config;
+      }
+      return null;
+    }
+    
+    function getContainerLocation(cid){
+      let s = locationStock.find(s => s.containerId === cid);
+      if (s) return s.location;
+      let c = containers.find(c => c.id === cid);
+      return c?.actualPickupTime ? '运输中' : '港口';
+    }
+    
+    function getContainerFullStatus(c) {
+      let loc = getContainerLocation(c.id);
+      let returnDone = returnRecords.some(r => r.containerId === c.id && r.type === 'return' && r.isReturnConfirmed);
+      let inTransit = transportTasks.some(t => t.containerId === c.id && t.status === 'in_transit');
+      let pendingReturn = returnRecords.some(r => r.containerId === c.id && r.type === 'return_needed' && !r.isReturnConfirmed);
+      let produced = productionRecords.some(p => p.containerIds && p.containerIds.includes(c.id));
+      if (produced) return { text: '已生产', cls: 'status-produced', loc: '已生产' };
+      if (returnDone) return { text: '已完成', cls: 'status-completed', loc };
+      if (inTransit) return { text: '运输中', cls: 'status-transport', loc: '运输中' };
+      if (pendingReturn) return { text: '待还箱', cls: 'status-return-pending', loc };
+      if (loc === '港口' && c.actualPickupTime) return { text: '运输中', cls: 'status-transport', loc: '运输中' };
+      if (loc === '港口') return { text: c.customsStatus || '清关中', cls: (c.customsStatus === '已清关' ? 'status-ready' : 'status-clearing'), loc };
+      let hasActiveTransport = transportTasks.some(t => t.containerId === c.id && (t.status === 'in_transit' || t.status === 'arrived'));
+      if (!hasActiveTransport) return { text: '已到达', cls: 'status-at-location', loc };
+      return { text: c.customsStatus || '清关中', cls: 'status-clearing', loc };
+    }
+    
+    function getIraList(containerId) {
+      let bls = containerBlMap.filter(m => m.containerId === containerId).map(m => m.blNo);
+      let iraList = [];
+      for(let blNo of bls){
+        let bl = blList.find(b => b.blNo === blNo || b.houseBlNo === blNo);
+        if(bl && bl.iraNo) iraList.push(bl.iraNo);
+      }
+      return iraList.join(',');
+    }
+    
+    function getDestClass(dest) {
+      switch(dest) {
+        case 'RG堆场': return 'dest-rg-yard';
+        case 'Rio Claro': return 'dest-rio-claro';
+        case 'IRA库房': return 'dest-ira';
+        case '工厂': return 'dest-factory';
+        default: return 'status-pending';
+      }
+    }
+    
+    function updateContainerStatus(){containers.forEach(c=>{let bls=containerBlMap.filter(m=>m.containerId===c.id).map(m=>m.blNo);let allCleared=bls.length===0||bls.every(bl=>{let b=blList.find(b=>b.blNo===bl||b.houseBlNo===bl);return b?.isCleared;});c.customsStatus=allCleared?'已清关':'清关中';});}
+    function addStock(cid,loc){locationStock=locationStock.filter(s=>s.containerId!==cid);locationStock.push({containerId:cid,location:loc,isActive:true});}
+    function needsReturn(cid,to,from){if(!(to==='Rio Claro'||to==='IRA库房'||to==='工厂'))return false;if(!(from==='港口'||from==='RG堆场'))return false;if(returnRecords.some(r=>r.containerId===cid&&r.isReturnConfirmed))return false;if(returnRecords.some(r=>r.containerId===cid&&!r.isReturnConfirmed&&r.type==='return_needed'))return false;return true;}
+    
+    // ==================== 费用计算函数 ====================
+    function calculateStorageFee(container, currentDate) {
+      if (!container.eta) return 0;
+      let config = getStorageConfigByDate(container.eta);
+      if(!config) return 0;
+      let etaDate = container.eta.replace(/\//g, '-');
+      let startDate = etaDate;
+      let endDate = container.actualPickupTime ? container.actualPickupTime.split('T')[0] : currentDate;
+      let days = getDaysDiff(startDate, endDate);
+      if (days <= 0) return 0;
+      if (days <= config.fixedDays) return config.fixedRate;
+      let overtimeDays = days - config.fixedDays;
+      return config.fixedRate + overtimeDays * config.overtimeRate;
+    }
+    
+    function calculateDemurrageFee(container, currentDate) {
+      if (!container.eta || !container.containerType) return 0;
+      let config = getDemurrageConfigByDate(container, container.eta);
+      if(!config) return 0;
+      let etaDate = container.eta.replace(/\//g, '-');
+      let startDate = etaDate;
+      let endDate = null;
+      let returnRecord = returnRecords.find(r => r.containerId === container.id && r.isReturnConfirmed);
+      if (returnRecord && returnRecord.returnDate) {
+        endDate = returnRecord.returnDate.replace(/\//g, '-');
+      } else {
+        endDate = currentDate;
+      }
+      let days = getDaysDiff(startDate, endDate);
+      if (days <= 0) return 0;
+      if (days <= config.freeDays) return 0;
+      let overtimeDays = days - config.freeDays;
+      return overtimeDays * config.ratePerDay;
+    }
+    
+    function getRemainingFreeDays(container, currentDate, type) {
+      if (!container.eta) return 999;
+      let etaDate = container.eta.replace(/\//g, '-');
+      let daysFromEta = getDaysDiff(etaDate, currentDate);
+      if (type === 'storage') {
+        let config = getStorageConfigByDate(container.eta);
+        if(!config) return 999;
+        let remaining = config.fixedDays - daysFromEta;
+        return remaining > 0 ? remaining : 0;
+      } else {
+        let config = getDemurrageConfigByDate(container, container.eta);
+        if (!config) return 999;
+        let remaining = config.freeDays - daysFromEta;
+        return remaining > 0 ? remaining : 0;
+      }
+    }
+    
+    function calculateFeesForContainer(container, currentDate) {
+      let storageFee = calculateStorageFee(container, currentDate);
+      let demurrageFee = calculateDemurrageFee(container, currentDate);
+      let storageRemainingDays = getRemainingFreeDays(container, currentDate, 'storage');
+      let demurrageRemainingDays = getRemainingFreeDays(container, currentDate, 'demurrage');
+      return { storageFee, demurrageFee, storageRemainingDays, demurrageRemainingDays };
+    }
+    
+    function updateDailyFees() {
+      let today = getTodayStr();
+      let lastUpdate = localStorage.getItem('cc_lastFeeUpdate');
+      if (lastUpdate === today && localStorage.getItem('cc_cachedFees')) {
+        cachedFeeData = JSON.parse(localStorage.getItem('cc_cachedFees'));
+        return;
+      }
+      let currentDate = today;
+      let totalStorage = 0;
+      let totalDemurrage = 0;
+      let storageWarningList = [];
+      let demurrageWarningList = [];
+      let fees = {};
+      for (let c of containers) {
+        let result = calculateFeesForContainer(c, currentDate);
+        fees[c.id] = result;
+        totalStorage += result.storageFee;
+        totalDemurrage += result.demurrageFee;
+        if (result.storageRemainingDays <= warningConfig.storageWarningDays && result.storageRemainingDays > 0) {
+          storageWarningList.push({
+            id: c.id, batch: c.batch, containerNo: c.containerNo, vessel: c.vessel, eta: c.eta, remainingDays: result.storageRemainingDays, fee: result.storageFee
+          });
+        }
+        if (result.demurrageRemainingDays <= warningConfig.demurrageWarningDays && result.demurrageRemainingDays > 0) {
+          demurrageWarningList.push({
+            id: c.id, batch: c.batch, containerNo: c.containerNo, vessel: c.vessel, type: c.containerType, eta: c.eta, remainingDays: result.demurrageRemainingDays, fee: result.demurrageFee
+          });
+        }
+      }
+      cachedFeeData = { date: today, fees, totalStorage, totalDemurrage, storageWarningList, demurrageWarningList };
+      localStorage.setItem('cc_lastFeeUpdate', today);
+      localStorage.setItem('cc_cachedFees', JSON.stringify(cachedFeeData));
+    }
+    
+    // ==================== 数据存储 ====================
+    
+    function saveData(){
+      localStorage.setItem('cc_containers',JSON.stringify(containers));
+      localStorage.setItem('cc_blList',JSON.stringify(blList));
+      localStorage.setItem('cc_containerBlMap',JSON.stringify(containerBlMap));
+      localStorage.setItem('cc_transportTasks',JSON.stringify(transportTasks));
+      localStorage.setItem('cc_locationStock',JSON.stringify(locationStock));
+      localStorage.setItem('cc_returnRecords',JSON.stringify(returnRecords));
+      localStorage.setItem('cc_pickupPlans',JSON.stringify(pickupPlans));
+      localStorage.setItem('cc_productionRecords',JSON.stringify(productionRecords));
+      localStorage.setItem('cc_nextIds',JSON.stringify(nextIds));
+      localStorage.setItem('cc_storageConfig',JSON.stringify(storageConfig));
+      localStorage.setItem('cc_demurrageConfig',JSON.stringify(demurrageConfig));
+      localStorage.setItem('cc_warningConfig',JSON.stringify(warningConfig));
+      localStorage.removeItem('cc_lastFeeUpdate');
+    }
+    
+    function loadData(){
+      let saved = localStorage.getItem('cc_containers');
+      if(saved && saved !== '[]'){
+        containers = JSON.parse(saved);
+        blList = JSON.parse(localStorage.getItem('cc_blList') || '[]');
+        containerBlMap = JSON.parse(localStorage.getItem('cc_containerBlMap') || '[]');
+        transportTasks = JSON.parse(localStorage.getItem('cc_transportTasks') || '[]');
+        locationStock = JSON.parse(localStorage.getItem('cc_locationStock') || '[]');
+        returnRecords = JSON.parse(localStorage.getItem('cc_returnRecords') || '[]');
+        pickupPlans = JSON.parse(localStorage.getItem('cc_pickupPlans') || '[]');
+        productionRecords = JSON.parse(localStorage.getItem('cc_productionRecords') || '[]');
+        nextIds = JSON.parse(localStorage.getItem('cc_nextIds') || '{"container":1,"task":1,"plan":1,"production":1}');
+        
+        let savedStorage = localStorage.getItem('cc_storageConfig');
+        if(savedStorage && savedStorage !== '[]') storageConfig = JSON.parse(savedStorage);
+        else storageConfig = [];
+        
+        let savedDem = localStorage.getItem('cc_demurrageConfig');
+        if(savedDem && savedDem !== '[]') demurrageConfig = JSON.parse(savedDem);
+        else demurrageConfig = [];
+        
+        let savedWarning = localStorage.getItem('cc_warningConfig');
+        if(savedWarning) warningConfig = JSON.parse(savedWarning);
+      } else {
+        containers = [];
+        blList = [];
+        containerBlMap = [];
+        transportTasks = [];
+        locationStock = [];
+        returnRecords = [];
+        pickupPlans = [];
+        productionRecords = [];
+        nextIds = {container: 1, task: 1, plan: 1, production: 1};
+        storageConfig = [];
+        demurrageConfig = [];
+      }
+      updateContainerStatus();
+      updateDailyFees();
+    }
+    
+    // ==================== 渲染函数 ====================
+    function renderTable(containerId,headers,rowsData,rowRenderer){
+      let container=document.getElementById(containerId);
+      if(!container)return;
+      let wrapper=document.createElement('div');
+      wrapper.className='table-wrapper';
+      let table=document.createElement('table');
+      table.className='data-table';
+      let thead=document.createElement('thead');
+      let headerRow=document.createElement('tr');
+      headers.forEach(h=>{let th=document.createElement('th');th.innerHTML=h;headerRow.appendChild(th);});
+      thead.appendChild(headerRow);
+      table.appendChild(thead);
+      let tbody=document.createElement('tbody');
+      rowsData.forEach((item,idx)=>{let tr=rowRenderer(item,idx);if(tr)tbody.appendChild(tr);});
+      table.appendChild(tbody);
+      wrapper.appendChild(table);
+      container.innerHTML='';
+      container.appendChild(wrapper);
+    }
+    
+    function renderSidebar(){
+      let menus=allMenus.filter(m => m.roles.includes(currentUser.role));
+      document.getElementById('sidebar').innerHTML=menus.map(m=>`<div class="menu-item ${currentMenu===m.id?'active':''}" data-menu="${m.id}"><span>${m.icon}</span> ${m.name}</div>`).join('');
+      document.querySelectorAll('.menu-item').forEach(item=>{item.addEventListener('click',()=>{currentMenu=item.dataset.menu;renderSidebar();renderContent();});});
+    }
+    
+    function renderContent(){
+      let main=document.getElementById('mainContent');
+      switch(currentMenu){
+        case'dashboard':renderDashboard(main);break;
+        case'containers':renderContainers(main);break;
+        case'blIra':renderBlIra(main);break;
+        case'customs':renderCustoms(main);break;
+        case'pickupPlan':renderPickupPlan(main);break;
+        case'transportTasks':renderTransportTasks(main);break;
+        case'locationConfirm':renderLocationConfirm(main);break;
+        case'returnConfirm':renderReturnConfirm(main);break;
+        case'dynamicPlan':renderDynamicPlan(main);break;
+        case'locationStock':renderLocationStock(main);break;
+        case'productionConfirm':renderProductionConfirm(main);break;
+        case'rateConfig':renderRateConfig(main);break;
+        case'feeReport':renderFeeReport(main);break;
+        default:renderDashboard(main);
+      }
+    }
+    
+    // ==================== 工作台 ====================
+    function renderDashboard(container){
+      let total=containers.length;
+      let waiting=containers.filter(c=>c.customsStatus==='清关中').length;
+      let inTransit=transportTasks.filter(t=>t.status==='in_transit').length;
+      let stock={'港口':0,'RG堆场':0,'Rio Claro':0,'IRA库房':0,'工厂':0,'已生产':0};
+      containers.forEach(c=>{let loc=getContainerLocation(c.id);let produced=productionRecords.some(p=>p.containerIds&&p.containerIds.includes(c.id));if(produced) stock['已生产']++; else stock[loc]=(stock[loc]||0)+1;});
+      let totalStorage = cachedFeeData.totalStorage;
+      let totalDemurrage = cachedFeeData.totalDemurrage;
+      let storageWarningCount = cachedFeeData.storageWarningList.length;
+      let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
+      container.innerHTML = `
+        <div class="stats-grid">
+          <div class="stat-card" onclick="jumpTo('containers')"><div class="stat-number">${total}</div><div class="stat-label">总集装箱</div></div>
+          <div class="stat-card" onclick="jumpTo('customs')"><div class="stat-number">${waiting}</div><div class="stat-label">待清关</div></div>
+          <div class="stat-card" onclick="jumpTo('transportTasks')"><div class="stat-number">${inTransit}</div><div class="stat-label">运输中</div></div>
+          <div class="stat-card" style="background:#fef8e6;"><div class="stat-number" style="color:#e6a23c;">R$ ${totalStorage.toFixed(2)}</div><div class="stat-label">堆存费总额</div></div>
+          <div class="stat-card" style="background:#feefe6;"><div class="stat-number" style="color:#f56c6c;">$ ${totalDemurrage.toFixed(2)}</div><div class="stat-label">滞箱费总额</div></div>
+        </div>
+        <div class="stats-grid">
+          <div class="stat-card warning-card" onclick="showWarningDetail('storage')" style="cursor:pointer;">
+            <div class="stat-number warning-number">${storageWarningCount}</div>
+            <div class="stat-label">⚠️ ${warningConfig.storageWarningDays}天内将产生堆存费</div>
+          </div>
+          <div class="stat-card danger-card" onclick="showWarningDetail('demurrage')" style="cursor:pointer;">
+            <div class="stat-number danger-number">${demurrageWarningCount}</div>
+            <div class="stat-label">⚠️ ${warningConfig.demurrageWarningDays}天内将产生滞箱费</div>
+          </div>
+        </div>
+        <div class="card"><div class="card-title">📍 库存分布</div><div class="location-stock-grid">${Object.entries(stock).map(([k,v])=>`<div class="location-stock-item"><div class="location-stock-count">${v}</div><div>${k}</div></div>`).join('')}</div></div>
+      `;
+    }
+    
+    window.showWarningDetail = function(type){
+      let list = type === 'storage' ? cachedFeeData.storageWarningList : cachedFeeData.demurrageWarningList;
+      let title = type === 'storage' ? '⚠️ 堆存费预警明细' : '⚠️ 滞箱费预警明细';
+      if(list.length === 0){ alert('暂无预警集装箱'); return; }
+      let headers = type === 'storage' ? ['批次','集装箱号','船公司','到港日期','剩余免费天数','预计堆存费'] : ['批次','集装箱号','船公司','箱型','到港日期','剩余免费天数','预计滞箱费'];
+      document.getElementById('modalTitle').innerText = title;
+      document.getElementById('modalBody').innerHTML = `<div style="margin-bottom:15px;"><button class="btn export-btn" onclick="exportWarningList('${type}')">📥 导出Excel</button></div><div id="warningDetailTable"></div>`;
+      openModal();
+      renderTable('warningDetailTable', headers, list, (item)=>{
+        let tr=document.createElement('tr');
+        if(type === 'storage'){
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${item.vessel}</td><td>${fmtDate(item.eta)}</td><td style="text-align:center;color:#e6a23c;">${item.remainingDays}天</td><td style="text-align:center;color:#e6a23c;">R$ ${item.fee.toFixed(2)}</td>`;
+        } else {
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}<td><td>${item.vessel}</td><td>${item.type||'-'}</td><td>${fmtDate(item.eta)}</td><td style="text-align:center;color:#f56c6c;">${item.remainingDays}天</td><td style="text-align:center;color:#f56c6c;">$ ${item.fee.toFixed(2)}</td>`;
+        }
+        return tr;
+      });
+    };
+    
+    window.exportWarningList = function(type){
+      let list = type === 'storage' ? cachedFeeData.storageWarningList : cachedFeeData.demurrageWarningList;
+      let wsData = type === 'storage' ? [['批次','集装箱号','船公司','到港日期','剩余免费天数','预计堆存费(雷亚尔)']] : [['批次','集装箱号','船公司','箱型','到港日期','剩余免费天数','预计滞箱费(美元)']];
+      list.forEach(item => {
+        if(type === 'storage') wsData.push([item.batch, item.containerNo, item.vessel, fmtDate(item.eta), item.remainingDays, item.fee.toFixed(2)]);
+        else wsData.push([item.batch, item.containerNo, item.vessel, item.type||'-', fmtDate(item.eta), item.remainingDays, item.fee.toFixed(2)]);
+      });
+      let ws = XLSX.utils.aoa_to_sheet(wsData);
+      let wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, `${type}_预警列表`);
+      XLSX.writeFile(wb, `${type}_预警列表_${getTodayStr()}.xlsx`);
+    };
+    
+    function jumpTo(menu){currentMenu=menu;renderSidebar();renderContent();}
+    
+    // ==================== 基础数据 ====================
+    function renderContainers(container){
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📦 基础数据</span><div><button class="btn btn-primary" onclick="showAddContainer()">+ 新增</button><button class="btn export-btn" onclick="exportTemplate()">📥 导出模板</button><button class="btn btn-success" onclick="showImport()">📎 批量导入</button></div></div><div class="search-bar"><input type="text" id="searchBatch" placeholder="批次"><input type="text" id="searchContainer" placeholder="集装箱号"><button class="btn btn-primary" onclick="renderContainerTable()">查询</button><button class="btn" onclick="clearContainerSearch()">重置</button></div><div id="containerTable"></div></div>`;
+      renderContainerTable();
+    }
+    
+    function renderContainerTable(){
+      let batch=document.getElementById('searchBatch')?.value.toLowerCase()||'';
+      let cont=document.getElementById('searchContainer')?.value.toLowerCase()||'';
+      let filtered=containers.filter(c=>(!batch||c.batch.toLowerCase().includes(batch))&&(!cont||c.containerNo.toLowerCase().includes(cont)));
+      renderTable('containerTable',['序号','批次','集装箱序号','集装箱号','船公司','箱型','到港时间','关联提单','IRA号','当前位置','状态','操作'],filtered,(c,i)=>{
+        let tr=document.createElement('tr');
+        let bls = containerBlMap.filter(m=>m.containerId===c.id).map(m=>{
+          let bl = blList.find(b => b.blNo === m.blNo || b.houseBlNo === m.blNo);
+          if(bl && bl.carrier === '长荣' && bl.masterBlNo){
+            return `${bl.masterBlNo}|${bl.houseBlNo}`;
+          }
+          return m.blNo;
+        }).join(',');
+        let iraList=getIraList(c.id);
+        let st=getContainerFullStatus(c);
+        tr.innerHTML=`<td>${i+1}</td><td>${c.batch}</td><td>${c.containerSeq||'-'}</td><td>${c.containerNo}</td><td>${c.vessel}</td><td>${c.containerType||'-'}</td><td>${fmtDate(c.eta)}</td><td>${bls||'-'}</td><td>${iraList||'-'}</td><td><span class="status-badge status-pending">${st.loc}</span></td><td><span class="status-badge ${st.cls}">${st.text}</span></td><td><button class="btn btn-sm btn-warning" onclick="editContainer(${c.id})">编辑</button> <button class="btn btn-sm btn-danger" onclick="deleteContainer(${c.id})">删除</button></td>`;
+        return tr;
+      });
+    }
+    
+    function clearContainerSearch(){document.getElementById('searchBatch').value='';document.getElementById('searchContainer').value='';renderContainerTable();}
+    
+    function showAddContainer(){
+      document.getElementById('modalTitle').innerText='新增集装箱';
+      document.getElementById('modalBody').innerHTML=`
+        <div class="form-group"><label>批次</label><input type="text" id="newBatch" class="form-control"></div>
+        <div class="form-group"><label>集装箱序号</label><input type="text" id="newSeq" class="form-control"></div>
+        <div class="form-group"><label>集装箱号</label><input type="text" id="newNo" class="form-control"></div>
+        <div class="form-group"><label>船公司</label><select id="newVessel" class="form-control" onchange="toggleBlInput()"><option value="MSC">MSC</option><option value="COSCO">COSCO</option><option value="长荣">长荣</option></select></div>
+        <div class="form-group"><label>箱型</label><select id="newType" class="form-control"><option value="普柜">普柜</option><option value="冷柜">冷柜</option></select></div>
+        <div class="form-group"><label>到港时间</label><input type="date" id="newEta" class="form-control"></div>
+        <div class="form-group"><label id="blLabel">提单号</label><input type="text" id="newBls" class="form-control" placeholder="请输入提单号"><div id="blHint" class="bl-hint"></div></div>
+        <div style="margin-top:20px;"><button class="btn btn-primary" onclick="saveAddContainer()">保存</button></div>`;
+      toggleBlInput();
+      openModal();
+    }
+    
+    window.toggleBlInput = function(){
+      let vessel = document.getElementById('newVessel').value;
+      let blInput = document.getElementById('newBls');
+      let blLabel = document.getElementById('blLabel');
+      let blHint = document.getElementById('blHint');
+      if(vessel === '长荣'){
+        blLabel.innerText = '主提单号|分提单号';
+        blInput.placeholder = '格式: 主提单号|分提单号 (用竖线分隔)';
+        blHint.innerHTML = '💡 长荣提单格式示例: EITU1234567|HSU1234567';
+      } else {
+        blLabel.innerText = '提单号';
+        blInput.placeholder = '请输入提单号';
+        blHint.innerHTML = '';
+      }
+    };
+    
+    function saveAddContainer(){
+      let batch=document.getElementById('newBatch').value;
+      let seq=document.getElementById('newSeq').value;
+      let no=document.getElementById('newNo').value;
+      let vessel=document.getElementById('newVessel').value;
+      let type=document.getElementById('newType').value;
+      let etaRaw=document.getElementById('newEta').value;
+      let eta=fmtDate(etaRaw);
+      let blsRaw=document.getElementById('newBls').value;
+      if(!batch||!no){alert('请填写必填项');return;}
+      if(containers.find(c=>c.containerNo===no)){alert('集装箱号已存在');return;}
+      let newId=nextIds.container++;
+      containers.push({id:newId,batch,containerSeq:seq,containerNo:no,vessel,containerType:type,eta,actualPickupTime:null});
+      
+      // 处理提单
+      if(blsRaw){
+        let blItems = blsRaw.split(',').map(s=>s.trim()).filter(s=>s);
+        for(let bl of blItems){
+          let existingBl = null;
+          if(vessel === '长荣'){
+            let parts = bl.split('|');
+            let masterBl = parts[0] || bl;
+            let houseBl = parts[1] || bl;
+            existingBl = blList.find(b => b.houseBlNo === houseBl);
+            if(!existingBl){
+              blList.push({
+                carrier: '长荣',
+                masterBlNo: masterBl,
+                houseBlNo: houseBl,
+                iraNo: '',
+                isCleared: false,
+                channel: '绿色',
+                clearanceDate: null
+              });
+              containerBlMap.push({containerId:newId, blNo: houseBl});
+            } else {
+              containerBlMap.push({containerId:newId, blNo: existingBl.houseBlNo});
+            }
+          } else {
+            existingBl = blList.find(b => b.blNo === bl);
+            if(!existingBl){
+              blList.push({
+                carrier: vessel,
+                blNo: bl,
+                iraNo: '',
+                isCleared: false,
+                channel: '绿色',
+                clearanceDate: null
+              });
+              containerBlMap.push({containerId:newId, blNo: bl});
+            } else {
+              containerBlMap.push({containerId:newId, blNo: bl});
+            }
+          }
+        }
+      }
+      updateContainerStatus();
+      saveData();
+      closeModal();
+      renderContainerTable();
+      alert('添加成功');
+    }
+    
+    window.editContainer = function(id){
+      let c=containers.find(c=>c.id===id);
+      document.getElementById('modalTitle').innerText='编辑集装箱';
+      document.getElementById('modalBody').innerHTML=`
+        <div class="form-group"><label>批次</label><input type="text" id="editBatch" class="form-control" value="${c.batch}"></div>
+        <div class="form-group"><label>集装箱序号</label><input type="text" id="editSeq" class="form-control" value="${c.containerSeq||''}"></div>
+        <div class="form-group"><label>集装箱号</label><input type="text" id="editNo" class="form-control" value="${c.containerNo}"></div>
+        <div class="form-group"><label>船公司</label><select id="editVessel" class="form-control"><option value="MSC" ${c.vessel==='MSC'?'selected':''}>MSC</option><option value="COSCO" ${c.vessel==='COSCO'?'selected':''}>COSCO</option><option value="长荣" ${c.vessel==='长荣'?'selected':''}>长荣</option></select></div>
+        <div class="form-group"><label>箱型</label><select id="editType" class="form-control"><option value="普柜" ${c.containerType==='普柜'?'selected':''}>普柜</option><option value="冷柜" ${c.containerType==='冷柜'?'selected':''}>冷柜</option></select></div>
+        <div class="form-group"><label>到港时间</label><input type="date" id="editEta" class="form-control" value="${toDateInput(c.eta)}"></div>
+        <div style="margin-top:20px;"><button class="btn btn-primary" onclick="saveEditContainer(${id})">保存</button></div>`;
+      openModal();
+    };
+    
+    window.saveEditContainer = function(id){
+      let c=containers.find(c=>c.id===id);
+      if(c){
+        c.batch=document.getElementById('editBatch').value;
+        c.containerSeq=document.getElementById('editSeq').value;
+        c.containerNo=document.getElementById('editNo').value;
+        c.vessel=document.getElementById('editVessel').value;
+        c.containerType=document.getElementById('editType').value;
+        c.eta=fmtDate(document.getElementById('editEta').value);
+        saveData();
+        closeModal();
+        renderContainerTable();
+        alert('保存成功');
+      }
+    };
+    
+    window.deleteContainer = function(id){
+      if(!confirm('确定删除？'))return;
+      containers=containers.filter(c=>c.id!==id);
+      containerBlMap=containerBlMap.filter(m=>m.containerId!==id);
+      let usedBls=new Set(containerBlMap.map(m=>m.blNo));
+      blList=blList.filter(bl=>{
+        if(bl.blNo && usedBls.has(bl.blNo)) return true;
+        if(bl.houseBlNo && usedBls.has(bl.houseBlNo)) return true;
+        return false;
+      });
+      transportTasks=transportTasks.filter(t=>t.containerId!==id);
+      locationStock=locationStock.filter(s=>s.containerId!==id);
+      returnRecords=returnRecords.filter(r=>r.containerId!==id);
+      pickupPlans=pickupPlans.filter(p=>p.containerId!==id);
+      saveData();
+      renderContainerTable();
+      alert('删除成功');
+    };
+    
+    function exportTemplate(){
+      let wsData=[['批次','集装箱序号','集装箱号','船公司','箱型','到港时间','提单号(长荣格式:主提单号|分提单号)']];
+      containers.forEach(c=>{
+        let bls = containerBlMap.filter(m=>m.containerId===c.id).map(m=>{
+          let bl = blList.find(b => b.blNo === m.blNo || b.houseBlNo === m.blNo);
+          if(bl && bl.carrier === '长荣' && bl.masterBlNo){
+            return `${bl.masterBlNo}|${bl.houseBlNo}`;
+          }
+          return m.blNo;
+        }).join(',');
+        wsData.push([c.batch,c.containerSeq||'',c.containerNo,c.vessel,c.containerType||'',c.eta,bls]);
+      });
+      let ws=XLSX.utils.aoa_to_sheet(wsData);
+      let wb=XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb,ws,'Containers');
+      XLSX.writeFile(wb,'containers.xlsx');
+    }
+    
+    function showImport(){
+      document.getElementById('modalTitle').innerText='批量导入';
+      document.getElementById('modalBody').innerHTML=`<input type="file" id="importFile" accept=".xlsx,.xls"><div style="margin-top:20px;"><button class="btn btn-primary" onclick="importExcel()">导入</button></div>`;
+      openModal();
+    }
+    
+    function importExcel(){
+      let file=document.getElementById('importFile').files[0];
+      if(!file){alert('请选择文件');return;}
+      let reader=new FileReader();
+      reader.onload=function(e){
+        let data=new Uint8Array(e.target.result);
+        let workbook=XLSX.read(data,{type:'array',cellDates:true});
+        let sheet=workbook.Sheets[workbook.SheetNames[0]];
+        let rows=XLSX.utils.sheet_to_json(sheet,{header:1,defval:'',raw:false});
+        let success=0,dup=0,placeholder=0;
+        for(let i=1;i<rows.length;i++){
+          let row=rows[i];
+          let batch=normalizeText(row[0]);
+          let seq=normalizeText(row[1]);
+          let no=normalizeText(row[2]);
+          let vessel=normalizeText(row[3]);
+          let type=normalizeText(row[4]) || '普柜';
+          let etaRaw=normalizeText(row[5]);
+          let blsRaw=normalizeText(row[6]);
+          if(!batch && !seq && !no) continue;
+          if(!no){ continue; }
+          let eta=fmtDate(etaRaw);
+          if(containers.find(c=>normalizeText(c.containerNo)===no)){dup++;continue;}
+          let newId=nextIds.container++;
+          containers.push({id:newId,batch,containerSeq:seq,containerNo:no,vessel,containerType:type,eta,actualPickupTime:null});
+          let blItems = blsRaw ? blsRaw.split(',').map(s=>s.trim()).filter(Boolean) : [''];
+          if(!blsRaw) placeholder++;
+          for(let bl of blItems){
+            createBlForContainer(newId, vessel, bl, no);
+          }
+          success++;
+        }
+        updateContainerStatus();
+        saveData();
+        closeModal();
+        renderContainerTable();
+        alert(`成功导入 ${success} 条，跳过重复 ${dup} 条${placeholder ? `，其中 ${placeholder} 条未填写提单号，系统已用集装箱号生成待补充提单记录` : ''}`);
+      };
+      reader.readAsArrayBuffer(file);
+    }
+    
+    // ==================== 提单/IRA管理（新增批次搜索和批次显示） ====================
+    function renderBlIra(container){
+      container.innerHTML=`
+        <div class="card">
+          <div class="card-header"><span class="card-title">📋 待维护IRA</span></div>
+          <div class="search-bar">
+            <input type="text" id="blSearchBatch" placeholder="批次">
+            <input type="text" id="blSearchNo" placeholder="提单号/分提单号/集装箱号">
+            <button class="btn btn-primary" onclick="renderBlTable()">查询</button>
+            <button class="btn" onclick="clearBlSearch()">重置</button>
+          </div>
+          <div style="font-size:12px;color:#909399;margin-bottom:12px;">说明：如果基础数据导入时没有填写提单号，系统会先按“待补充提单-集装箱号”生成临时记录，确保后续模块可继续维护。</div>
+          <div id="pendingIraEvergreen"></div>
+          <div id="pendingIraSimple" style="margin-top:20px;"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">✅ 已维护IRA</span></div>
+          <div id="completedIraEvergreen"></div>
+          <div id="completedIraSimple" style="margin-top:20px;"></div>
+        </div>`;
+      renderBlTable();
+    }
+    
+    function renderEmptyOrTable(containerId, title, headers, rowsData, rowRenderer){
+      let box = document.getElementById(containerId);
+      if(!box) return;
+      if(!rowsData || rowsData.length === 0){
+        box.innerHTML = '';
+        return;
+      }
+      let tableId = containerId + '_table';
+      box.innerHTML = `<div style="margin-bottom:10px;"><strong>${title}</strong></div><div id="${tableId}"></div>`;
+      renderTable(tableId, headers, rowsData, rowRenderer);
+    }
+
+    function renderBlTable(){
+      let searchBatch = document.getElementById('blSearchBatch')?.value.toLowerCase() || '';
+      let searchNo = document.getElementById('blSearchNo')?.value.toLowerCase() || '';
+      let filteredBlList = blList.filter(bl => {
+        let id = getBlIdentifier(bl).toLowerCase();
+        let master = (bl.masterBlNo || '').toLowerCase();
+        let display = getBlDisplayNo(bl).toLowerCase();
+        let relatedContainers = getRelatedContainersByBl(bl);
+        let containerNos = relatedContainers.map(c => (c.containerNo || '').toLowerCase());
+        let matchNo = !searchNo || id.includes(searchNo) || master.includes(searchNo) || display.includes(searchNo) || containerNos.some(n => n.includes(searchNo));
+        if(!matchNo) return false;
+        if(searchBatch){
+          let batches = relatedContainers.map(c => (c.batch || '').toLowerCase());
+          if(!batches.some(b => b.includes(searchBatch))) return false;
+        }
+        return true;
+      });
+      let pendingMaster=[], pendingSimple=[], completedMaster=[], completedSimple=[];
+      filteredBlList.forEach(bl => {
+        if(bl.carrier === '长荣') (bl.iraNo ? completedMaster : pendingMaster).push(bl);
+        else (bl.iraNo ? completedSimple : pendingSimple).push(bl);
+      });
+      let canEdit = currentUser.role === '关务';
+
+      renderEmptyOrTable('pendingIraEvergreen', '📌 长荣提单（主提单号 + 分提单号）', ['批次','主提单号','分提单号','IRA号','状态','操作'], pendingMaster, (bl)=>{
+        let key=getBlIdentifier(bl), inputId='ira_'+safeId(key);
+        let tr=document.createElement('tr');
+        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.masterBlNo||'-'}</td><td>${bl.houseBlNo||'-'}</td><td>${canEdit?`<input type="text" id="${inputId}" value="${bl.iraNo||''}" style="width:150px;">`:'-'}</td><td><span class="status-badge ${bl.isCleared?'status-ready':'status-clearing'}">${bl.isCleared?'已清关':'清关中'}</span></td><td>${canEdit?`<button class="btn btn-sm btn-primary" onclick="saveBl('${key}')">保存</button>`:'-'}</td>`;
+        return tr;
+      });
+
+      renderEmptyOrTable('pendingIraSimple', '📌 MSC / COSCO / 其他提单', ['批次','提单号','IRA号','状态','操作'], pendingSimple, (bl)=>{
+        let key=getBlIdentifier(bl), inputId='ira_'+safeId(key);
+        let tr=document.createElement('tr');
+        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.isPlaceholder?'⚠️ ':''}${bl.blNo||'-'}</td><td>${canEdit?`<input type="text" id="${inputId}" value="${bl.iraNo||''}" style="width:150px;">`:'-'}</td><td><span class="status-badge ${bl.isCleared?'status-ready':'status-clearing'}">${bl.isCleared?'已清关':'清关中'}</span></td><td>${canEdit?`<button class="btn btn-sm btn-primary" onclick="saveBl('${key}')">保存</button>`:'-'}</td>`;
+        return tr;
+      });
+
+      renderEmptyOrTable('completedIraEvergreen', '📌 长荣提单', ['批次','主提单号','分提单号','IRA号','状态'], completedMaster, (bl)=>{
+        let tr=document.createElement('tr');
+        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.masterBlNo||'-'}</td><td>${bl.houseBlNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><span class="status-badge ${bl.isCleared?'status-ready':'status-clearing'}">${bl.isCleared?'已清关':'清关中'}</span></td>`;
+        return tr;
+      });
+
+      renderEmptyOrTable('completedIraSimple', '📌 MSC / COSCO / 其他提单', ['批次','提单号','IRA号','状态'], completedSimple, (bl)=>{
+        let tr=document.createElement('tr');
+        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.isPlaceholder?'⚠️ ':''}${bl.blNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><span class="status-badge ${bl.isCleared?'status-ready':'status-clearing'}">${bl.isCleared?'已清关':'清关中'}</span></td>`;
+        return tr;
+      });
+    }
+
+    function clearBlSearch(){
+      document.getElementById('blSearchBatch').value = '';
+      document.getElementById('blSearchNo').value = '';
+      renderBlTable();
+    }
+    
+    window.saveBl = function(identifier){
+      let bl = blList.find(b => getBlIdentifier(b) === identifier);
+      if(bl){
+        let input = document.getElementById('ira_'+safeId(identifier));
+        bl.iraNo = input ? input.value : bl.iraNo;
+        saveData();
+        renderBlTable();
+        alert('保存成功');
+      }
+    };
+    
+    // ==================== 清关维护（新增批次搜索和批次显示） ====================
+    function renderCustoms(container){
+      container.innerHTML=`
+        <div class="card">
+          <div class="card-header"><span class="card-title">🛃 待清关提单</span></div>
+          <div class="search-bar">
+            <input type="text" id="cusSearchBatch" placeholder="批次">
+            <input type="text" id="cusSearchBl" placeholder="提单号/分提单号/集装箱号">
+            <input type="text" id="cusSearchIra" placeholder="IRA号">
+            <button class="btn btn-primary" onclick="renderCustomsTable()">查询</button>
+            <button class="btn" onclick="clearCustomsSearch()">重置</button>
+          </div>
+          <div id="pendingCustomsEvergreen"></div>
+          <div id="pendingCustomsSimple" style="margin-top:20px;"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">✅ 已清关提单</span></div>
+          <div id="clearedCustomsEvergreen"></div>
+          <div id="clearedCustomsSimple" style="margin-top:20px;"></div>
+        </div>`;
+      renderCustomsTable();
+    }
+    
+    function renderCustomsTable(){
+      let searchBatch = document.getElementById('cusSearchBatch')?.value.toLowerCase() || '';
+      let searchBl = document.getElementById('cusSearchBl')?.value.toLowerCase() || '';
+      let searchIra = document.getElementById('cusSearchIra')?.value.toLowerCase() || '';
+      let filteredBlList = blList.filter(bl => {
+        let id = getBlIdentifier(bl).toLowerCase();
+        let master = (bl.masterBlNo || '').toLowerCase();
+        let relatedContainers = getRelatedContainersByBl(bl);
+        let containerNos = relatedContainers.map(c => (c.containerNo || '').toLowerCase());
+        let matchNo = !searchBl || id.includes(searchBl) || master.includes(searchBl) || containerNos.some(n => n.includes(searchBl));
+        if(!matchNo) return false;
+        if(searchIra && (!bl.iraNo || !bl.iraNo.toLowerCase().includes(searchIra))) return false;
+        if(searchBatch){
+          let batches = relatedContainers.map(c => (c.batch || '').toLowerCase());
+          if(!batches.some(b => b.includes(searchBatch))) return false;
+        }
+        return true;
+      });
+      let pendingMaster=[], pendingSimple=[], clearedMaster=[], clearedSimple=[];
+      filteredBlList.forEach(bl => {
+        if(bl.carrier === '长荣') (!bl.isCleared ? pendingMaster : clearedMaster).push(bl);
+        else (!bl.isCleared ? pendingSimple : clearedSimple).push(bl);
+      });
+
+      renderEmptyOrTable('pendingCustomsEvergreen', '📌 长荣提单', ['批次','主提单号','分提单号','IRA号','清关通道','清关时间','操作'], pendingMaster, (bl)=>{
+        let key=getBlIdentifier(bl), sid=safeId(key);
+        let tr=document.createElement('tr');
+        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.masterBlNo||'-'}</td><td>${bl.houseBlNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><select id="ch_${sid}"><option value="绿色" ${bl.channel==='绿色'?'selected':''}>绿色</option><option value="黄色" ${bl.channel==='黄色'?'selected':''}>黄色</option><option value="红色" ${bl.channel==='红色'?'selected':''}>红色</option></select></td><td><input type="date" id="clrDate_${sid}"></td><td><button class="btn btn-sm btn-success" onclick="doClearance('${key}')">确认清关</button></td>`;
+        return tr;
+      });
+
+      renderEmptyOrTable('pendingCustomsSimple', '📌 MSC / COSCO / 其他提单', ['批次','提单号','IRA号','清关通道','清关时间','操作'], pendingSimple, (bl)=>{
+        let key=getBlIdentifier(bl), sid=safeId(key);
+        let tr=document.createElement('tr');
+        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.isPlaceholder?'⚠️ ':''}${bl.blNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><select id="ch_${sid}"><option value="绿色" ${bl.channel==='绿色'?'selected':''}>绿色</option><option value="黄色" ${bl.channel==='黄色'?'selected':''}>黄色</option><option value="红色" ${bl.channel==='红色'?'selected':''}>红色</option></select></td><td><input type="date" id="clrDate_${sid}"></td><td><button class="btn btn-sm btn-success" onclick="doClearance('${key}')">确认清关</button></td>`;
+        return tr;
+      });
+
+      renderEmptyOrTable('clearedCustomsEvergreen', '📌 长荣提单', ['批次','主提单号','分提单号','IRA号','清关通道','清关时间','操作'], clearedMaster, (bl)=>{
+        let key=getBlIdentifier(bl);
+        let tr=document.createElement('tr');
+        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.masterBlNo||'-'}</td><td>${bl.houseBlNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><span class="status-badge ${bl.channel==='绿色'?'channel-green':(bl.channel==='红色'?'channel-red':'channel-yellow')}">${bl.channel}</span></td><td>${bl.clearanceDate||'-'}</td><td><button class="btn btn-sm btn-danger" onclick="revokeClearance('${key}')">撤销</button></td>`;
+        return tr;
+      });
+
+      renderEmptyOrTable('clearedCustomsSimple', '📌 MSC / COSCO / 其他提单', ['批次','提单号','IRA号','清关通道','清关时间','操作'], clearedSimple, (bl)=>{
+        let key=getBlIdentifier(bl);
+        let tr=document.createElement('tr');
+        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.isPlaceholder?'⚠️ ':''}${bl.blNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><span class="status-badge ${bl.channel==='绿色'?'channel-green':(bl.channel==='红色'?'channel-red':'channel-yellow')}">${bl.channel}</span></td><td>${bl.clearanceDate||'-'}</td><td><button class="btn btn-sm btn-danger" onclick="revokeClearance('${key}')">撤销</button></td>`;
+        return tr;
+      });
+    }
+
+    function clearCustomsSearch(){
+      document.getElementById('cusSearchBatch').value = '';
+      document.getElementById('cusSearchBl').value = '';
+      let iraEl = document.getElementById('cusSearchIra');
+      if(iraEl) iraEl.value = '';
+      renderCustomsTable();
+    }
+    
+    window.doClearance = function(identifier){
+      let sid = safeId(identifier);
+      let date = document.getElementById(`clrDate_${sid}`).value;
+      let channel = document.getElementById(`ch_${sid}`).value;
+      if(!date){alert('请选择清关时间');return;}
+      let bl = blList.find(b => getBlIdentifier(b) === identifier);
+      if(bl){
+        bl.clearanceDate = fmtDate(date);
+        bl.channel = channel;
+        bl.isCleared = true;
+        updateContainerStatus();
+        saveData();
+        renderCustomsTable();
+        alert('已清关');
+      }
+    };
+    
+    window.revokeClearance = function(identifier){
+      if(confirm('确定撤销？')){
+        let bl = blList.find(b => getBlIdentifier(b) === identifier);
+        if(bl){
+          bl.clearanceDate = null;
+          bl.isCleared = false;
+          updateContainerStatus();
+          saveData();
+          renderCustomsTable();
+          alert('已撤销');
+        }
+      }
+    };
+    
+    // ==================== 以下为简化版的其他模块（保持原有功能） ====================
+    function renderPickupPlan(container){
+      updateContainerStatus();
+      let ready=containers.filter(c=>c.customsStatus==='已清关'&&!c.actualPickupTime&&!pickupPlans.some(p=>p.containerId===c.id&&p.status!=='cancelled'));
+      ready.sort((a,b)=>a.batch.localeCompare(b.batch));
+      let published=pickupPlans.filter(p=>p.status!=='cancelled');
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🚚 提箱计划</span><div><button class="btn btn-success" onclick="batchPublish()">批量发布</button><button class="btn" onclick="selectAllPickup()">全选</button></div></div><div id="pickupTable"></div></div><div class="card"><div class="card-header"><span class="card-title">📋 已发布的提箱计划</span></div><div id="publishedPlans"></div></div>`;
+      renderPickupTable(ready);
+      renderPublishedPlans(published);
+    }
+    
+    function renderPickupTable(ready){
+      if(ready.length===0){document.getElementById('pickupTable').innerHTML='<div style="padding:20px;text-align:center">暂无待发布计划的集装箱</div>';return;}
+      renderTable('pickupTable',['<input type="checkbox" id="selectAllCheckbox">','批次','集装箱号','到港时间','IRA号','到箱时间','运输公司','目的地','操作'],ready,(c)=>{
+        let tr=document.createElement('tr');
+        let iraList=getIraList(c.id);
+        tr.innerHTML=`<td><input type="checkbox" class="pickup-checkbox" data-id="${c.id}"></td><td>${c.batch}</td><td>${c.containerNo}</td><td>${fmtDate(c.eta)}</td><td>${iraList||'-'}</td><td><input type="date" id="arrival_${c.id}" class="form-control" style="width:130px;"></td><td><select id="carrier_${c.id}" class="form-control" style="width:100px;"><option value="RG">RG</option><option value="JSL">JSL</option></select></td><td><select id="dest_${c.id}" class="form-control" style="width:130px;"><option value="RG堆场">RG堆场</option><option value="Rio Claro">Rio Claro</option><option value="IRA库房">IRA库房</option><option value="工厂">工厂</option></select></td><td><button class="btn btn-sm btn-primary" onclick="publishSingle(${c.id})">发布</button></td>`;
+        return tr;
+      });
+      let selectAll=document.getElementById('selectAllCheckbox');
+      if(selectAll) selectAll.onclick=()=>document.querySelectorAll('.pickup-checkbox').forEach(cb=>cb.checked=selectAll.checked);
+    }
+    
+    function renderPublishedPlans(plans){
+      if(plans.length===0){document.getElementById('publishedPlans').innerHTML='<div style="padding:20px;text-align:center">暂无已发布的提箱计划</div>';return;}
+      renderTable('publishedPlans',['批次','集装箱号','到箱时间','运输公司','目的地','状态','操作'],plans,(p)=>{
+        let cont=containers.find(c=>c.id===p.containerId);
+        let statusText=p.status==='confirmed'?'已确认':(p.needReconfirm?'需二次确认':'待确认');
+        let statusClass=p.status==='confirmed'?'status-ready':(p.needReconfirm?'status-warning':'status-pending');
+        let tr=document.createElement('tr');
+        tr.innerHTML=`<td>${p.batch}</td><td>${p.containerNo}</td><td>${fmtDate(p.arrivalDate)}</td><td>${p.carrier}</td><td>${p.destination}</td><td><span class="status-badge ${statusClass}">${statusText}</span></td><td>${p.status!=='confirmed'?`<button class="btn btn-sm btn-warning" onclick="modifyPlan(${p.id})">修改</button> <button class="btn btn-sm btn-danger" onclick="cancelPlan(${p.id})">取消</button>`:'-'}</td>`;
+        return tr;
+      });
+    }
+    
+    function selectAllPickup(){document.querySelectorAll('.pickup-checkbox').forEach(cb=>cb.checked=true);}
+    window.publishSingle = function(id){
+      let arrival=document.getElementById(`arrival_${id}`).value;
+      let carrier=document.getElementById(`carrier_${id}`).value;
+      let dest=document.getElementById(`dest_${id}`).value;
+      let cont=containers.find(c=>c.id===id);
+      if(!cont)return;
+      if(pickupPlans.some(p=>p.containerId===id&&p.status!=='cancelled')){alert('已有待确认计划');return;}
+      pickupPlans.push({id:nextIds.plan++,containerId:id,containerNo:cont.containerNo,batch:cont.batch,arrivalDate:fmtDate(arrival),carrier,destination:dest,status:'pending',needReconfirm:false});
+      saveData();
+      renderPickupPlan(document.getElementById('mainContent'));
+      alert('计划已发布');
+    };
+    
+    window.batchPublish = function(){
+      let selected=document.querySelectorAll('.pickup-checkbox:checked');
+      if(selected.length===0){alert('请先选择');return;}
+      let count=0;
+      selected.forEach(cb=>{
+        let id=parseInt(cb.dataset.id);
+        let arrival=document.getElementById(`arrival_${id}`)?.value;
+        let carrier=document.getElementById(`carrier_${id}`)?.value;
+        let dest=document.getElementById(`dest_${id}`)?.value;
+        let cont=containers.find(c=>c.id===id);
+        if(cont&&!pickupPlans.some(p=>p.containerId===id&&p.status!=='cancelled')){
+          pickupPlans.push({id:nextIds.plan++,containerId:id,containerNo:cont.containerNo,batch:cont.batch,arrivalDate:fmtDate(arrival),carrier,destination:dest,status:'pending',needReconfirm:false});
+          count++;
+        }
+      });
+      if(count>0){
+        saveData();
+        renderPickupPlan(document.getElementById('mainContent'));
+        alert(`成功发布 ${count} 个计划`);
+      } else alert('请填写必要信息');
+    };
+    
+    window.modifyPlan = function(planId){
+      let plan=pickupPlans.find(p=>p.id===planId);
+      if(!plan)return;
+      let newArrival=prompt('修改到箱时间',plan.arrivalDate||'');
+      let newCarrier=prompt('修改运输公司(RG/JSL)',plan.carrier);
+      let newDest=prompt('修改目的地',plan.destination);
+      if(newArrival)plan.arrivalDate=fmtDate(newArrival);
+      if(newCarrier&&(newCarrier==='RG'||newCarrier==='JSL'))plan.carrier=newCarrier;
+      if(newDest)plan.destination=newDest;
+      plan.status='pending';
+      plan.needReconfirm=true;
+      saveData();
+      renderPickupPlan(document.getElementById('mainContent'));
+      alert('计划已修改，需运输公司重新确认');
+    };
+    
+    window.cancelPlan = function(planId){
+      if(confirm('确定取消？')){
+        let plan=pickupPlans.find(p=>p.id===planId);
+        if(plan){
+          plan.status='cancelled';
+          saveData();
+          renderPickupPlan(document.getElementById('mainContent'));
+          alert('已取消');
+        }
+      }
+    };
+    
+    // 运输任务（带日期筛选）
+    function renderTransportTasks(container){
+      let myPickupTasks = pickupPlans.filter(p => p.carrier === currentUser.carrier && p.status !== 'confirmed' && p.status !== 'cancelled');
+      let myTransitTasks = transportTasks.filter(t => t.carrier === currentUser.carrier && t.status === 'in_transit');
+      myPickupTasks.sort((a,b)=>String(a.arrivalDate||'').localeCompare(String(b.arrivalDate||'')));
+      myTransitTasks.sort((a,b)=>String(a.estimatedArrival||'').localeCompare(String(b.estimatedArrival||'')));
+      let dateGroups = new Map();
+      myPickupTasks.forEach(t=>{if(t.arrivalDate){if(!dateGroups.has(t.arrivalDate))dateGroups.set(t.arrivalDate,[]);dateGroups.get(t.arrivalDate).push({...t,type:'pending'});}});
+      myTransitTasks.forEach(t=>{let taskDate=t.estimatedArrival?t.estimatedArrival.split('T')[0]:null;if(taskDate){if(!dateGroups.has(taskDate))dateGroups.set(taskDate,[]);dateGroups.get(taskDate).push({...t,type:'transit'});}});
+      let activeDates = Array.from(dateGroups.keys()).filter(d=>dateGroups.get(d).length>0).sort();
+      let selectedDate = activeDates.length>0?activeDates[0]:null;
+      let filteredPickup = selectedDate?myPickupTasks.filter(p=>p.arrivalDate===selectedDate):[];
+      let filteredTransit = selectedDate?myTransitTasks.filter(t=>{let td=t.estimatedArrival?t.estimatedArrival.split('T')[0]:null;return td===selectedDate;}):[];
+      let dateTabsHtml = activeDates.length>0?`<div style="display:flex;gap:10px;margin-bottom:20px;">${activeDates.map(d=>`<div class="date-tab ${selectedDate===d?'active':''}" data-date="${d}" style="background:${selectedDate===d?'#2a5298':'#f0f2f5'};color:${selectedDate===d?'white':'#333'};padding:6px 18px;border-radius:30px;cursor:pointer;">📅 ${fmtDate(d)}</div>`).join('')}</div>`:'<div style="margin-bottom:20px;padding:10px;background:#fef0e6;border-radius:8px;text-align:center;">✅ 所有日期的计划均已完成</div>';
+      let html = `<div class="card"><div class="card-header"><span class="card-title">🚛 运输任务</span><button class="btn export-btn" onclick="exportTransportTasks()">📥 导出运输任务</button></div>${dateTabsHtml}`;
+      if(filteredPickup.length>0){
+        html += '<div class="section-divider"></div><div class="section-label">📋 待确认提箱</div><div id="pendingPickupTable"></div>';
+      } else if(selectedDate){
+        html += '<div class="section-divider"></div><div style="padding:20px;text-align:center">✅ 该日期暂无待确认提箱任务</div>';
+      }
+      if(filteredTransit.length>0){
+        html += '<div class="section-divider"></div><div class="section-label">🚛 运输中</div><div id="inTransitTable"></div>';
+      } else if(selectedDate && filteredPickup.length===0){
+        html += '<div style="padding:20px;text-align:center">📭 该日期暂无运输任务</div>';
+      }
+      html += '</div>';
+      container.innerHTML = html;
+      document.querySelectorAll('.date-tab').forEach(el=>{el.addEventListener('click',()=>{renderTransportTasksWithDate(container,el.dataset.date);});});
+      if(filteredPickup.length>0){
+        renderTable('pendingPickupTable',['批次','集装箱号','计划到箱时间','目的地','实际提箱时间','操作'],filteredPickup,(item)=>{
+          let destClass=getDestClass(item.destination);
+          let tr=document.createElement('tr');
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDate(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td><input type="datetime-local" id="pickupTime_${item.id}" class="form-control" style="width:180px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
+          return tr;
+        });
+      }
+      if(filteredTransit.length>0){
+        renderTable('inTransitTable',['批次','集装箱号','计划到箱时间','目的地','状态'],filteredTransit,(item)=>{
+          let destClass=getDestClass(item.to);
+          let tr=document.createElement('tr');
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${item.estimatedArrival?fmtDate(item.estimatedArrival.split('T')[0]):'-'}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td><span class="status-badge status-transport">运输中</span></td>`;
+          return tr;
+        });
+      }
+    }
+    
+    function renderTransportTasksWithDate(container, selectedDate){
+      let myPickupTasks = pickupPlans.filter(p => p.carrier === currentUser.carrier && p.status !== 'confirmed' && p.status !== 'cancelled');
+      let myTransitTasks = transportTasks.filter(t => t.carrier === currentUser.carrier && t.status === 'in_transit');
+      let filteredPickup = myPickupTasks.filter(p => p.arrivalDate === selectedDate);
+      let filteredTransit = myTransitTasks.filter(t => {let td = t.estimatedArrival ? t.estimatedArrival.split('T')[0] : null; return td === selectedDate;});
+      let dateGroups = new Map();
+      myPickupTasks.forEach(t=>{if(t.arrivalDate){if(!dateGroups.has(t.arrivalDate))dateGroups.set(t.arrivalDate,[]);dateGroups.get(t.arrivalDate).push(t);}});
+      myTransitTasks.forEach(t=>{let td=t.estimatedArrival?t.estimatedArrival.split('T')[0]:null;if(td){if(!dateGroups.has(td))dateGroups.set(td,[]);dateGroups.get(td).push(t);}});
+      let activeDates = Array.from(dateGroups.keys()).sort();
+      let dateTabsHtml = activeDates.length>0?`<div style="display:flex;gap:10px;margin-bottom:20px;">${activeDates.map(d=>`<div class="date-tab ${selectedDate===d?'active':''}" data-date="${d}" style="background:${selectedDate===d?'#2a5298':'#f0f2f5'};color:${selectedDate===d?'white':'#333'};padding:6px 18px;border-radius:30px;cursor:pointer;">📅 ${fmtDate(d)}</div>`).join('')}</div>`:'<div style="margin-bottom:20px;padding:10px;background:#fef0e6;border-radius:8px;text-align:center;">✅ 所有日期的计划均已完成</div>';
+      let html = `<div class="card"><div class="card-header"><span class="card-title">🚛 运输任务</span><button class="btn export-btn" onclick="exportTransportTasks()">📥 导出运输任务</button></div>${dateTabsHtml}`;
+      if(filteredPickup.length>0){
+        html += '<div class="section-divider"></div><div class="section-label">📋 待确认提箱</div><div id="pendingPickupTable"></div>';
+      } else if(selectedDate){
+        html += '<div class="section-divider"></div><div style="padding:20px;text-align:center">✅ 该日期暂无待确认提箱任务</div>';
+      }
+      if(filteredTransit.length>0){
+        html += '<div class="section-divider"></div><div class="section-label">🚛 运输中</div><div id="inTransitTable"></div>';
+      } else if(selectedDate && filteredPickup.length===0){
+        html += '<div style="padding:20px;text-align:center">📭 该日期暂无运输任务</div>';
+      }
+      html += '</div>';
+      container.innerHTML = html;
+      document.querySelectorAll('.date-tab').forEach(el=>{el.addEventListener('click',()=>{renderTransportTasksWithDate(container,el.dataset.date);});});
+      if(filteredPickup.length>0){
+        renderTable('pendingPickupTable',['批次','集装箱号','计划到箱时间','目的地','实际提箱时间','操作'],filteredPickup,(item)=>{
+          let destClass=getDestClass(item.destination);
+          let tr=document.createElement('tr');
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDate(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td><input type="datetime-local" id="pickupTime_${item.id}" class="form-control" style="width:180px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
+          return tr;
+        });
+      }
+      if(filteredTransit.length>0){
+        renderTable('inTransitTable',['批次','集装箱号','计划到箱时间','目的地','状态'],filteredTransit,(item)=>{
+          let destClass=getDestClass(item.to);
+          let tr=document.createElement('tr');
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${item.estimatedArrival?fmtDate(item.estimatedArrival.split('T')[0]):'-'}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td><span class="status-badge status-transport">运输中</span></td>`;
+          return tr;
+        });
+      }
+    }
+    
+    window.confirmPickupTask = function(planId){
+      let plan = pickupPlans.find(p => p.id === planId);
+      if(!plan){alert('找不到计划');return;}
+      let actualTime = document.getElementById(`pickupTime_${planId}`).value;
+      if(!actualTime){alert('请填写实际提箱时间');return;}
+      let cont = containers.find(c => c.id === plan.containerId);
+      if(cont) cont.actualPickupTime = actualTime;
+      plan.status = 'confirmed';
+      plan.actualPickupTime = actualTime;
+      plan.needReconfirm = false;
+      transportTasks.push({id:nextIds.task++,containerId:plan.containerId,containerNo:plan.containerNo,batch:plan.batch,from:'港口',to:plan.destination,carrier:plan.carrier,status:'in_transit',estimatedArrival:plan.arrivalDate});
+      saveData();
+      renderContent();
+      alert(`已确认提箱 ${plan.containerNo}`);
+    };
+    
+    window.exportTransportTasks = function(){
+      let myPickupTasks = pickupPlans.filter(p => p.carrier === currentUser.carrier && p.status !== 'confirmed' && p.status !== 'cancelled');
+      let myTransitTasks = transportTasks.filter(t => t.carrier === currentUser.carrier && t.status === 'in_transit');
+      let wsData = [['类型','批次','集装箱号','计划到箱时间','目的地','状态']];
+      myPickupTasks.forEach(item=>{wsData.push(['待确认提箱',item.batch,item.containerNo,fmtDate(item.arrivalDate),item.destination||'-','待确认']);});
+      myTransitTasks.forEach(item=>{wsData.push(['运输中',item.batch,item.containerNo,item.estimatedArrival?fmtDate(item.estimatedArrival.split('T')[0]):'-',item.to||'-','运输中']);});
+      if(wsData.length===1)wsData.push(['','','','','','']);
+      let ws=XLSX.utils.aoa_to_sheet(wsData);
+      let wb=XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb,ws,'运输任务');
+      XLSX.writeFile(wb,`运输任务_${getTodayStr()}.xlsx`);
+    };
+    
+    // 到货确认
+    function renderLocationConfirm(container){
+      let arriving=transportTasks.filter(t=>t.status==='in_transit'&&t.to===currentUser.location);
+      let arrived=transportTasks.filter(t=>t.status==='arrived'&&t.to===currentUser.location);
+      let html='<div class="card"><div class="card-header"><span class="card-title">✅ 在途运输 - 到货确认</span></div>';
+      if(arriving.length===0)html+='<div style="padding:20px;text-align:center">暂无在途运输</div>';
+      else html+='<div id="arrivingTable"></div>';
+      html+=`</div><div class="card"><div class="card-header"><span class="card-title">📦 已到达 - ${currentUser.location}</span></div>`;
+      if(arrived.length===0)html+='<div style="padding:20px;text-align:center">暂无已到达</div>';
+      else html+='<div id="arrivedTable"></div>';
+      html+='</div>';
+      container.innerHTML=html;
+      if(arriving.length>0){
+        renderTable('arrivingTable',['批次','集装箱号','出发地','目的地','预计到达','操作'],arriving,(t)=>{
+          let tr=document.createElement('tr');
+          tr.innerHTML=`<td>${t.batch}</td><td>${t.containerNo}</td><td>${t.from}</td><td>${t.to}</td><td>${t.estimatedArrival?fmtDate(t.estimatedArrival.split('T')[0]):'-'}</td><td><button class="btn btn-sm btn-success" onclick="doArrival(${t.id})">确认到达</button></td>`;
+          return tr;
+        });
+      }
+      if(arrived.length>0){
+        renderTable('arrivedTable',['批次','集装箱号','到达时间','操作'],arrived,(t)=>{
+          let needUnpack=(t.to==='Rio Claro'||t.to==='IRA库房'||t.to==='工厂');
+          let existingRecord=returnRecords.find(r=>r.containerId===t.containerId&&r.location===t.to);
+          let actionHtml='';
+          if(existingRecord&&existingRecord.type==='return_needed'&&!existingRecord.isReturnConfirmed) actionHtml='<span class="status-badge status-return-pending">待还箱</span>';
+          else if(existingRecord&&(existingRecord.type==='unpack'||existingRecord.isReturnConfirmed)) actionHtml='<span class="status-badge status-ready">已完成</span>';
+          else if(!needUnpack) actionHtml=`<button class="btn btn-sm btn-success" onclick="confirmArrivalOnly(${t.id})">确认到达</button>`;
+          else actionHtml=`<button class="btn btn-sm btn-warning" onclick="doUnpack(${t.id})">确认掏箱</button>`;
+          let tr=document.createElement('tr');
+          tr.innerHTML=`<td>${t.batch}</td><td>${t.containerNo}</td><td>${t.actualArrival?fmtDate(t.actualArrival.split('T')[0]):'-'}</td><td>${actionHtml}</td>`;
+          return tr;
+        });
+      }
+    }
+    
+    window.doArrival = function(taskId){let task=transportTasks.find(t=>t.id===taskId);if(task){task.status='arrived';task.actualArrival=new Date().toISOString();addStock(task.containerId,task.to);saveData();renderContent();alert(`已确认到达 ${task.to}`);}};
+    window.confirmArrivalOnly = function(taskId){let task=transportTasks.find(t=>t.id===taskId);if(task){task.status='arrived';task.actualArrival=new Date().toISOString();addStock(task.containerId,task.to);saveData();renderContent();alert(`已确认到达 ${task.to}`);}};
+    window.doUnpack = function(taskId){let task=transportTasks.find(t=>t.id===taskId);if(task){let existingRecord=returnRecords.find(r=>r.containerId===task.containerId&&r.location===task.to);if(existingRecord){alert('已完成掏箱');return;}let needReturnConfirm=needsReturn(task.containerId,task.to,task.from);if(needReturnConfirm){returnRecords.push({containerId:task.containerId,location:task.to,type:'return_needed',unpackDate:fmtDate(new Date().toISOString().split('T')[0]),isReturnConfirmed:false,fromLocation:task.from});alert('已确认掏箱，请运输公司进行还箱确认');}else{returnRecords.push({containerId:task.containerId,location:task.to,type:'unpack',unpackDate:fmtDate(new Date().toISOString().split('T')[0]),isReturnConfirmed:true,fromLocation:task.from});alert('已确认掏箱，可在动态运输计划中继续运输');}saveData();renderContent();}};
+    
+    // 还箱确认
+    function renderReturnConfirm(container){
+      let pendingReturns=returnRecords.filter(r=>!r.isReturnConfirmed&&r.type==='return_needed');
+      let myPending=[];
+      pendingReturns.forEach(r=>{let task=transportTasks.find(t=>t.containerId===r.containerId&&t.to===r.location);if(task&&task.carrier===currentUser.carrier){let c=containers.find(c=>c.id===r.containerId);myPending.push({...r,containerNo:task.containerNo,batch:task.batch||c?.batch,containerSeq:c?.containerSeq});}});
+      let html='<div class="card"><div class="card-header"><span class="card-title">🔄 还箱确认</span></div><div class="search-bar"><input type="text" id="returnSearch" placeholder="集装箱号" style="width:250px;"><button class="btn btn-primary" onclick="filterReturnList()">查询</button><button class="btn" onclick="resetReturnFilter()">重置</button></div><div id="returnList"></div></div>';
+      container.innerHTML=html;
+      renderReturnList(myPending);
+    }
+    
+    function renderReturnList(list){
+      let search=document.getElementById('returnSearch')?.value.toLowerCase()||'';
+      let filtered=list.filter(r=>!search||r.containerNo.toLowerCase().includes(search));
+      if(filtered.length===0){document.getElementById('returnList').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">暂无待还箱任务</div></div>';return;}
+      renderTable('returnList',['批次','集装箱号','地点','掏箱时间','还箱时间','凭证','操作'],filtered,(r)=>{
+        let tr=document.createElement('tr');
+        tr.innerHTML=`<td>${r.batch||''}</td><td>${r.containerNo||''}</td><td>${r.location||''}</td><td>${fmtDate(r.unpackDate)}</td><td><input type="date" id="retDate_${r.containerId}" class="form-control" style="width:140px;"></td><td><input type="file" id="proof_${r.containerId}" class="form-control" style="width:120px;" accept="image/*,.pdf"></td><td><button class="btn btn-sm btn-primary" onclick="doReturn(${r.containerId})">确认还箱</button></td>`;
+        return tr;
+      });
+    }
+    
+    function filterReturnList(){
+      let pendingReturns=returnRecords.filter(r=>!r.isReturnConfirmed&&r.type==='return_needed');
+      let myPending=[];
+      pendingReturns.forEach(r=>{let task=transportTasks.find(t=>t.containerId===r.containerId&&t.to===r.location);if(task&&task.carrier===currentUser.carrier){let c=containers.find(c=>c.id===r.containerId);myPending.push({...r,containerNo:task.containerNo,batch:task.batch||c?.batch,containerSeq:c?.containerSeq});}});
+      renderReturnList(myPending);
+    }
+    
+    function resetReturnFilter(){document.getElementById('returnSearch').value='';filterReturnList();}
+    
+    window.doReturn = function(containerId){let retDate=document.getElementById(`retDate_${containerId}`).value;let file=document.getElementById(`proof_${containerId}`).files[0];if(!retDate){alert('请填写还箱时间');return;}if(!file){alert('请上传还箱凭证');return;}let reader=new FileReader();reader.onload=function(e){let record=returnRecords.find(r=>r.containerId===containerId&&!r.isReturnConfirmed&&r.type==='return_needed');if(record){record.returnDate=fmtDate(retDate);record.isReturnConfirmed=true;record.type='return';record.proof=e.target.result;saveData();filterReturnList();alert('还箱确认成功');}};reader.readAsDataURL(file);};
+    
+    // 动态运输计划
+    function renderDynamicPlan(container){
+      let available = containers.filter(c => {
+        if (!c.actualPickupTime) return false;
+        let hasInTransit = transportTasks.some(t => t.containerId === c.id && t.status === 'in_transit');
+        if (hasInTransit) return false;
+        let factoryDone = returnRecords.some(r => r.containerId === c.id && r.location === '工厂');
+        if (factoryDone) return false;
+        let produced = productionRecords.some(p => p.containerIds && p.containerIds.includes(c.id));
+        if (produced) return false;
+        let loc = getContainerLocation(c.id);
+        if (loc === '港口' || loc === '工厂') return false;
+        return true;
+      });
+      let published=transportTasks.filter(t=>t.status==='in_transit');
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🎯 动态运输计划</span><div><button class="btn btn-success" onclick="batchPublishDynamic()">批量发布</button><button class="btn" onclick="selectAllDynamic()">全选</button></div></div><div class="search-bar"><input type="text" id="dynamicSearchBatch" placeholder="批次"><input type="text" id="dynamicSearchContainer" placeholder="集装箱号"><input type="text" id="dynamicSearchBl" placeholder="提单号"><button class="btn btn-primary" onclick="filterDynamicList()">查询</button><button class="btn" onclick="resetDynamicFilter()">重置</button></div><div id="dynamicTable"></div></div><div class="card"><div class="card-header"><span class="card-title">📋 已发布的运输计划</span></div><div id="publishedDynamic"></div></div>`;
+      renderDynamicTable(available);
+      renderPublishedDynamic(published);
+    }
+    
+    function renderDynamicTable(available){
+      let batch=document.getElementById('dynamicSearchBatch')?.value.toLowerCase()||'';
+      let contNo=document.getElementById('dynamicSearchContainer')?.value.toLowerCase()||'';
+      let blSearch=document.getElementById('dynamicSearchBl')?.value.toLowerCase()||'';
+      let filtered=available.filter(c=>(!batch||c.batch.toLowerCase().includes(batch))&&(!contNo||c.containerNo.toLowerCase().includes(contNo)));
+      if(blSearch){
+        filtered=filtered.filter(c=>containerBlMap.filter(m=>m.containerId===c.id).some(m=>m.blNo.toLowerCase().includes(blSearch)));
+      }
+      if(filtered.length===0){document.getElementById('dynamicTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">暂无需要运输的集装箱</div></div>';return;}
+      renderTable('dynamicTable',['<input type="checkbox" id="selectAllDynamicCb">','批次','集装箱号','当前位置','IRA号','目的地','运输公司','预计到达','操作'],filtered,(c)=>{
+        let currentLoc=getContainerLocation(c.id);
+        let iraList=getIraList(c.id);
+        let tr=document.createElement('tr');
+        tr.innerHTML=`<td><input type="checkbox" class="dynamic-checkbox" data-id="${c.id}" data-loc="${currentLoc}"></td><td>${c.batch}</td><td>${c.containerNo}</td><td><span class="status-badge status-at-location">${currentLoc}</span></td><td>${iraList||'-'}</td><td><select id="dynDest_${c.id}" class="form-control" style="width:130px;"><option value="RG堆场">RG堆场</option><option value="Rio Claro">Rio Claro</option><option value="IRA库房">IRA库房</option><option value="工厂">工厂</option></select></td><td><select id="dynCarrier_${c.id}" class="form-control" style="width:100px;"><option value="RG">RG</option><option value="JSL">JSL</option></select></td><td><input type="datetime-local" id="dynEta_${c.id}" class="form-control" style="width:160px;"></td><td><button class="btn btn-sm btn-primary" onclick="publishDynamicSingle(${c.id},'${currentLoc}')">发布</button></td>`;
+        return tr;
+      });
+      let selectAll=document.getElementById('selectAllDynamicCb');
+      if(selectAll) selectAll.onclick=()=>document.querySelectorAll('.dynamic-checkbox').forEach(cb=>cb.checked=selectAll.checked);
+    }
+    
+    function renderPublishedDynamic(tasks){
+      if(tasks.length===0){document.getElementById('publishedDynamic').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">暂无已发布的运输计划</div></div>';return;}
+      renderTable('publishedDynamic',['批次','集装箱号','出发地','目的地','运输公司','预计到达','状态'],tasks,(t)=>{
+        let cont=containers.find(c=>c.id===t.containerId);
+        let tr=document.createElement('tr');
+        tr.innerHTML=`<td>${t.batch}</td><td>${t.containerNo}</td><td>${t.from}</td><td>${t.to}</td><td>${t.carrier}</td><td>${t.estimatedArrival?fmtDate(t.estimatedArrival.split('T')[0]):'-'}</td><td><span class="status-badge status-transport">运输中</span></td>`;
+        return tr;
+      });
+    }
+    
+    function filterDynamicList(){
+      let available = containers.filter(c => {
+        if (!c.actualPickupTime) return false;
+        let hasInTransit = transportTasks.some(t => t.containerId === c.id && t.status === 'in_transit');
+        if (hasInTransit) return false;
+        let factoryDone = returnRecords.some(r => r.containerId === c.id && r.location === '工厂');
+        if (factoryDone) return false;
+        let produced = productionRecords.some(p => p.containerIds && p.containerIds.includes(c.id));
+        if (produced) return false;
+        let loc = getContainerLocation(c.id);
+        if (loc === '港口' || loc === '工厂') return false;
+        return true;
+      });
+      renderDynamicTable(available);
+    }
+    
+    function resetDynamicFilter(){document.getElementById('dynamicSearchBatch').value='';document.getElementById('dynamicSearchContainer').value='';document.getElementById('dynamicSearchBl').value='';filterDynamicList();}
+    function selectAllDynamic(){document.querySelectorAll('.dynamic-checkbox').forEach(cb=>cb.checked=true);}
+    
+    window.publishDynamicSingle = function(containerId,fromLoc){
+      let dest=document.getElementById(`dynDest_${containerId}`).value;
+      let carrier=document.getElementById(`dynCarrier_${containerId}`).value;
+      let eta=document.getElementById(`dynEta_${containerId}`).value;
+      if(fromLoc==='RG堆场'&&carrier!=='RG'){alert('从RG堆场出发必须用RG公司');return;}
+      if(fromLoc==='Rio Claro'&&dest==='工厂'&&carrier!=='RG'){alert('从Rio Claro到工厂必须用RG公司');return;}
+      let cont=containers.find(c=>c.id===containerId);
+      transportTasks.push({id:nextIds.task++,containerId,containerNo:cont.containerNo,batch:cont.batch,from:fromLoc,to:dest,carrier,status:'in_transit',estimatedArrival:eta});
+      saveData();
+      renderContent();
+      alert(`运输任务已发布给${carrier}`);
+    };
+    
+    window.batchPublishDynamic = function(){
+      let selected=document.querySelectorAll('.dynamic-checkbox:checked');
+      if(selected.length===0){alert('请先选择');return;}
+      let count=0;
+      selected.forEach(cb=>{
+        let id=parseInt(cb.dataset.id);
+        let fromLoc=cb.dataset.loc;
+        let dest=document.getElementById(`dynDest_${id}`)?.value;
+        let carrier=document.getElementById(`dynCarrier_${id}`)?.value;
+        let eta=document.getElementById(`dynEta_${id}`)?.value;
+        if(!dest)return;
+        let cont=containers.find(c=>c.id===id);
+        if(cont){
+          transportTasks.push({id:nextIds.task++,containerId:id,containerNo:cont.containerNo,batch:cont.batch,from:fromLoc,to:dest,carrier,status:'in_transit',estimatedArrival:eta});
+          count++;
+        }
+      });
+      if(count>0){saveData();renderContent();alert(`成功发布 ${count} 个运输任务`);}
+      else alert('请填写完整信息');
+    };
+    
+    // 库存看板
+    function renderLocationStock(container){
+      let stock={'港口':0,'RG堆场':0,'Rio Claro':0,'IRA库房':0,'工厂':0,'已生产':0};
+      containers.forEach(c=>{let loc=getContainerLocation(c.id);let produced=productionRecords.some(p=>p.containerIds&&p.containerIds.includes(c.id));if(produced) stock['已生产']++; else stock[loc]=(stock[loc]||0)+1;});
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📍 库存看板</span></div><div class="location-stock-grid">${Object.entries(stock).map(([k,v])=>`<div class="location-stock-item"><div class="location-stock-count">${v}</div><div>${k}</div></div>`).join('')}</div></div>`;
+    }
+    
+    // 生产完成确认
+    function renderProductionConfirm(container){
+      let factoryContainers = containers.filter(c => {
+        let loc = getContainerLocation(c.id);
+        let produced = productionRecords.some(p => p.containerIds && p.containerIds.includes(c.id));
+        return loc === '工厂' && !produced;
+      });
+      let grouped = new Map();
+      factoryContainers.forEach(c => {if(!grouped.has(c.batch)) grouped.set(c.batch, []); grouped.get(c.batch).push(c);});
+      let html = `<div class="card"><div class="card-header"><span class="card-title">🏭 生产完成确认</span></div>`;
+      if(grouped.size === 0){ html += '<div style="padding:20px;text-align:center">✅ 暂无待生产的集装箱</div>'; }
+      else {
+        for(let [batch, containersList] of grouped.entries()){
+          let totalCount = containersList.length;
+          let producedCount = productionRecords.filter(p => p.batchNo === batch).reduce((sum, p) => sum + p.quantity, 0);
+          let pendingCount = totalCount - producedCount;
+          html += `<div class="card" style="margin-bottom:16px;">
+            <h3>批次: ${batch}</h3>
+            <div>在厂数量: ${totalCount} | 已生产: ${producedCount} | 待生产: ${pendingCount}</div>
+            <div style="margin-top:12px;">
+              <input type="number" id="prodQty_${batch}" placeholder="生产数量" max="${pendingCount}" style="width:150px;padding:8px;border-radius:8px;border:1px solid #dcdfe6;">
+              <input type="date" id="prodDate_${batch}" value="${getTodayStr()}" style="width:150px;padding:8px;border-radius:8px;border:1px solid #dcdfe6;margin-left:10px;">
+              <textarea id="prodRemark_${batch}" placeholder="备注" style="width:200px;padding:8px;border-radius:8px;border:1px solid #dcdfe6;margin-left:10px;"></textarea>
+              <button class="btn btn-success" style="margin-left:10px;" onclick="confirmProduction('${batch}')">确认生产</button>
+            </div>
+            <div style="margin-top:12px;font-size:12px;color:#909399;">集装箱列表: ${containersList.map(c => c.containerNo).join(', ')}</div>
+          </div>`;
+        }
+      }
+      html += `<div class="card"><div class="card-header"><span class="card-title">📋 生产历史记录</span></div><div id="productionHistoryTable"></div></div></div>`;
+      container.innerHTML = html;
+      renderProductionHistory();
+    }
+    
+    function renderProductionHistory(){
+      if(productionRecords.length === 0){ document.getElementById('productionHistoryTable').innerHTML = '<div style="padding:20px;text-align:center">暂无生产记录</div>'; return; }
+      renderTable('productionHistoryTable',['批次','生产数量','生产日期','操作人','备注'],productionRecords,(p)=>{
+        let tr=document.createElement('tr');
+        tr.innerHTML=`<td>${p.batchNo}</td><td>${p.quantity}</td><td>${fmtDate(p.productionDate)}</td><td>${p.operator}</td><td>${p.remark||'-'}</td>`;
+        return tr;
+      });
+    }
+    
+    window.confirmProduction = function(batch){
+      let qty = parseInt(document.getElementById(`prodQty_${batch}`).value);
+      let prodDate = document.getElementById(`prodDate_${batch}`).value;
+      let remark = document.getElementById(`prodRemark_${batch}`).value;
+      if(!qty || qty <= 0){ alert('请输入生产数量'); return; }
+      let batchContainers = containers.filter(c => c.batch === batch);
+      let producedCount = productionRecords.filter(p => p.batchNo === batch).reduce((sum, p) => sum + p.quantity, 0);
+      let availableCount = batchContainers.length - producedCount;
+      if(qty > availableCount){ alert(`最多可生产 ${availableCount} 个集装箱`); return; }
+      let producedContainerIds = batchContainers.slice(0, producedCount + qty).map(c => c.id);
+      productionRecords.push({id: nextIds.production++, batchNo: batch, quantity: qty, productionDate: fmtDate(prodDate), operator: currentUser.name, remark: remark, containerIds: producedContainerIds});
+      saveData();
+      renderProductionConfirm(document.getElementById('mainContent'));
+      alert(`已确认生产 ${qty} 个集装箱`);
+    };
+    
+    // 费率配置
+    function renderRateConfig(container){
+      let carriers = ['MSC', 'COSCO', '长荣'];
+      let types = ['普柜', '冷柜'];
+      let storageHtml = '<h3>📊 堆存费配置（按时间段）</h3>';
+      if(storageConfig.length === 0){
+        storageHtml += '<div style="padding:20px;text-align:center;color:#909399;">暂无配置，点击下方按钮添加</div>';
+      }
+      storageConfig.forEach((cfg, idx) => {
+        storageHtml += `<div class="rate-period-row">
+          <input type="date" id="storage_start_${idx}" value="${toDateInput(cfg.startDate)}" style="width:130px;">
+          <span>至</span>
+          <input type="date" id="storage_end_${idx}" value="${toDateInput(cfg.endDate)}" style="width:130px;">
+          <input type="number" id="storage_fixedDays_${idx}" value="${cfg.fixedDays}" placeholder="固定天数" style="width:100px;">
+          <input type="number" id="storage_fixedRate_${idx}" value="${cfg.fixedRate}" placeholder="固定费用" style="width:100px;">
+          <input type="number" id="storage_overtimeRate_${idx}" value="${cfg.overtimeRate}" placeholder="超期单价" style="width:100px;">
+          <button class="btn btn-sm btn-danger" onclick="deleteStoragePeriod(${idx})">删除</button>
+        </div>`;
+      });
+      storageHtml += `<div class="rate-period-row"><button class="btn btn-sm btn-success" onclick="addStoragePeriod()">+ 添加堆存费时段</button></div>`;
+      
+      let demurrageHtml = '<h3>🚢 滞箱费配置（按时间段）</h3><div class="table-wrapper"><table class="data-table"><thead><tr><th>船公司</th><th>箱型</th><th>生效开始</th><th>生效结束</th><th>免费天数</th><th>日费率(USD)</th><th>操作</th></tr></thead><tbody>';
+      if(demurrageConfig.length === 0){
+        demurrageHtml += '<tr><td colspan="7" style="text-align:center;color:#909399;">暂无配置，点击下方按钮添加</td></tr>';
+      }
+      demurrageConfig.forEach((cfg, idx) => {
+        demurrageHtml += `<tr>
+          <td><select id="dem_carrier_${idx}"><option value="MSC" ${cfg.carrier==='MSC'?'selected':''}>MSC</option><option value="COSCO" ${cfg.carrier==='COSCO'?'selected':''}>COSCO</option><option value="长荣" ${cfg.carrier==='长荣'?'selected':''}>长荣</option></select></td>
+          <td><select id="dem_type_${idx}"><option value="普柜" ${cfg.type==='普柜'?'selected':''}>普柜</option><option value="冷柜" ${cfg.type==='冷柜'?'selected':''}>冷柜</option></select></td>
+          <td><input type="date" id="dem_start_${idx}" value="${toDateInput(cfg.startDate)}"></td>
+          <td><input type="date" id="dem_end_${idx}" value="${toDateInput(cfg.endDate)}"></td>
+          <td><input type="number" id="dem_freeDays_${idx}" value="${cfg.freeDays}" style="width:80px;"></td>
+          <td><input type="number" id="dem_rate_${idx}" value="${cfg.ratePerDay}" style="width:80px;"></td>
+          <td><button class="btn btn-sm btn-danger" onclick="deleteDemPeriod(${idx})">删除</button></td>
+        </tr>`;
+      });
+      demurrageHtml += `</tbody></table><div style="margin-top:16px;"><button class="btn btn-success" onclick="addDemPeriod()">+ 添加滞箱费时段</button></div>`;
+      
+      let warningHtml = `<h3>⚠️ 预警配置</h3><div class="rate-period-row">
+        <label>堆存费预警天数: <input type="number" id="warningStorageDays" value="${warningConfig.storageWarningDays}" style="width:80px;"> 天</label>
+        <label style="margin-left:20px;">滞箱费预警天数: <input type="number" id="warningDemurrageDays" value="${warningConfig.demurrageWarningDays}" style="width:80px;"> 天</label>
+        <button class="btn btn-primary" onclick="saveWarningConfig()">保存预警配置</button>
+      </div>`;
+      
+      container.innerHTML = `<div class="card"><div class="card-header"><span class="card-title">💰 费率配置</span></div>${storageHtml}<hr>${demurrageHtml}<hr>${warningHtml}<div style="margin-top:16px;"><button class="btn btn-primary" onclick="saveAllRates()">保存所有配置</button></div></div>`;
+    }
+    
+    window.addStoragePeriod = function(){ storageConfig.push({startDate: fmtDate(getTodayStr()), endDate: fmtDate(getTodayStr()), fixedDays: 15, fixedRate: 1000, overtimeRate: 100}); renderRateConfig(document.getElementById('mainContent')); };
+    window.deleteStoragePeriod = function(idx){ storageConfig.splice(idx,1); renderRateConfig(document.getElementById('mainContent')); };
+    window.addDemPeriod = function(){ demurrageConfig.push({carrier: "MSC", type: "普柜", startDate: fmtDate(getTodayStr()), endDate: fmtDate(getTodayStr()), freeDays: 28, ratePerDay: 170}); renderRateConfig(document.getElementById('mainContent')); };
+    window.deleteDemPeriod = function(idx){ demurrageConfig.splice(idx,1); renderRateConfig(document.getElementById('mainContent')); };
+    
+    window.saveWarningConfig = function(){
+      warningConfig.storageWarningDays = parseInt(document.getElementById('warningStorageDays').value);
+      warningConfig.demurrageWarningDays = parseInt(document.getElementById('warningDemurrageDays').value);
+      localStorage.setItem('cc_warningConfig', JSON.stringify(warningConfig));
+      localStorage.removeItem('cc_lastFeeUpdate');
+      updateDailyFees();
+      alert('预警配置已保存');
+    };
+    
+    window.saveAllRates = function(){
+      let newStorageConfig = [];
+      for(let i=0; i<storageConfig.length; i++){
+        let startInput = document.getElementById(`storage_start_${i}`);
+        let endInput = document.getElementById(`storage_end_${i}`);
+        let fixedDaysInput = document.getElementById(`storage_fixedDays_${i}`);
+        let fixedRateInput = document.getElementById(`storage_fixedRate_${i}`);
+        let overtimeRateInput = document.getElementById(`storage_overtimeRate_${i}`);
+        if(startInput && endInput){
+          newStorageConfig.push({startDate: fmtDate(startInput.value), endDate: fmtDate(endInput.value), fixedDays: parseInt(fixedDaysInput.value), fixedRate: parseFloat(fixedRateInput.value), overtimeRate: parseFloat(overtimeRateInput.value)});
+        }
+      }
+      if(newStorageConfig.length > 0) storageConfig = newStorageConfig;
+      
+      let newDemurrageConfig = [];
+      for(let i=0; i<demurrageConfig.length; i++){
+        let carrierSelect = document.getElementById(`dem_carrier_${i}`);
+        let typeSelect = document.getElementById(`dem_type_${i}`);
+        let startInput = document.getElementById(`dem_start_${i}`);
+        let endInput = document.getElementById(`dem_end_${i}`);
+        let freeDaysInput = document.getElementById(`dem_freeDays_${i}`);
+        let rateInput = document.getElementById(`dem_rate_${i}`);
+        if(carrierSelect && startInput){
+          newDemurrageConfig.push({carrier: carrierSelect.value, type: typeSelect.value, startDate: fmtDate(startInput.value), endDate: fmtDate(endInput.value), freeDays: parseInt(freeDaysInput.value), ratePerDay: parseFloat(rateInput.value)});
+        }
+      }
+      if(newDemurrageConfig.length > 0) demurrageConfig = newDemurrageConfig;
+      
+      saveData();
+      localStorage.removeItem('cc_lastFeeUpdate');
+      updateDailyFees();
+      alert('所有配置已保存，费用将重新计算');
+    };
+    
+    // 费用报表
+    function renderFeeReport(container){
+      let currentDate = getTodayStr();
+      let feeData = containers.map(c => {
+        let fees = calculateFeesForContainer(c, currentDate);
+        return { ...c, storageFee: fees.storageFee, demurrageFee: fees.demurrageFee };
+      });
+      let totalStorage = feeData.reduce((sum, c) => sum + c.storageFee, 0);
+      let totalDemurrage = feeData.reduce((sum, c) => sum + c.demurrageFee, 0);
+      container.innerHTML = `<div class="card"><div class="card-header"><span class="card-title">📈 费用报表</span><div><button class="btn export-btn" onclick="exportFeeReport()">📥 导出Excel</button></div></div>
+        <div class="stats-grid"><div class="stat-card"><div class="stat-number">R$ ${totalStorage.toFixed(2)}</div><div class="stat-label">堆存费总额</div></div><div class="stat-card"><div class="stat-number">$ ${totalDemurrage.toFixed(2)}</div><div class="stat-label">滞箱费总额</div></div></div>
+        <div class="fee-card"><div class="fee-row"><span class="fee-label">费用计算截止日期:</span><span class="fee-value">${fmtDate(currentDate)}</span></div><div class="fee-row"><span class="fee-label">说明:</span><span class="fee-label">堆存费计算至提箱日，滞箱费计算至还箱日，未发生事件则以今日为截止</span></div></div>
+        <div id="feeTable"></div></div>`;
+      renderTable('feeTable',['批次','箱号','船公司','箱型','到港日期','提箱日期','还箱日期','堆存费(雷亚尔)','滞箱费(美元)'],feeData,(c)=>{
+        let returnRec = returnRecords.find(r => r.containerId === c.id && r.isReturnConfirmed);
+        let returnDate = returnRec ? returnRec.returnDate : '-';
+        let tr=document.createElement('tr');
+        tr.innerHTML=`<td>${c.batch}</td><td>${c.containerNo}</td><td>${c.vessel}</td><td>${c.containerType||'-'}</td><td>${fmtDate(c.eta)}</td><td>${c.actualPickupTime?fmtDate(c.actualPickupTime.split('T')[0]):'-'}</td><td>${fmtDate(returnDate)}</td><td style="text-align:center;color:#e6a23c;font-weight:600;">R$ ${c.storageFee.toFixed(2)}</td><td style="text-align:center;color:#f56c6c;font-weight:600;">$ ${c.demurrageFee.toFixed(2)}</td>`;
+        return tr;
+      });
+    }
+    
+    window.exportFeeReport = function(){
+      let currentDate = getTodayStr();
+      let feeData = containers.map(c => {
+        let fees = calculateFeesForContainer(c, currentDate);
+        let returnRec = returnRecords.find(r => r.containerId === c.id && r.isReturnConfirmed);
+        return { 批次: c.batch, 集装箱号: c.containerNo, 船公司: c.vessel, 箱型: c.containerType || '-', 到港日期: fmtDate(c.eta), 提箱日期: c.actualPickupTime ? fmtDate(c.actualPickupTime.split('T')[0]) : '-', 还箱日期: returnRec ? fmtDate(returnRec.returnDate) : '-', 堆存费_雷亚尔: fees.storageFee.toFixed(2), 滞箱费_美元: fees.demurrageFee.toFixed(2) };
+      });
+      let ws = XLSX.utils.json_to_sheet(feeData);
+      let wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, '费用报表');
+      XLSX.writeFile(wb, `费用报表_${currentDate}.xlsx`);
+    };
+    
+    function openModal(){ document.getElementById('modal').style.display='flex'; }
+    function closeModal(){ document.getElementById('modal').style.display='none'; }
+    
+    function login(){
+      let user=users[document.getElementById('loginUsername').value];
+      if(user&&user.password===document.getElementById('loginPassword').value){
+        currentUser=user;
+        document.getElementById('loginPage').style.display='none';
+        document.getElementById('mainApp').style.display='block';
+        document.getElementById('currentRole').innerText=user.role;
+        document.getElementById('currentUser').innerText=user.name;
+        loadData();
+        renderSidebar();
+        renderContent();
+      } else { alert('用户名或密码错误'); }
+    }
+    
+    function logout(){ currentUser=null; document.getElementById('loginPage').style.display='flex'; document.getElementById('mainApp').style.display='none'; }
+    
+    loadData();
+  </script>
+</body>
+</html>
