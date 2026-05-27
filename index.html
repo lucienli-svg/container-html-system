@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V6</title>
+  <title>集装箱智能监控管理系统 V14</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -129,6 +129,48 @@
     .transport-date-scroll::-webkit-scrollbar-track { background:#f0f2f5; border-radius:8px; }
     .date-tab { flex:0 0 auto; min-width:126px; text-align:center; user-select:none; }
     .date-tab.active { box-shadow:0 4px 10px rgba(42,82,152,.25); }
+
+
+    /* ==================== V14：表格字段栏置顶 + 运输任务日期页签显示修复 ==================== */
+    /* 只对带查询栏的业务页面固定表格字段栏，避免影响运输任务日期页签 */
+    .main-content > .card:first-child:has(> .search-bar) .data-table thead th {
+      position: sticky;
+      top: 176px;
+      z-index: 950;
+      background: #f5f7fa;
+      box-shadow: inset 0 -1px 0 #e4e7ed;
+    }
+    .main-content > .card:first-child:has(> .search-bar) .table-wrapper {
+      overflow-x: auto;
+      overflow-y: visible;
+    }
+    /* 运输任务的日期页签保持独立显示，不参与表格字段栏置顶 */
+    .transport-date-scroll {
+      display: flex !important;
+      align-items: center;
+      gap: 10px;
+      margin: 12px 0 20px 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      white-space: nowrap;
+      padding: 10px 4px 16px 4px;
+      min-height: 66px;
+      position: relative;
+      z-index: 20;
+      background: #fff;
+      border-bottom: 1px solid #e4e7ed;
+    }
+    .transport-date-scroll .date-tab {
+      flex: 0 0 auto;
+      min-width: 126px;
+      text-align: center;
+      user-select: none;
+      line-height: 22px;
+    }
+    @media (max-width: 768px) {
+      .main-content > .card:first-child:has(> .search-bar) .data-table thead th { top: 168px; }
+    }
+
   </style>
 </head>
 <body>
