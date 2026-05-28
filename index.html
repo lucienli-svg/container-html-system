@@ -510,6 +510,7 @@
     #dynamicTable .data-table th:nth-child(11), #dynamicTable .data-table td:nth-child(11) { width: 132px !important; }
     #dynamicTable .data-table th:nth-child(12), #dynamicTable .data-table td:nth-child(12) { width: 58px !important; }
     #dynamicTable .dynamic-dock { width: 62px !important; min-width: 62px !important; padding-left: 3px !important; padding-right: 3px !important; }
+    #dynamicTable .dynamic-dest { width: 82px !important; min-width: 82px !important; padding-left: 3px !important; padding-right: 3px !important; }
     #dynamicTable .dynamic-datetime { width: 126px !important; min-width: 126px !important; padding-left: 3px !important; padding-right: 3px !important; }
     .dynamic-search input { max-width: 150px !important; }
 
@@ -1056,7 +1057,16 @@
         todayDemurrage += Math.max(0, (todayFees.demurrageFee || 0) - (prevFees.demurrageFee || 0));
       });
 
-      let clearanceCompleted = blList.filter(bl => bl.isCleared && isDateEqual(bl.clearanceDate, targetDate)).length;
+      // 今日清关完成数量按集装箱统计：该集装箱关联的提单全部清关，且至少一个关联提单清关时间为今天
+      let clearanceCompleted = containers.filter(c => {
+        let blNos = containerBlMap.filter(m => m.containerId === c.id).map(m => m.blNo);
+        if (blNos.length === 0) return false;
+        let relatedBls = blNos.map(no => blList.find(b => b.blNo === no || b.houseBlNo === no)).filter(Boolean);
+        if (relatedBls.length === 0) return false;
+        let allCleared = relatedBls.every(bl => bl.isCleared);
+        let clearedToday = relatedBls.some(bl => isDateEqual(bl.clearanceDate, targetDate));
+        return allCleared && clearedToday;
+      }).length;
       let plannedPickup = pickupPlans.filter(p => p.status !== 'cancelled' && isDateEqual(p.arrivalDate, targetDate)).length;
       let actualPickup = pickupPlans.filter(p => p.status === 'confirmed' && isDateEqual(p.actualPickupTime, targetDate)).length;
       if (actualPickup === 0) {
@@ -1174,14 +1184,22 @@
     
     // ==================== 基础数据 ====================
     function renderContainers(container){
-      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📦 基础数据</span><div><button class="btn btn-primary" onclick="showAddContainer()">+ 新增</button><button class="btn export-btn" onclick="exportTemplate()">📥 导出模板</button><button class="btn btn-success" onclick="showImport()">📎 批量导入</button></div></div><div class="search-bar"><input type="text" id="searchBatch" placeholder="批次"><input type="text" id="searchContainer" placeholder="集装箱号"><button class="btn btn-primary" onclick="renderContainerTable()">查询</button><button class="btn" onclick="clearContainerSearch()">重置</button></div><div id="containerTable"></div></div>`;
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📦 基础数据</span><div><button class="btn btn-primary" onclick="showAddContainer()">+ 新增</button><button class="btn export-btn" onclick="exportTemplate()">📥 导出模板</button><button class="btn btn-success" onclick="showImport()">📎 批量导入</button></div></div><div class="search-bar"><input type="text" id="searchBatch" placeholder="批次"><input type="text" id="searchContainer" placeholder="集装箱号"><select id="searchLocation" class="form-control" style="width:auto;min-width:130px;"><option value="">全部当前位置</option><option value="港口">港口</option><option value="RG堆场">RG堆场</option><option value="Rio Claro">Rio Claro</option><option value="IRA库房">IRA库房</option><option value="工厂">工厂</option><option value="运输中">运输中</option><option value="已生产">已生产</option></select><select id="searchStatus" class="form-control" style="width:auto;min-width:130px;"><option value="">全部状态</option><option value="清关中">清关中</option><option value="已清关">已清关</option><option value="运输中">运输中</option><option value="已到达">已到达</option><option value="待还箱">待还箱</option><option value="已完成">已完成</option><option value="已生产">已生产</option></select><button class="btn btn-primary" onclick="renderContainerTable()">查询</button><button class="btn" onclick="clearContainerSearch()">重置</button></div><div id="containerTable"></div></div>`;
       renderContainerTable();
     }
     
     function renderContainerTable(){
       let batch=document.getElementById('searchBatch')?.value.toLowerCase()||'';
       let cont=document.getElementById('searchContainer')?.value.toLowerCase()||'';
-      let filtered=containers.filter(c=>(!batch||c.batch.toLowerCase().includes(batch))&&(!cont||c.containerNo.toLowerCase().includes(cont)));
+      let locFilter=document.getElementById('searchLocation')?.value||'';
+      let statusFilter=document.getElementById('searchStatus')?.value||'';
+      let filtered=containers.filter(c=>{
+        let st=getContainerFullStatus(c);
+        return (!batch||String(c.batch||'').toLowerCase().includes(batch)) &&
+               (!cont||String(c.containerNo||'').toLowerCase().includes(cont)) &&
+               (!locFilter||st.loc===locFilter) &&
+               (!statusFilter||st.text===statusFilter);
+      });
       renderTable('containerTable',['序号','批次','集装箱序号','集装箱号','船公司','箱型','到港时间','关联提单','IRA号','当前位置','状态','操作'],filtered,(c,i)=>{
         let tr=document.createElement('tr');
         let bls = containerBlMap.filter(m=>m.containerId===c.id).map(m=>{
@@ -1198,7 +1216,7 @@
       });
     }
     
-    function clearContainerSearch(){document.getElementById('searchBatch').value='';document.getElementById('searchContainer').value='';renderContainerTable();}
+    function clearContainerSearch(){document.getElementById('searchBatch').value='';document.getElementById('searchContainer').value='';document.getElementById('searchLocation').value='';document.getElementById('searchStatus').value='';renderContainerTable();}
     
     function showAddContainer(){
       document.getElementById('modalTitle').innerText='新增集装箱';
@@ -2066,19 +2084,19 @@
     function renderReturnConfirm(container){
       let pendingReturns=returnRecords.filter(r=>!r.isReturnConfirmed&&r.type==='return_needed');
       let myPending=[];
-      pendingReturns.forEach(r=>{let task=transportTasks.find(t=>t.containerId===r.containerId&&t.to===r.location);if(task&&task.carrier===currentUser.carrier){let c=containers.find(c=>c.id===r.containerId);myPending.push({...r,containerNo:task.containerNo,batch:task.batch||c?.batch,containerSeq:c?.containerSeq});}});
-      let html='<div class="card"><div class="card-header"><span class="card-title">🔄 还箱确认</span></div><div class="search-bar"><input type="text" id="returnSearch" placeholder="集装箱号" style="width:250px;"><button class="btn btn-primary" onclick="filterReturnList()">查询</button><button class="btn" onclick="resetReturnFilter()">重置</button></div><div id="returnList"></div></div>';
+      pendingReturns.forEach(r=>{let task=transportTasks.find(t=>t.containerId===r.containerId&&t.to===r.location);if(task&&task.carrier===currentUser.carrier){let c=containers.find(c=>c.id===r.containerId);let blText=getContainerBlTextById(r.containerId)||'-';myPending.push({...r,containerNo:task.containerNo,batch:task.batch||c?.batch,containerSeq:c?.containerSeq,blText});}});
+      let html='<div class="card"><div class="card-header"><span class="card-title">🔄 还箱确认</span></div><div class="search-bar"><input type="text" id="returnSearch" placeholder="集装箱号 / 提单号" style="width:250px;"><button class="btn btn-primary" onclick="filterReturnList()">查询</button><button class="btn" onclick="resetReturnFilter()">重置</button></div><div id="returnList"></div></div>';
       container.innerHTML=html;
       renderReturnList(myPending);
     }
     
     function renderReturnList(list){
       let search=document.getElementById('returnSearch')?.value.toLowerCase()||'';
-      let filtered=list.filter(r=>!search||r.containerNo.toLowerCase().includes(search));
+      let filtered=list.filter(r=>!search||r.containerNo.toLowerCase().includes(search)||(r.blText||'').toLowerCase().includes(search));
       if(filtered.length===0){document.getElementById('returnList').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">暂无待还箱任务</div></div>';return;}
-      renderTable('returnList',['批次','集装箱号','地点','掏箱时间','还箱时间','凭证','操作'],filtered,(r)=>{
+      renderTable('returnList',['批次','集装箱号','提单号','地点','掏箱时间','还箱时间','凭证','操作'],filtered,(r)=>{
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td>${r.batch||''}</td><td>${r.containerNo||''}</td><td>${r.location||''}</td><td>${fmtDate(r.unpackDate)}</td><td><input type="date" id="retDate_${r.containerId}" class="form-control" style="width:140px;"></td><td><input type="file" id="proof_${r.containerId}" class="form-control" style="width:120px;" accept="image/*,.pdf"></td><td><button class="btn btn-sm btn-primary" onclick="doReturn(${r.containerId})">确认还箱</button></td>`;
+        tr.innerHTML=`<td>${r.batch||''}</td><td>${r.containerNo||''}</td><td title="${r.blText||'-'}">${r.blText||'-'}</td><td>${r.location||''}</td><td>${fmtDate(r.unpackDate)}</td><td><input type="date" id="retDate_${r.containerId}" class="form-control" style="width:140px;"></td><td><input type="file" id="proof_${r.containerId}" class="form-control" style="width:120px;" accept="image/*,.pdf"></td><td><button class="btn btn-sm btn-primary" onclick="doReturn(${r.containerId})">确认还箱</button></td>`;
         return tr;
       });
     }
@@ -2086,7 +2104,7 @@
     function filterReturnList(){
       let pendingReturns=returnRecords.filter(r=>!r.isReturnConfirmed&&r.type==='return_needed');
       let myPending=[];
-      pendingReturns.forEach(r=>{let task=transportTasks.find(t=>t.containerId===r.containerId&&t.to===r.location);if(task&&task.carrier===currentUser.carrier){let c=containers.find(c=>c.id===r.containerId);myPending.push({...r,containerNo:task.containerNo,batch:task.batch||c?.batch,containerSeq:c?.containerSeq});}});
+      pendingReturns.forEach(r=>{let task=transportTasks.find(t=>t.containerId===r.containerId&&t.to===r.location);if(task&&task.carrier===currentUser.carrier){let c=containers.find(c=>c.id===r.containerId);let blText=getContainerBlTextById(r.containerId)||'-';myPending.push({...r,containerNo:task.containerNo,batch:task.batch||c?.batch,containerSeq:c?.containerSeq,blText});}});
       renderReturnList(myPending);
     }
     
@@ -2116,7 +2134,7 @@
             <button class="btn btn-primary" onclick="filterDynamicList()">查询</button>
             <button class="btn" onclick="resetDynamicFilter()">重置</button>
           </div>
-          <div style="font-size:12px;color:#909399;margin-bottom:8px;text-align:center;">动态运输计划默认运输公司为 RG，默认到货地点为工厂；到工厂计划必须填写卸货口。</div>
+          <div style="font-size:12px;color:#909399;margin-bottom:8px;text-align:center;">动态运输计划默认运输公司为 RG，默认到货地点为工厂；也可选择 RG堆场 / Rio Claro / IRA库房；目的地为工厂时卸货口必填。</div>
           <div id="dynamicTable"></div>
         </div>
         <div class="card dynamic-card">
@@ -2160,7 +2178,7 @@
         let iraList=getIraList(c.id);
         let blText=getContainerBlTextById(c.id) || '-';
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td><input type="checkbox" class="dynamic-checkbox" data-id="${c.id}" data-loc="${currentLoc}"></td><td title="${c.batch||''}">${c.batch||'-'}</td><td title="${c.containerSeq||''}">${c.containerSeq||'-'}</td><td title="${c.containerNo||''}">${c.containerNo}</td><td title="${blText}">${blText}</td><td><span class="status-badge status-at-location">${currentLoc}</span></td><td title="${iraList||''}">${iraList||'-'}</td><td><span class="status-badge status-ready">RG</span></td><td><span class="status-badge dest-factory">工厂</span></td><td><input type="text" id="dynDock_${c.id}" class="form-control dynamic-dock" placeholder="必填"></td><td><input type="datetime-local" id="dynEta_${c.id}" class="form-control dynamic-datetime"></td><td><button class="btn btn-sm btn-primary" onclick="publishDynamicSingle(${c.id},'${currentLoc}')">发布</button></td>`;
+        tr.innerHTML=`<td><input type="checkbox" class="dynamic-checkbox" data-id="${c.id}" data-loc="${currentLoc}"></td><td title="${c.batch||''}">${c.batch||'-'}</td><td title="${c.containerSeq||''}">${c.containerSeq||'-'}</td><td title="${c.containerNo||''}">${c.containerNo}</td><td title="${blText}">${blText}</td><td><span class="status-badge status-at-location">${currentLoc}</span></td><td title="${iraList||''}">${iraList||'-'}</td><td><span class="status-badge status-ready">RG</span></td><td><select id="dynDest_${c.id}" class="form-control dynamic-dest" onchange="toggleDynamicDockRequired(${c.id})"><option value="工厂" selected>工厂</option><option value="RG堆场">RG堆场</option><option value="Rio Claro">Rio Claro</option><option value="IRA库房">IRA库房</option></select></td><td><input type="text" id="dynDock_${c.id}" class="form-control dynamic-dock" placeholder="工厂必填"></td><td><input type="datetime-local" id="dynEta_${c.id}" class="form-control dynamic-datetime"></td><td><button class="btn btn-sm btn-primary" onclick="publishDynamicSingle(${c.id},'${currentLoc}')">发布</button></td>`;
         return tr;
       });
       let selectAll=document.getElementById('selectAllDynamicCb');
@@ -2174,10 +2192,17 @@
         let blText=getContainerBlTextById(t.containerId) || '-';
         let iraList=getIraList(t.containerId) || '-';
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td title="${t.batch||''}">${t.batch||'-'}</td><td title="${cont.containerSeq||t.containerSeq||''}">${cont.containerSeq||t.containerSeq||'-'}</td><td title="${t.containerNo||''}">${t.containerNo}</td><td title="${blText}">${blText}</td><td title="${iraList}">${iraList}</td><td>${t.from||'-'}</td><td><span class="status-badge dest-factory">${t.to||'工厂'}</span></td><td>${t.unloadingDock||'-'}</td><td>${t.carrier||'RG'}</td><td>${fmtDateTime(t.estimatedArrival)}</td><td><span class="status-badge status-transport">运输中</span></td>`;
+        tr.innerHTML=`<td title="${t.batch||''}">${t.batch||'-'}</td><td title="${cont.containerSeq||t.containerSeq||''}">${cont.containerSeq||t.containerSeq||'-'}</td><td title="${t.containerNo||''}">${t.containerNo}</td><td title="${blText}">${blText}</td><td title="${iraList}">${iraList}</td><td>${t.from||'-'}</td><td><span class="status-badge ${getDestClass(t.to||'工厂')}">${t.to||'工厂'}</span></td><td>${t.unloadingDock||'-'}</td><td>${t.carrier||'RG'}</td><td>${fmtDateTime(t.estimatedArrival)}</td><td><span class="status-badge status-transport">运输中</span></td>`;
         return tr;
       });
     }
+
+    window.toggleDynamicDockRequired = function(containerId){
+      let dest = document.getElementById(`dynDest_${containerId}`)?.value || '工厂';
+      let dockInput = document.getElementById(`dynDock_${containerId}`);
+      if(!dockInput) return;
+      dockInput.placeholder = dest === '工厂' ? '工厂必填' : '可不填';
+    };
 
     function filterDynamicList(){
       renderDynamicTable(getDynamicAvailableContainers());
@@ -2193,16 +2218,16 @@
     function selectAllDynamic(){document.querySelectorAll('.dynamic-checkbox').forEach(cb=>cb.checked=true);}
 
     window.publishDynamicSingle = function(containerId,fromLoc){
-      let dest='工厂';
+      let dest=document.getElementById(`dynDest_${containerId}`)?.value || '工厂';
       let carrier='RG';
       let eta=document.getElementById(`dynEta_${containerId}`).value;
       let dock=(document.getElementById(`dynDock_${containerId}`)?.value||'').trim();
-      if(!dock){alert('动态运输计划默认到工厂，卸货口必填');return;}
+      if(dest==='工厂' && !dock){alert('目的地为工厂时，卸货口必填');return;}
       let cont=containers.find(c=>c.id===containerId);
       transportTasks.push({id:nextIds.task++,containerId,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,from:fromLoc,to:dest,carrier,status:'in_transit',estimatedArrival:eta,unloadingDock:dock,source:'dynamic'});
       saveData();
       renderContent();
-      alert('运输任务已发布给RG');
+      alert(`运输任务已发布给RG，目的地：${dest}`);
     };
 
     window.batchPublishDynamic = function(){
@@ -2213,15 +2238,16 @@
         let id=parseInt(cb.dataset.id);
         let fromLoc=cb.dataset.loc;
         let eta=document.getElementById(`dynEta_${id}`)?.value;
+        let dest=document.getElementById(`dynDest_${id}`)?.value || '工厂';
         let dock=(document.getElementById(`dynDock_${id}`)?.value||'').trim();
-        if(!dock){alert('所选集装箱中存在未填写卸货口的数据，请补充后再批量发布');return;}
+        if(dest==='工厂' && !dock){alert('所选集装箱中存在目的地为工厂但未填写卸货口的数据，请补充后再批量发布');return;}
         let cont=containers.find(c=>c.id===id);
         if(cont){
-          transportTasks.push({id:nextIds.task++,containerId:id,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,from:fromLoc,to:'工厂',carrier:'RG',status:'in_transit',estimatedArrival:eta,unloadingDock:dock,source:'dynamic'});
+          transportTasks.push({id:nextIds.task++,containerId:id,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,from:fromLoc,to:dest,carrier:'RG',status:'in_transit',estimatedArrival:eta,unloadingDock:dock,source:'dynamic'});
           count++;
         }
       }
-      if(count>0){saveData();renderContent();alert(`成功发布 ${count} 个RG到工厂运输任务`);}
+      if(count>0){saveData();renderContent();alert(`成功发布 ${count} 个RG动态运输任务`);}
       else alert('请填写完整信息');
     };
 
