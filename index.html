@@ -30,15 +30,15 @@
     .card { background: white; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
     .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #eef2f6; flex-wrap: wrap; gap: 10px; }
     .card-title { font-size: 18px; font-weight: 700; color: #1f2d3d; }
-    .data-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+    .data-table { width: 100%; min-width: 1280px; border-collapse: collapse; font-size: 13px; table-layout: auto; }
     .data-table th,
-    .data-table td { padding: 12px 10px; text-align: center !important; vertical-align: middle; border-bottom: 1px solid #ebeef5; line-height: 1.45; }
-    .data-table th { background: #f5f7fa; font-weight: 700; color: #303133; white-space: nowrap; }
+    .data-table td { padding: 14px 12px; text-align: center !important; vertical-align: middle; border-bottom: 1px solid #ebeef5; line-height: 1.6; }
+    .data-table th { background: #f5f7fa; font-weight: 700; color: #303133; white-space: nowrap; height: 50px; min-height: 50px; }
     .data-table td { color: #606266; word-break: break-word; }
     .data-table tbody tr:hover { background: #f7faff; }
     .data-table input,
     .data-table select { text-align: center; height: 32px; border: 1px solid #dcdfe6; border-radius: 6px; padding: 4px 8px; }
-    .table-wrapper { overflow-x: auto; border-radius: 8px; border: 1px solid #ebeef5; }
+    .table-wrapper { overflow-x: auto; border-radius: 8px; border: 1px solid #ebeef5; margin-top: 10px; }
     .status-badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; }
     .status-ready, .channel-green { background: #e8f8f2; color: #67c23a; }
     .status-clearing { background: #e6f7ff; color: #1890ff; }
@@ -135,10 +135,11 @@
     /* 只对带查询栏的业务页面固定表格字段栏，避免影响运输任务日期页签 */
     .main-content > .card:first-child:has(> .search-bar) .data-table thead th {
       position: sticky;
-      top: 176px;
+      top: 188px;
       z-index: 950;
       background: #f5f7fa;
       box-shadow: inset 0 -1px 0 #e4e7ed;
+      overflow: visible;
     }
     .main-content > .card:first-child:has(> .search-bar) .table-wrapper {
       overflow-x: auto;
@@ -168,7 +169,151 @@
       line-height: 22px;
     }
     @media (max-width: 768px) {
-      .main-content > .card:first-child:has(> .search-bar) .data-table thead th { top: 168px; }
+      .main-content > .card:first-child:has(> .search-bar) .data-table thead th { top: 180px; }
+    }
+
+
+    /* ==================== V16：修复表头遮挡与错位 ====================
+       说明：表头不再按页面坐标固定，而是在表格容器内部固定，
+       避免滚动时表头压到数据中间或被查询栏遮挡。 */
+    .table-wrapper {
+      max-height: calc(100vh - 270px);
+      overflow: auto !important;
+      position: relative;
+      background: #fff;
+    }
+    .data-table thead th,
+    .main-content > .card:first-child:has(> .search-bar) .data-table thead th {
+      position: sticky !important;
+      top: 0 !important;
+      z-index: 30 !important;
+      background: #f5f7fa !important;
+      box-shadow: inset 0 -1px 0 #e4e7ed, 0 2px 3px rgba(0,0,0,0.04);
+      white-space: nowrap;
+      overflow: visible;
+    }
+    .data-table {
+      border-collapse: separate;
+      border-spacing: 0;
+    }
+    .data-table th, .data-table td {
+      min-height: 44px;
+    }
+    .modal .table-wrapper {
+      max-height: 55vh;
+    }
+    .main-content > .card:first-child > .search-bar {
+      margin-bottom: 10px;
+    }
+
+
+    /* ==================== V17：修复固定区域压字/遮挡 ====================
+       核心思路：
+       1）主内容区内部滚动，避免整个页面滚动时 sticky 计算错位；
+       2）标题栏、查询栏继续固定，但取消负边距，避免压住下方内容；
+       3）表格表头只在自己的表格滚动容器内固定；
+       4）非表格区域（费用卡片等）不再受 table-wrapper 的全局高度限制影响。 */
+    .app-container {
+      height: calc(100vh - 60px);
+      overflow: hidden;
+    }
+    .main-content {
+      height: calc(100vh - 60px);
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 20px 20px 32px 20px;
+    }
+    .main-content > .card:first-child > .card-header {
+      position: sticky !important;
+      top: 0 !important;
+      z-index: 1000 !important;
+      background: #ffffff !important;
+      margin: 0 !important;
+      padding: 18px 20px !important;
+      min-height: 64px !important;
+      border-bottom: 1px solid #eef2f6 !important;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05) !important;
+    }
+    .main-content > .card:first-child > .search-bar {
+      position: sticky !important;
+      top: 64px !important;
+      z-index: 999 !important;
+      margin: 0 0 18px 0 !important;
+      padding: 14px 16px !important;
+      min-height: 58px !important;
+      border-radius: 8px !important;
+      border-bottom: 1px solid #e4e7ed !important;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.04) !important;
+      background: #f5f7fa !important;
+    }
+
+    /* 默认表格不限制高度，避免费用报表/其他页面内容被压缩 */
+    .table-wrapper {
+      max-height: none !important;
+      overflow-x: auto !important;
+      overflow-y: visible !important;
+      margin-top: 16px !important;
+      background: #fff !important;
+    }
+
+    /* 只有首个带查询栏的主业务表格使用内部滚动和固定字段栏 */
+    .main-content > .card:first-child:has(> .search-bar) > .table-wrapper,
+    .main-content > .card:first-child:has(> .search-bar) div[id$="Table"] > .table-wrapper,
+    .main-content > .card:first-child:has(> .search-bar) div[id*="Table"] > .table-wrapper {
+      max-height: calc(100vh - 255px) !important;
+      overflow: auto !important;
+      position: relative !important;
+    }
+
+    .data-table {
+      min-width: 1500px !important;
+      table-layout: auto !important;
+      border-collapse: separate !important;
+      border-spacing: 0 !important;
+    }
+    .data-table th,
+    .data-table td {
+      padding: 16px 14px !important;
+      height: 56px !important;
+      min-height: 56px !important;
+      line-height: 24px !important;
+      white-space: nowrap !important;
+      vertical-align: middle !important;
+      text-align: center !important;
+      overflow: visible !important;
+    }
+    .data-table thead th {
+      position: sticky !important;
+      top: 0 !important;
+      z-index: 20 !important;
+      background: #f5f7fa !important;
+      box-shadow: inset 0 -1px 0 #e4e7ed, 0 2px 4px rgba(0,0,0,0.04) !important;
+      font-weight: 700 !important;
+      color: #303133 !important;
+    }
+
+    /* 费用报表统计卡片防止文字被裁切 */
+    .stats-grid,
+    .stat-card,
+    .fee-card {
+      overflow: visible !important;
+    }
+    .stat-card {
+      min-height: 96px !important;
+      padding: 18px 16px !important;
+    }
+    .stat-number {
+      line-height: 34px !important;
+      white-space: nowrap !important;
+    }
+    .stat-label {
+      line-height: 20px !important;
+      white-space: normal !important;
+    }
+
+    .modal .table-wrapper {
+      max-height: 55vh !important;
+      overflow: auto !important;
     }
 
   </style>
@@ -1294,13 +1439,6 @@
         </div>
         <div class="card">
           <div class="card-header"><span class="card-title">📋 已发布的提箱计划</span></div>
-          <div class="search-bar">
-            <input type="text" id="publishedSearchBatch" placeholder="批次">
-            <input type="text" id="publishedSearchContainer" placeholder="集装箱号">
-            <input type="text" id="publishedSearchBl" placeholder="提单号/分提单号">
-            <button class="btn btn-primary" onclick="filterPublishedPlans()">查询</button>
-            <button class="btn" onclick="clearPublishedSearch()">重置</button>
-          </div>
           <div id="publishedPlans"></div>
         </div>`;
       renderPickupTable(allReady);
@@ -1322,8 +1460,11 @@
     }
 
     window.filterPickupTable = function(){
+      // 顶部查询条件同时作用于“待发布集装箱”和“已发布提箱计划”
       let ready=containers.filter(c=>c.customsStatus==='已清关'&&!c.actualPickupTime&&!pickupPlans.some(p=>p.containerId===c.id&&p.status!=='cancelled'));
+      let published=pickupPlans.filter(p=>p.status!=='cancelled');
       renderPickupTable(filterPickupRows(ready,'pickup'));
+      renderPublishedPlans(filterPickupRows(published,'pickup'));
     };
 
     window.clearPickupSearch = function(){
@@ -1331,15 +1472,9 @@
       filterPickupTable();
     };
 
-    window.filterPublishedPlans = function(){
-      let published=pickupPlans.filter(p=>p.status!=='cancelled');
-      renderPublishedPlans(filterPickupRows(published,'published'));
-    };
-
-    window.clearPublishedSearch = function(){
-      ['publishedSearchBatch','publishedSearchContainer','publishedSearchBl'].forEach(id=>{let el=document.getElementById(id);if(el)el.value='';});
-      filterPublishedPlans();
-    };
+    // 兼容旧版本按钮调用：已发布计划不再单独查询，统一走顶部查询条件
+    window.filterPublishedPlans = function(){ filterPickupTable(); };
+    window.clearPublishedSearch = function(){ clearPickupSearch(); };
 
     function renderPickupTable(ready){
       if(ready.length===0){document.getElementById('pickupTable').innerHTML='<div style="padding:20px;text-align:center">暂无符合条件的待发布集装箱</div>';return;}
