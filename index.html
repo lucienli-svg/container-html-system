@@ -1426,6 +1426,75 @@
       reader.readAsArrayBuffer(file);
     }
     
+
+    // ==================== V27 企业管理模式辅助函数 ====================
+    window.toggleHistorySection = function(bodyId, btnId){
+      let body = document.getElementById(bodyId);
+      let btn = document.getElementById(btnId);
+      if(!body) return;
+      let hidden = body.style.display === 'none';
+      body.style.display = hidden ? '' : 'none';
+      if(btn) btn.innerText = hidden ? '收起' : '展开查看';
+    };
+
+    window.editIraRecord = function(identifier){
+      let bl = blList.find(b => getBlIdentifier(b) === identifier);
+      if(!bl){ alert('未找到提单记录'); return; }
+      let oldValue = bl.iraNo || '';
+      let newValue = prompt('重新编辑IRA号', oldValue);
+      if(newValue === null) return;
+      bl.iraNo = newValue.trim();
+      saveData();
+      renderBlTable();
+      alert('IRA号已更新');
+    };
+
+    window.editClearanceRecord = function(identifier){
+      let bl = blList.find(b => getBlIdentifier(b) === identifier);
+      if(!bl){ alert('未找到提单记录'); return; }
+      let newChannel = prompt('修改清关通道：绿色 / 黄色 / 红色', bl.channel || '绿色');
+      if(newChannel === null) return;
+      if(!['绿色','黄色','红色'].includes(newChannel)){
+        alert('清关通道只能填写：绿色、黄色、红色');
+        return;
+      }
+      let newDate = prompt('修改清关时间，格式：YYYY/MM/DD 或 YYYY-MM-DD', bl.clearanceDate || getTodayStr());
+      if(newDate === null) return;
+      bl.channel = newChannel;
+      bl.clearanceDate = fmtDate(newDate);
+      bl.isCleared = true;
+      updateContainerStatus();
+      saveData();
+      renderCustomsTable();
+      alert('清关信息已更新');
+    };
+
+    window.editDynamicTask = function(taskId){
+      let task = transportTasks.find(t => t.id === taskId);
+      if(!task){ alert('未找到运输任务'); return; }
+      let newEta = prompt('修改预计到达时间（格式：YYYY-MM-DDTHH:mm 或 YYYY/MM/DD HH:mm）', task.estimatedArrival || '');
+      if(newEta === null) return;
+      let newDest = prompt('修改目的地（RG堆场/Rio Claro/IRA库房/工厂）', task.to || '工厂');
+      if(newDest === null) return;
+      if(!['RG堆场','Rio Claro','IRA库房','工厂'].includes(newDest)){
+        alert('目的地只能选择：RG堆场、Rio Claro、IRA库房、工厂');
+        return;
+      }
+      let newDock = prompt('修改卸货口（目的地为工厂时必填）', task.unloadingDock || '');
+      if(newDock === null) return;
+      if(newDest === '工厂' && !newDock.trim()){
+        alert('目的地为工厂时，卸货口必填');
+        return;
+      }
+      task.estimatedArrival = newEta;
+      task.to = newDest;
+      task.unloadingDock = newDock.trim();
+      task.carrier = task.carrier || 'RG';
+      saveData();
+      renderContent();
+      alert('已发布运输计划已更新');
+    };
+
     // ==================== 提单/IRA管理（新增批次搜索和批次显示） ====================
     function renderBlIra(container){
       container.innerHTML=`
@@ -1442,9 +1511,11 @@
           <div id="pendingIraSimple" style="margin-top:20px;"></div>
         </div>
         <div class="card">
-          <div class="card-header"><span class="card-title">✅ 已维护IRA</span></div>
-          <div id="completedIraEvergreen"></div>
-          <div id="completedIraSimple" style="margin-top:20px;"></div>
+          <div class="card-header"><span class="card-title">✅ 已维护IRA</span><button class="btn btn-sm" id="btnCompletedIra" onclick="toggleHistorySection('completedIraBody','btnCompletedIra')">展开查看</button></div>
+          <div id="completedIraBody" style="display:none;">
+            <div id="completedIraEvergreen"></div>
+            <div id="completedIraSimple" style="margin-top:20px;"></div>
+          </div>
         </div>`;
       renderBlTable();
     }
@@ -1499,15 +1570,15 @@
         return tr;
       });
 
-      renderEmptyOrTable('completedIraEvergreen', '📌 长荣提单', ['批次','主提单号','分提单号','IRA号','状态'], completedMaster, (bl)=>{
+      renderEmptyOrTable('completedIraEvergreen', '📌 长荣提单', ['批次','主提单号','分提单号','IRA号','状态','操作'], completedMaster, (bl)=>{
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.masterBlNo||'-'}</td><td>${bl.houseBlNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><span class="status-badge ${bl.isCleared?'status-ready':'status-clearing'}">${bl.isCleared?'已清关':'清关中'}</span></td>`;
+        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.masterBlNo||'-'}</td><td>${bl.houseBlNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><span class="status-badge ${bl.isCleared?'status-ready':'status-clearing'}">${bl.isCleared?'已清关':'清关中'}</span></td><td><button class="btn btn-sm btn-warning" onclick="editIraRecord('${key}')">编辑</button></td>`;
         return tr;
       });
 
-      renderEmptyOrTable('completedIraSimple', '📌 MSC / COSCO / 其他提单', ['批次','提单号','IRA号','状态'], completedSimple, (bl)=>{
+      renderEmptyOrTable('completedIraSimple', '📌 MSC / COSCO / 其他提单', ['批次','提单号','IRA号','状态','操作'], completedSimple, (bl)=>{
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.isPlaceholder?'⚠️ ':''}${bl.blNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><span class="status-badge ${bl.isCleared?'status-ready':'status-clearing'}">${bl.isCleared?'已清关':'清关中'}</span></td>`;
+        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.isPlaceholder?'⚠️ ':''}${bl.blNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><span class="status-badge ${bl.isCleared?'status-ready':'status-clearing'}">${bl.isCleared?'已清关':'清关中'}</span></td><td><button class="btn btn-sm btn-warning" onclick="editIraRecord('${getBlIdentifier(bl)}')">编辑</button></td>`;
         return tr;
       });
     }
@@ -1637,9 +1708,11 @@
           <div id="pendingCustomsSimple" style="margin-top:20px;"></div>
         </div>
         <div class="card">
-          <div class="card-header"><span class="card-title">✅ 已清关提单</span></div>
-          <div id="clearedCustomsEvergreen"></div>
-          <div id="clearedCustomsSimple" style="margin-top:20px;"></div>
+          <div class="card-header"><span class="card-title">✅ 已清关提单</span><button class="btn btn-sm" id="btnClearedCustoms" onclick="toggleHistorySection('clearedCustomsBody','btnClearedCustoms')">展开查看</button></div>
+          <div id="clearedCustomsBody" style="display:none;">
+            <div id="clearedCustomsEvergreen"></div>
+            <div id="clearedCustomsSimple" style="margin-top:20px;"></div>
+          </div>
         </div>`;
       renderCustomsTable();
     }
@@ -1685,14 +1758,14 @@
       renderEmptyOrTable('clearedCustomsEvergreen', '📌 长荣提单', ['批次','主提单号','分提单号','IRA号','清关通道','清关时间','操作'], clearedMaster, (bl)=>{
         let key=getBlIdentifier(bl);
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.masterBlNo||'-'}</td><td>${bl.houseBlNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><span class="status-badge ${bl.channel==='绿色'?'channel-green':(bl.channel==='红色'?'channel-red':'channel-yellow')}">${bl.channel}</span></td><td>${bl.clearanceDate||'-'}</td><td><button class="btn btn-sm btn-danger" onclick="revokeClearance('${key}')">撤销</button></td>`;
+        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.masterBlNo||'-'}</td><td>${bl.houseBlNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><span class="status-badge ${bl.channel==='绿色'?'channel-green':(bl.channel==='红色'?'channel-red':'channel-yellow')}">${bl.channel}</span></td><td>${bl.clearanceDate||'-'}</td><td><button class="btn btn-sm btn-warning" onclick="editClearanceRecord('${key}')">编辑</button> <button class="btn btn-sm btn-danger" onclick="revokeClearance('${key}')">撤销</button></td>`;
         return tr;
       });
 
       renderEmptyOrTable('clearedCustomsSimple', '📌 MSC / COSCO / 其他提单', ['批次','提单号','IRA号','清关通道','清关时间','操作'], clearedSimple, (bl)=>{
         let key=getBlIdentifier(bl);
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.isPlaceholder?'⚠️ ':''}${bl.blNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><span class="status-badge ${bl.channel==='绿色'?'channel-green':(bl.channel==='红色'?'channel-red':'channel-yellow')}">${bl.channel}</span></td><td>${bl.clearanceDate||'-'}</td><td><button class="btn btn-sm btn-danger" onclick="revokeClearance('${key}')">撤销</button></td>`;
+        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.isPlaceholder?'⚠️ ':''}${bl.blNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><span class="status-badge ${bl.channel==='绿色'?'channel-green':(bl.channel==='红色'?'channel-red':'channel-yellow')}">${bl.channel}</span></td><td>${bl.clearanceDate||'-'}</td><td><button class="btn btn-sm btn-warning" onclick="editClearanceRecord('${key}')">编辑</button> <button class="btn btn-sm btn-danger" onclick="revokeClearance('${key}')">撤销</button></td>`;
         return tr;
       });
     }
@@ -1756,8 +1829,10 @@
           <div id="pickupTable"></div>
         </div>
         <div class="card">
-          <div class="card-header"><span class="card-title">📋 已发布的提箱计划</span></div>
-          <div id="publishedPlans"></div>
+          <div class="card-header"><span class="card-title">📋 已发布的提箱计划</span><button class="btn btn-sm" id="btnPublishedPlans" onclick="toggleHistorySection('publishedPlansBody','btnPublishedPlans')">展开查看</button></div>
+          <div id="publishedPlansBody" style="display:none;">
+            <div id="publishedPlans"></div>
+          </div>
         </div>`;
       renderPickupTable(allReady);
       renderPublishedPlans(published);
@@ -1832,7 +1907,7 @@
         let pc=containers.find(c=>c.id===p.containerId);
         let seq=(p.containerSeq || pc?.containerSeq || '-');
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td>${p.batch}</td><td>${seq}</td><td>${p.containerNo}</td><td>${blText}</td><td>${fmtDateTime(p.arrivalDate)}</td><td>${p.carrier}</td><td>${p.destination}</td><td>${p.unloadingDock||'-'}</td><td><span class="status-badge ${statusClass}">${statusText}</span></td><td>${p.status!=='confirmed'?`<button class="btn btn-sm btn-warning" onclick="modifyPlan(${p.id})">修改</button> <button class="btn btn-sm btn-danger" onclick="cancelPlan(${p.id})">取消</button>`:'-'}</td>`;
+        tr.innerHTML=`<td>${p.batch}</td><td>${seq}</td><td>${p.containerNo}</td><td>${blText}</td><td>${fmtDateTime(p.arrivalDate)}</td><td>${p.carrier}</td><td>${p.destination}</td><td>${p.unloadingDock||'-'}</td><td><span class="status-badge ${statusClass}">${statusText}</span></td><td><button class="btn btn-sm btn-warning" onclick="modifyPlan(${p.id})">编辑</button> ${p.status!=='confirmed'?`<button class="btn btn-sm btn-danger" onclick="cancelPlan(${p.id})">取消</button>`:''}</td>`;
         return tr;
       });
     }
@@ -1955,7 +2030,7 @@
         renderTable('inTransitTable',['批次','集装箱号','计划到货时间','目的地','卸货口','状态'],filteredTransit,(item)=>{
           let destClass=getDestClass(item.to);
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.estimatedArrival)}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge status-transport">运输中</span></td>`;
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.estimatedArrival)}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge status-transport">运输中</span></td><td><button class="btn btn-sm btn-warning" onclick="editDynamicTask(${t.id})">编辑</button></td>`;
           return tr;
         });
       }
@@ -2138,8 +2213,10 @@
           <div id="dynamicTable"></div>
         </div>
         <div class="card dynamic-card">
-          <div class="card-header"><span class="card-title">📋 已发布的运输计划</span></div>
-          <div id="publishedDynamic"></div>
+          <div class="card-header"><span class="card-title">📋 已发布的运输计划</span><button class="btn btn-sm" id="btnPublishedDynamic" onclick="toggleHistorySection('publishedDynamicBody','btnPublishedDynamic')">展开查看</button></div>
+          <div id="publishedDynamicBody" style="display:none;">
+            <div id="publishedDynamic"></div>
+          </div>
         </div>`;
       renderDynamicTable(available);
       renderPublishedDynamic(published);
@@ -2187,7 +2264,7 @@
 
     function renderPublishedDynamic(tasks){
       if(tasks.length===0){document.getElementById('publishedDynamic').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">暂无已发布的运输计划</div></div>';return;}
-      renderTable('publishedDynamic',['批次','序号','集装箱号','提单号','IRA号','出发地','目的地','卸货口','运输公司','预计到达','状态'],tasks,(t)=>{
+      renderTable('publishedDynamic',['批次','序号','集装箱号','提单号','IRA号','出发地','目的地','卸货口','运输公司','预计到达','状态','操作'],tasks,(t)=>{
         let cont=containers.find(c=>c.id===t.containerId) || {};
         let blText=getContainerBlTextById(t.containerId) || '-';
         let iraList=getIraList(t.containerId) || '-';
@@ -2204,8 +2281,25 @@
       dockInput.placeholder = dest === '工厂' ? '工厂必填' : '可不填';
     };
 
+    function filterDynamicTasks(tasks){
+      let batch=document.getElementById('dynamicSearchBatch')?.value.toLowerCase().trim()||'';
+      let seq=document.getElementById('dynamicSearchSeq')?.value.toLowerCase().trim()||'';
+      let contNo=document.getElementById('dynamicSearchContainer')?.value.toLowerCase().trim()||'';
+      let blSearch=document.getElementById('dynamicSearchBl')?.value.toLowerCase().trim()||'';
+      return tasks.filter(t=>{
+        let cont=containers.find(c=>c.id===t.containerId) || {};
+        let blText=getContainerBlSearchText(t.containerId);
+        return (!batch||String(t.batch||cont.batch||'').toLowerCase().includes(batch)) &&
+               (!seq||String(t.containerSeq||cont.containerSeq||'').toLowerCase().includes(seq)) &&
+               (!contNo||String(t.containerNo||cont.containerNo||'').toLowerCase().includes(contNo)) &&
+               (!blSearch||blText.includes(blSearch));
+      });
+    }
+
     function filterDynamicList(){
       renderDynamicTable(getDynamicAvailableContainers());
+      let published = transportTasks.filter(t => t.status === 'in_transit' && (t.source === 'dynamic' || t.from !== '港口'));
+      renderPublishedDynamic(filterDynamicTasks(published));
     }
 
     function resetDynamicFilter(){
