@@ -475,6 +475,66 @@
       }
     }
 
+
+
+    /* ==================== V23：动态运输计划专项优化 ====================
+       目标：默认RG到工厂、工厂卸货口必填，并压缩横向列宽，适配14寸笔记本。 */
+    #dynamicTable .data-table,
+    #publishedDynamic .data-table {
+      width: 100% !important;
+      table-layout: fixed !important;
+      font-size: 12px !important;
+    }
+    #dynamicTable .data-table { min-width: 1060px !important; }
+    #publishedDynamic .data-table { min-width: 1040px !important; }
+    #dynamicTable .data-table th,
+    #dynamicTable .data-table td,
+    #publishedDynamic .data-table th,
+    #publishedDynamic .data-table td {
+      padding-left: 4px !important;
+      padding-right: 4px !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+    }
+    #dynamicTable .data-table th:nth-child(1), #dynamicTable .data-table td:nth-child(1) { width: 38px !important; }
+    #dynamicTable .data-table th:nth-child(2), #dynamicTable .data-table td:nth-child(2) { width: 72px !important; }
+    #dynamicTable .data-table th:nth-child(3), #dynamicTable .data-table td:nth-child(3) { width: 58px !important; }
+    #dynamicTable .data-table th:nth-child(4), #dynamicTable .data-table td:nth-child(4) { width: 112px !important; }
+    #dynamicTable .data-table th:nth-child(5), #dynamicTable .data-table td:nth-child(5) { width: 135px !important; }
+    #dynamicTable .data-table th:nth-child(6), #dynamicTable .data-table td:nth-child(6) { width: 82px !important; }
+    #dynamicTable .data-table th:nth-child(7), #dynamicTable .data-table td:nth-child(7) { width: 82px !important; }
+    #dynamicTable .data-table th:nth-child(8), #dynamicTable .data-table td:nth-child(8) { width: 58px !important; }
+    #dynamicTable .data-table th:nth-child(9), #dynamicTable .data-table td:nth-child(9) { width: 66px !important; }
+    #dynamicTable .data-table th:nth-child(10), #dynamicTable .data-table td:nth-child(10) { width: 72px !important; }
+    #dynamicTable .data-table th:nth-child(11), #dynamicTable .data-table td:nth-child(11) { width: 132px !important; }
+    #dynamicTable .data-table th:nth-child(12), #dynamicTable .data-table td:nth-child(12) { width: 58px !important; }
+    #dynamicTable .dynamic-dock { width: 62px !important; min-width: 62px !important; padding-left: 3px !important; padding-right: 3px !important; }
+    #dynamicTable .dynamic-datetime { width: 126px !important; min-width: 126px !important; padding-left: 3px !important; padding-right: 3px !important; }
+    .dynamic-search input { max-width: 150px !important; }
+
+    #publishedDynamic .data-table th:nth-child(1), #publishedDynamic .data-table td:nth-child(1) { width: 72px !important; }
+    #publishedDynamic .data-table th:nth-child(2), #publishedDynamic .data-table td:nth-child(2) { width: 58px !important; }
+    #publishedDynamic .data-table th:nth-child(3), #publishedDynamic .data-table td:nth-child(3) { width: 112px !important; }
+    #publishedDynamic .data-table th:nth-child(4), #publishedDynamic .data-table td:nth-child(4) { width: 135px !important; }
+    #publishedDynamic .data-table th:nth-child(5), #publishedDynamic .data-table td:nth-child(5) { width: 82px !important; }
+    #publishedDynamic .data-table th:nth-child(6), #publishedDynamic .data-table td:nth-child(6) { width: 76px !important; }
+    #publishedDynamic .data-table th:nth-child(7), #publishedDynamic .data-table td:nth-child(7) { width: 66px !important; }
+    #publishedDynamic .data-table th:nth-child(8), #publishedDynamic .data-table td:nth-child(8) { width: 68px !important; }
+    #publishedDynamic .data-table th:nth-child(9), #publishedDynamic .data-table td:nth-child(9) { width: 56px !important; }
+    #publishedDynamic .data-table th:nth-child(10), #publishedDynamic .data-table td:nth-child(10) { width: 128px !important; }
+    #publishedDynamic .data-table th:nth-child(11), #publishedDynamic .data-table td:nth-child(11) { width: 68px !important; }
+
+    @media (max-width: 1450px) {
+      #dynamicTable .data-table { min-width: 1000px !important; }
+      #publishedDynamic .data-table { min-width: 990px !important; }
+      #dynamicTable .dynamic-datetime { width: 120px !important; min-width: 120px !important; }
+      #dynamicTable .data-table th,
+      #dynamicTable .data-table td,
+      #publishedDynamic .data-table th,
+      #publishedDynamic .data-table td { padding-left: 3px !important; padding-right: 3px !important; }
+    }
+
   </style>
 </head>
 <body>
@@ -1005,7 +1065,27 @@
       let plannedFactoryArrival = pickupPlans.filter(p => p.status !== 'cancelled' && p.destination === '工厂' && isDateEqual(p.arrivalDate, targetDate)).length;
       let actualFactoryArrival = transportTasks.filter(t => t.to === '工厂' && (t.status === 'arrived' || t.actualArrival) && isDateEqual(t.actualArrival, targetDate)).length;
 
-      return { todayAbnormalStorage, todayDemurrage, clearanceCompleted, plannedPickup, actualPickup, plannedFactoryArrival, actualFactoryArrival };
+      // 已清关待提箱：清关已完成，但运输公司还没有确认实际提箱时间
+      let clearedPendingPickupList = containers.filter(c => c.customsStatus === '已清关' && !c.actualPickupTime);
+      let clearedPendingPickup = clearedPendingPickupList.length;
+      let clearedPendingPickupAbnormal = clearedPendingPickupList.filter(c => {
+        let fees = calculateFeesForContainer(c, targetDate);
+        return (fees.abnormalStorageFee || 0) > 0;
+      }).length;
+      let clearedPendingPickupNormal = Math.max(0, clearedPendingPickup - clearedPendingPickupAbnormal);
+
+      return {
+        todayAbnormalStorage,
+        todayDemurrage,
+        clearanceCompleted,
+        plannedPickup,
+        actualPickup,
+        plannedFactoryArrival,
+        actualFactoryArrival,
+        clearedPendingPickup,
+        clearedPendingPickupAbnormal,
+        clearedPendingPickupNormal
+      };
     }
 
     function renderDashboard(container){
@@ -1031,8 +1111,11 @@
             <div class="stat-card" style="padding:12px;cursor:default;"><div class="stat-number" style="font-size:24px;">${dailyReport.actualPickup}</div><div class="stat-label">今日实际提箱</div></div>
             <div class="stat-card" style="padding:12px;cursor:default;"><div class="stat-number" style="font-size:24px;">${dailyReport.plannedFactoryArrival}</div><div class="stat-label">今日计划到厂</div></div>
             <div class="stat-card" style="padding:12px;cursor:default;"><div class="stat-number" style="font-size:24px;">${dailyReport.actualFactoryArrival}</div><div class="stat-label">今日实际到厂</div></div>
+            <div class="stat-card" style="padding:12px;cursor:default;"><div class="stat-number" style="font-size:24px;">${dailyReport.clearedPendingPickup}</div><div class="stat-label">已清关待提箱</div></div>
+            <div class="stat-card warning-card" style="padding:12px;cursor:default;"><div class="stat-number warning-number" style="font-size:24px;">${dailyReport.clearedPendingPickupAbnormal}</div><div class="stat-label">待提箱-已产生异常堆存费</div></div>
+            <div class="stat-card" style="padding:12px;cursor:default;"><div class="stat-number" style="font-size:24px;">${dailyReport.clearedPendingPickupNormal}</div><div class="stat-label">待提箱-未产生异常堆存费</div></div>
           </div>
-          <div style="font-size:12px;color:#909399;margin-top:6px;">说明：提箱指从港口提出的集装箱；到厂数量仅统计目的地为“工厂”的集装箱。</div>
+          <div style="font-size:12px;color:#909399;margin-top:6px;">说明：提箱指从港口提出的集装箱；到厂数量仅统计目的地为“工厂”的集装箱；已清关待提箱指清关完成但尚未确认实际提箱的集装箱。</div>
         </div>
         <div class="stats-grid">
           <div class="stat-card" onclick="jumpTo('containers')"><div class="stat-number">${total}</div><div class="stat-label">总集装箱</div></div>
@@ -2013,7 +2096,39 @@
     
     // 动态运输计划
     function renderDynamicPlan(container){
-      let available = containers.filter(c => {
+      let available = getDynamicAvailableContainers();
+      let published = transportTasks.filter(t => t.status === 'in_transit' && t.source === 'dynamic');
+      // 兼容旧数据：历史动态运输任务没有 source 字段时，也纳入已发布动态计划
+      if(published.length === 0){
+        published = transportTasks.filter(t => t.status === 'in_transit' && t.from !== '港口');
+      }
+      container.innerHTML=`
+        <div class="card dynamic-card">
+          <div class="card-header">
+            <span class="card-title">🎯 动态运输计划</span>
+            <div><button class="btn btn-success" onclick="batchPublishDynamic()">批量发布</button><button class="btn" onclick="selectAllDynamic()">全选</button></div>
+          </div>
+          <div class="search-bar dynamic-search">
+            <input type="text" id="dynamicSearchBatch" placeholder="批次">
+            <input type="text" id="dynamicSearchSeq" placeholder="集装箱序号">
+            <input type="text" id="dynamicSearchContainer" placeholder="集装箱号">
+            <input type="text" id="dynamicSearchBl" placeholder="提单号 / 分提单号">
+            <button class="btn btn-primary" onclick="filterDynamicList()">查询</button>
+            <button class="btn" onclick="resetDynamicFilter()">重置</button>
+          </div>
+          <div style="font-size:12px;color:#909399;margin-bottom:8px;text-align:center;">动态运输计划默认运输公司为 RG，默认到货地点为工厂；到工厂计划必须填写卸货口。</div>
+          <div id="dynamicTable"></div>
+        </div>
+        <div class="card dynamic-card">
+          <div class="card-header"><span class="card-title">📋 已发布的运输计划</span></div>
+          <div id="publishedDynamic"></div>
+        </div>`;
+      renderDynamicTable(available);
+      renderPublishedDynamic(published);
+    }
+
+    function getDynamicAvailableContainers(){
+      return containers.filter(c => {
         if (!c.actualPickupTime) return false;
         let hasInTransit = transportTasks.some(t => t.containerId === c.id && t.status === 'in_transit');
         if (hasInTransit) return false;
@@ -2025,95 +2140,91 @@
         if (loc === '港口' || loc === '工厂') return false;
         return true;
       });
-      let published=transportTasks.filter(t=>t.status==='in_transit');
-      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🎯 动态运输计划</span><div><button class="btn btn-success" onclick="batchPublishDynamic()">批量发布</button><button class="btn" onclick="selectAllDynamic()">全选</button></div></div><div class="search-bar"><input type="text" id="dynamicSearchBatch" placeholder="批次"><input type="text" id="dynamicSearchContainer" placeholder="集装箱号"><input type="text" id="dynamicSearchBl" placeholder="提单号"><button class="btn btn-primary" onclick="filterDynamicList()">查询</button><button class="btn" onclick="resetDynamicFilter()">重置</button></div><div id="dynamicTable"></div></div><div class="card"><div class="card-header"><span class="card-title">📋 已发布的运输计划</span></div><div id="publishedDynamic"></div></div>`;
-      renderDynamicTable(available);
-      renderPublishedDynamic(published);
     }
-    
+
     function renderDynamicTable(available){
-      let batch=document.getElementById('dynamicSearchBatch')?.value.toLowerCase()||'';
-      let contNo=document.getElementById('dynamicSearchContainer')?.value.toLowerCase()||'';
-      let blSearch=document.getElementById('dynamicSearchBl')?.value.toLowerCase()||'';
-      let filtered=available.filter(c=>(!batch||c.batch.toLowerCase().includes(batch))&&(!contNo||c.containerNo.toLowerCase().includes(contNo)));
-      if(blSearch){
-        filtered=filtered.filter(c=>containerBlMap.filter(m=>m.containerId===c.id).some(m=>m.blNo.toLowerCase().includes(blSearch)));
-      }
+      let batch=document.getElementById('dynamicSearchBatch')?.value.toLowerCase().trim()||'';
+      let seq=document.getElementById('dynamicSearchSeq')?.value.toLowerCase().trim()||'';
+      let contNo=document.getElementById('dynamicSearchContainer')?.value.toLowerCase().trim()||'';
+      let blSearch=document.getElementById('dynamicSearchBl')?.value.toLowerCase().trim()||'';
+      let filtered=available.filter(c=>{
+        let blText=getContainerBlSearchText(c.id);
+        return (!batch||String(c.batch||'').toLowerCase().includes(batch)) &&
+               (!seq||String(c.containerSeq||'').toLowerCase().includes(seq)) &&
+               (!contNo||String(c.containerNo||'').toLowerCase().includes(contNo)) &&
+               (!blSearch||blText.includes(blSearch));
+      });
       if(filtered.length===0){document.getElementById('dynamicTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">暂无需要运输的集装箱</div></div>';return;}
-      renderTable('dynamicTable',['<input type="checkbox" id="selectAllDynamicCb">','批次','集装箱号','当前位置','IRA号','目的地','运输公司','预计到达','操作'],filtered,(c)=>{
+      renderTable('dynamicTable',['<input type="checkbox" id="selectAllDynamicCb">','批次','序号','集装箱号','提单号','当前位置','IRA号','运输公司','目的地','卸货口','预计到达','操作'],filtered,(c)=>{
         let currentLoc=getContainerLocation(c.id);
         let iraList=getIraList(c.id);
+        let blText=getContainerBlTextById(c.id) || '-';
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td><input type="checkbox" class="dynamic-checkbox" data-id="${c.id}" data-loc="${currentLoc}"></td><td>${c.batch}</td><td>${c.containerNo}</td><td><span class="status-badge status-at-location">${currentLoc}</span></td><td>${iraList||'-'}</td><td><select id="dynDest_${c.id}" class="form-control" style="width:105px;"><option value="RG堆场">RG堆场</option><option value="Rio Claro">Rio Claro</option><option value="IRA库房">IRA库房</option><option value="工厂">工厂</option></select></td><td><select id="dynCarrier_${c.id}" class="form-control" style="width:82px;"><option value="RG">RG</option><option value="JSL">JSL</option></select></td><td><input type="datetime-local" id="dynEta_${c.id}" class="form-control" style="width:160px;"></td><td><button class="btn btn-sm btn-primary" onclick="publishDynamicSingle(${c.id},'${currentLoc}')">发布</button></td>`;
+        tr.innerHTML=`<td><input type="checkbox" class="dynamic-checkbox" data-id="${c.id}" data-loc="${currentLoc}"></td><td title="${c.batch||''}">${c.batch||'-'}</td><td title="${c.containerSeq||''}">${c.containerSeq||'-'}</td><td title="${c.containerNo||''}">${c.containerNo}</td><td title="${blText}">${blText}</td><td><span class="status-badge status-at-location">${currentLoc}</span></td><td title="${iraList||''}">${iraList||'-'}</td><td><span class="status-badge status-ready">RG</span></td><td><span class="status-badge dest-factory">工厂</span></td><td><input type="text" id="dynDock_${c.id}" class="form-control dynamic-dock" placeholder="必填"></td><td><input type="datetime-local" id="dynEta_${c.id}" class="form-control dynamic-datetime"></td><td><button class="btn btn-sm btn-primary" onclick="publishDynamicSingle(${c.id},'${currentLoc}')">发布</button></td>`;
         return tr;
       });
       let selectAll=document.getElementById('selectAllDynamicCb');
       if(selectAll) selectAll.onclick=()=>document.querySelectorAll('.dynamic-checkbox').forEach(cb=>cb.checked=selectAll.checked);
     }
-    
+
     function renderPublishedDynamic(tasks){
       if(tasks.length===0){document.getElementById('publishedDynamic').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">暂无已发布的运输计划</div></div>';return;}
-      renderTable('publishedDynamic',['批次','集装箱号','出发地','目的地','运输公司','预计到达','状态'],tasks,(t)=>{
-        let cont=containers.find(c=>c.id===t.containerId);
+      renderTable('publishedDynamic',['批次','序号','集装箱号','提单号','IRA号','出发地','目的地','卸货口','运输公司','预计到达','状态'],tasks,(t)=>{
+        let cont=containers.find(c=>c.id===t.containerId) || {};
+        let blText=getContainerBlTextById(t.containerId) || '-';
+        let iraList=getIraList(t.containerId) || '-';
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td>${t.batch}</td><td>${t.containerNo}</td><td>${t.from}</td><td>${t.to}</td><td>${t.carrier}</td><td>${t.estimatedArrival?fmtDate(t.estimatedArrival.split('T')[0]):'-'}</td><td><span class="status-badge status-transport">运输中</span></td>`;
+        tr.innerHTML=`<td title="${t.batch||''}">${t.batch||'-'}</td><td title="${cont.containerSeq||t.containerSeq||''}">${cont.containerSeq||t.containerSeq||'-'}</td><td title="${t.containerNo||''}">${t.containerNo}</td><td title="${blText}">${blText}</td><td title="${iraList}">${iraList}</td><td>${t.from||'-'}</td><td><span class="status-badge dest-factory">${t.to||'工厂'}</span></td><td>${t.unloadingDock||'-'}</td><td>${t.carrier||'RG'}</td><td>${fmtDateTime(t.estimatedArrival)}</td><td><span class="status-badge status-transport">运输中</span></td>`;
         return tr;
       });
     }
-    
+
     function filterDynamicList(){
-      let available = containers.filter(c => {
-        if (!c.actualPickupTime) return false;
-        let hasInTransit = transportTasks.some(t => t.containerId === c.id && t.status === 'in_transit');
-        if (hasInTransit) return false;
-        let factoryDone = returnRecords.some(r => r.containerId === c.id && r.location === '工厂');
-        if (factoryDone) return false;
-        let produced = productionRecords.some(p => p.containerIds && p.containerIds.includes(c.id));
-        if (produced) return false;
-        let loc = getContainerLocation(c.id);
-        if (loc === '港口' || loc === '工厂') return false;
-        return true;
-      });
-      renderDynamicTable(available);
+      renderDynamicTable(getDynamicAvailableContainers());
     }
-    
-    function resetDynamicFilter(){document.getElementById('dynamicSearchBatch').value='';document.getElementById('dynamicSearchContainer').value='';document.getElementById('dynamicSearchBl').value='';filterDynamicList();}
+
+    function resetDynamicFilter(){
+      document.getElementById('dynamicSearchBatch').value='';
+      document.getElementById('dynamicSearchSeq').value='';
+      document.getElementById('dynamicSearchContainer').value='';
+      document.getElementById('dynamicSearchBl').value='';
+      filterDynamicList();
+    }
     function selectAllDynamic(){document.querySelectorAll('.dynamic-checkbox').forEach(cb=>cb.checked=true);}
-    
+
     window.publishDynamicSingle = function(containerId,fromLoc){
-      let dest=document.getElementById(`dynDest_${containerId}`).value;
-      let carrier=document.getElementById(`dynCarrier_${containerId}`).value;
+      let dest='工厂';
+      let carrier='RG';
       let eta=document.getElementById(`dynEta_${containerId}`).value;
-      if(fromLoc==='RG堆场'&&carrier!=='RG'){alert('从RG堆场出发必须用RG公司');return;}
-      if(fromLoc==='Rio Claro'&&dest==='工厂'&&carrier!=='RG'){alert('从Rio Claro到工厂必须用RG公司');return;}
+      let dock=(document.getElementById(`dynDock_${containerId}`)?.value||'').trim();
+      if(!dock){alert('动态运输计划默认到工厂，卸货口必填');return;}
       let cont=containers.find(c=>c.id===containerId);
-      transportTasks.push({id:nextIds.task++,containerId,containerNo:cont.containerNo,batch:cont.batch,from:fromLoc,to:dest,carrier,status:'in_transit',estimatedArrival:eta});
+      transportTasks.push({id:nextIds.task++,containerId,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,from:fromLoc,to:dest,carrier,status:'in_transit',estimatedArrival:eta,unloadingDock:dock,source:'dynamic'});
       saveData();
       renderContent();
-      alert(`运输任务已发布给${carrier}`);
+      alert('运输任务已发布给RG');
     };
-    
+
     window.batchPublishDynamic = function(){
       let selected=document.querySelectorAll('.dynamic-checkbox:checked');
       if(selected.length===0){alert('请先选择');return;}
       let count=0;
-      selected.forEach(cb=>{
+      for(let cb of selected){
         let id=parseInt(cb.dataset.id);
         let fromLoc=cb.dataset.loc;
-        let dest=document.getElementById(`dynDest_${id}`)?.value;
-        let carrier=document.getElementById(`dynCarrier_${id}`)?.value;
         let eta=document.getElementById(`dynEta_${id}`)?.value;
-        if(!dest)return;
+        let dock=(document.getElementById(`dynDock_${id}`)?.value||'').trim();
+        if(!dock){alert('所选集装箱中存在未填写卸货口的数据，请补充后再批量发布');return;}
         let cont=containers.find(c=>c.id===id);
         if(cont){
-          transportTasks.push({id:nextIds.task++,containerId:id,containerNo:cont.containerNo,batch:cont.batch,from:fromLoc,to:dest,carrier,status:'in_transit',estimatedArrival:eta});
+          transportTasks.push({id:nextIds.task++,containerId:id,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,from:fromLoc,to:'工厂',carrier:'RG',status:'in_transit',estimatedArrival:eta,unloadingDock:dock,source:'dynamic'});
           count++;
         }
-      });
-      if(count>0){saveData();renderContent();alert(`成功发布 ${count} 个运输任务`);}
+      }
+      if(count>0){saveData();renderContent();alert(`成功发布 ${count} 个RG到工厂运输任务`);}
       else alert('请填写完整信息');
     };
-    
+
     // 库存看板
     function renderLocationStock(container){
       let stock={'港口':0,'RG堆场':0,'Rio Claro':0,'IRA库房':0,'工厂':0,'已生产':0};
