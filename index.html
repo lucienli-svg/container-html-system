@@ -396,6 +396,85 @@
       #publishedPlans .data-table { min-width: 990px !important; }
     }
 
+
+    /* ==================== V20：运输任务横向列宽专项优化 ====================
+       目标：14寸笔记本 100% 缩放下，运输任务页面尽量完整显示，无需缩放到90%。 */
+    #pendingPickupTable .data-table,
+    #inTransitTable .data-table {
+      min-width: 880px !important;
+      width: 100% !important;
+      table-layout: fixed !important;
+    }
+
+    #pendingPickupTable .data-table th,
+    #pendingPickupTable .data-table td,
+    #inTransitTable .data-table th,
+    #inTransitTable .data-table td {
+      padding-left: 4px !important;
+      padding-right: 4px !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+    }
+
+    /* 待确认提箱：按字段实际内容重新分配列宽 */
+    #pendingPickupTable .data-table th:nth-child(1), #pendingPickupTable .data-table td:nth-child(1) { width: 8% !important; }
+    #pendingPickupTable .data-table th:nth-child(2), #pendingPickupTable .data-table td:nth-child(2) { width: 12% !important; }
+    #pendingPickupTable .data-table th:nth-child(3), #pendingPickupTable .data-table td:nth-child(3) { width: 13% !important; }
+    #pendingPickupTable .data-table th:nth-child(4), #pendingPickupTable .data-table td:nth-child(4) { width: 9% !important; }
+    #pendingPickupTable .data-table th:nth-child(5), #pendingPickupTable .data-table td:nth-child(5) { width: 7% !important; }
+    #pendingPickupTable .data-table th:nth-child(6), #pendingPickupTable .data-table td:nth-child(6) { width: 17% !important; }
+    #pendingPickupTable .data-table th:nth-child(7), #pendingPickupTable .data-table td:nth-child(7) { width: 9% !important; }
+    #pendingPickupTable .data-table th:nth-child(8), #pendingPickupTable .data-table td:nth-child(8) { width: 9% !important; }
+
+    #pendingPickupTable input[type="datetime-local"] {
+      width: 132px !important;
+      min-width: 132px !important;
+      max-width: 132px !important;
+      padding-left: 4px !important;
+      padding-right: 4px !important;
+      font-size: 12px !important;
+    }
+
+    #pendingPickupTable .btn-sm,
+    #inTransitTable .btn-sm {
+      padding-left: 6px !important;
+      padding-right: 6px !important;
+      white-space: nowrap !important;
+    }
+
+    #pendingPickupTable .status-badge,
+    #inTransitTable .status-badge {
+      padding-left: 6px !important;
+      padding-right: 6px !important;
+      white-space: nowrap !important;
+    }
+
+    /* 运输中表格：减少短字段列宽浪费 */
+    #inTransitTable .data-table { min-width: 720px !important; }
+    #inTransitTable .data-table th:nth-child(1), #inTransitTable .data-table td:nth-child(1) { width: 12% !important; }
+    #inTransitTable .data-table th:nth-child(2), #inTransitTable .data-table td:nth-child(2) { width: 18% !important; }
+    #inTransitTable .data-table th:nth-child(3), #inTransitTable .data-table td:nth-child(3) { width: 18% !important; }
+    #inTransitTable .data-table th:nth-child(4), #inTransitTable .data-table td:nth-child(4) { width: 12% !important; }
+    #inTransitTable .data-table th:nth-child(5), #inTransitTable .data-table td:nth-child(5) { width: 9% !important; }
+    #inTransitTable .data-table th:nth-child(6), #inTransitTable .data-table td:nth-child(6) { width: 11% !important; }
+
+    @media (max-width: 1450px) {
+      #pendingPickupTable .data-table { min-width: 820px !important; }
+      #pendingPickupTable input[type="datetime-local"] {
+        width: 124px !important;
+        min-width: 124px !important;
+        max-width: 124px !important;
+      }
+      #pendingPickupTable .data-table th,
+      #pendingPickupTable .data-table td,
+      #inTransitTable .data-table th,
+      #inTransitTable .data-table td {
+        padding-left: 3px !important;
+        padding-right: 3px !important;
+      }
+    }
+
   </style>
 </head>
 <body>
@@ -583,6 +662,26 @@
     function getTodayStr() {
       let d = new Date();
       return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+
+    function addDaysToDateStr(dateStr, offsetDays) {
+      let d = new Date(`${dateStr}T00:00:00`);
+      d.setDate(d.getDate() + offsetDays);
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+
+    function normalizeDateOnly(value) {
+      if(!value) return '';
+      let s = String(value).trim();
+      let match = s.match(/(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
+      if(match) return `${match[1]}-${match[2].padStart(2,'0')}-${match[3].padStart(2,'0')}`;
+      let d = new Date(s);
+      if(!isNaN(d.getTime())) return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      return '';
+    }
+
+    function isDateEqual(value, dateStr) {
+      return normalizeDateOnly(value) === dateStr;
     }
     
     function getDaysDiff(startDate, endDate) {
@@ -885,6 +984,30 @@
     }
     
     // ==================== 工作台 ====================
+    function getDailyOperationReport(targetDate) {
+      let prevDate = addDaysToDateStr(targetDate, -1);
+      let todayAbnormalStorage = 0;
+      let todayDemurrage = 0;
+
+      containers.forEach(c => {
+        let todayFees = calculateFeesForContainer(c, targetDate);
+        let prevFees = calculateFeesForContainer(c, prevDate);
+        todayAbnormalStorage += Math.max(0, (todayFees.abnormalStorageFee || 0) - (prevFees.abnormalStorageFee || 0));
+        todayDemurrage += Math.max(0, (todayFees.demurrageFee || 0) - (prevFees.demurrageFee || 0));
+      });
+
+      let clearanceCompleted = blList.filter(bl => bl.isCleared && isDateEqual(bl.clearanceDate, targetDate)).length;
+      let plannedPickup = pickupPlans.filter(p => p.status !== 'cancelled' && isDateEqual(p.arrivalDate, targetDate)).length;
+      let actualPickup = pickupPlans.filter(p => p.status === 'confirmed' && isDateEqual(p.actualPickupTime, targetDate)).length;
+      if (actualPickup === 0) {
+        actualPickup = containers.filter(c => isDateEqual(c.actualPickupTime, targetDate)).length;
+      }
+      let plannedFactoryArrival = pickupPlans.filter(p => p.status !== 'cancelled' && p.destination === '工厂' && isDateEqual(p.arrivalDate, targetDate)).length;
+      let actualFactoryArrival = transportTasks.filter(t => t.to === '工厂' && (t.status === 'arrived' || t.actualArrival) && isDateEqual(t.actualArrival, targetDate)).length;
+
+      return { todayAbnormalStorage, todayDemurrage, clearanceCompleted, plannedPickup, actualPickup, plannedFactoryArrival, actualFactoryArrival };
+    }
+
     function renderDashboard(container){
       let total=containers.length;
       let waiting=containers.filter(c=>c.customsStatus==='清关中').length;
@@ -896,7 +1019,21 @@
       let totalDemurrage = cachedFeeData.totalDemurrage || 0;
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
+      let dailyReport = getDailyOperationReport(getTodayStr());
       container.innerHTML = `
+        <div class="card">
+          <div class="card-header"><span class="card-title">📅 每日运营报表</span><span style="font-size:12px;color:#909399;">统计日期：${fmtDate(getTodayStr())}</span></div>
+          <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 8px;">
+            <div class="stat-card warning-card" style="padding:12px;cursor:default;"><div class="stat-number warning-number" style="font-size:22px;">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="stat-label">今日新增异常堆存费</div></div>
+            <div class="stat-card danger-card" style="padding:12px;cursor:default;"><div class="stat-number danger-number" style="font-size:22px;">$ ${dailyReport.todayDemurrage.toFixed(2)}</div><div class="stat-label">今日新增滞箱费</div></div>
+            <div class="stat-card" style="padding:12px;cursor:default;"><div class="stat-number" style="font-size:24px;">${dailyReport.clearanceCompleted}</div><div class="stat-label">今日清关完成</div></div>
+            <div class="stat-card" style="padding:12px;cursor:default;"><div class="stat-number" style="font-size:24px;">${dailyReport.plannedPickup}</div><div class="stat-label">今日计划提箱</div></div>
+            <div class="stat-card" style="padding:12px;cursor:default;"><div class="stat-number" style="font-size:24px;">${dailyReport.actualPickup}</div><div class="stat-label">今日实际提箱</div></div>
+            <div class="stat-card" style="padding:12px;cursor:default;"><div class="stat-number" style="font-size:24px;">${dailyReport.plannedFactoryArrival}</div><div class="stat-label">今日计划到厂</div></div>
+            <div class="stat-card" style="padding:12px;cursor:default;"><div class="stat-number" style="font-size:24px;">${dailyReport.actualFactoryArrival}</div><div class="stat-label">今日实际到厂</div></div>
+          </div>
+          <div style="font-size:12px;color:#909399;margin-top:6px;">说明：提箱指从港口提出的集装箱；到厂数量仅统计目的地为“工厂”的集装箱。</div>
+        </div>
         <div class="stats-grid">
           <div class="stat-card" onclick="jumpTo('containers')"><div class="stat-number">${total}</div><div class="stat-label">总集装箱</div></div>
           <div class="stat-card" onclick="jumpTo('customs')"><div class="stat-number">${waiting}</div><div class="stat-label">待清关</div></div>
