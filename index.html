@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V14</title>
+  <title>集装箱智能监控管理系统 V19</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -314,6 +314,86 @@
     .modal .table-wrapper {
       max-height: 55vh !important;
       overflow: auto !important;
+    }
+
+
+    /* ==================== V19：14寸笔记本紧凑布局优化 ====================
+       目标：减少列间距和无效空白，在 1366~1440 宽度屏幕下尽量展示完整业务信息。 */
+    .sidebar { width: 220px !important; }
+    .main-content { padding: 14px 14px 28px 14px !important; }
+    .card { padding: 16px !important; }
+    .card-header { margin-bottom: 12px !important; padding-bottom: 10px !important; }
+    .search-bar { gap: 8px !important; padding: 10px 12px !important; }
+    .search-bar input,
+    .search-bar select { max-width: 170px; height: 30px; padding: 4px 6px; font-size: 12px; }
+    .btn { padding: 8px 14px !important; font-size: 13px !important; }
+    .btn-sm { padding: 4px 8px !important; font-size: 12px !important; }
+
+    .data-table {
+      min-width: 1120px !important;
+      font-size: 12px !important;
+      table-layout: fixed !important;
+    }
+    .data-table th,
+    .data-table td {
+      padding: 9px 6px !important;
+      height: 42px !important;
+      min-height: 42px !important;
+      line-height: 18px !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+    }
+    .data-table input,
+    .data-table select {
+      height: 30px !important;
+      padding: 3px 6px !important;
+      font-size: 12px !important;
+    }
+    .table-wrapper { margin-top: 10px !important; }
+
+    /* 提箱计划专用：压缩可压缩列，保留关键字段宽度 */
+    #pickupTable .data-table { min-width: 1180px !important; }
+    #pickupTable .data-table th:nth-child(1), #pickupTable .data-table td:nth-child(1) { width: 44px; }
+    #pickupTable .data-table th:nth-child(2), #pickupTable .data-table td:nth-child(2) { width: 80px; }
+    #pickupTable .data-table th:nth-child(3), #pickupTable .data-table td:nth-child(3) { width: 72px; }
+    #pickupTable .data-table th:nth-child(4), #pickupTable .data-table td:nth-child(4) { width: 115px; }
+    #pickupTable .data-table th:nth-child(5), #pickupTable .data-table td:nth-child(5) { width: 150px; }
+    #pickupTable .data-table th:nth-child(6), #pickupTable .data-table td:nth-child(6) { width: 90px; }
+    #pickupTable .data-table th:nth-child(7), #pickupTable .data-table td:nth-child(7) { width: 85px; }
+    #pickupTable .data-table th:nth-child(8), #pickupTable .data-table td:nth-child(8) { width: 155px; }
+    #pickupTable .data-table th:nth-child(9), #pickupTable .data-table td:nth-child(9) { width: 82px; }
+    #pickupTable .data-table th:nth-child(10), #pickupTable .data-table td:nth-child(10) { width: 105px; }
+    #pickupTable .data-table th:nth-child(11), #pickupTable .data-table td:nth-child(11) { width: 90px; }
+    #pickupTable .data-table th:nth-child(12), #pickupTable .data-table td:nth-child(12) { width: 70px; }
+
+    #publishedPlans .data-table { min-width: 1040px !important; }
+    #publishedPlans .data-table th:nth-child(1), #publishedPlans .data-table td:nth-child(1) { width: 85px; }
+    #publishedPlans .data-table th:nth-child(2), #publishedPlans .data-table td:nth-child(2) { width: 80px; }
+    #publishedPlans .data-table th:nth-child(3), #publishedPlans .data-table td:nth-child(3) { width: 120px; }
+    #publishedPlans .data-table th:nth-child(4), #publishedPlans .data-table td:nth-child(4) { width: 170px; }
+    #publishedPlans .data-table th:nth-child(5), #publishedPlans .data-table td:nth-child(5) { width: 125px; }
+    #publishedPlans .data-table th:nth-child(6), #publishedPlans .data-table td:nth-child(6) { width: 80px; }
+    #publishedPlans .data-table th:nth-child(7), #publishedPlans .data-table td:nth-child(7) { width: 100px; }
+    #publishedPlans .data-table th:nth-child(8), #publishedPlans .data-table td:nth-child(8) { width: 80px; }
+    #publishedPlans .data-table th:nth-child(9), #publishedPlans .data-table td:nth-child(9) { width: 90px; }
+    #publishedPlans .data-table th:nth-child(10), #publishedPlans .data-table td:nth-child(10) { width: 90px; }
+
+    @media (max-width: 1450px) {
+      .sidebar { width: 205px !important; }
+      .menu-item { padding: 10px 16px !important; margin: 3px 10px !important; font-size: 13px !important; }
+      .main-content { padding: 12px !important; }
+      .card { padding: 14px !important; }
+      .card-title { font-size: 16px !important; }
+      .main-content > .card:first-child > .card-header { min-height: 58px !important; padding: 14px 16px !important; }
+      .main-content > .card:first-child > .search-bar { top: 58px !important; min-height: 50px !important; padding: 10px 12px !important; }
+      .main-content > .card:first-child:has(> .search-bar) > .table-wrapper,
+      .main-content > .card:first-child:has(> .search-bar) div[id$="Table"] > .table-wrapper,
+      .main-content > .card:first-child:has(> .search-bar) div[id*="Table"] > .table-wrapper {
+        max-height: calc(100vh - 225px) !important;
+      }
+      #pickupTable .data-table { min-width: 1120px !important; }
+      #publishedPlans .data-table { min-width: 990px !important; }
     }
 
   </style>
@@ -1482,7 +1562,7 @@
         let tr=document.createElement('tr');
         let iraList=getIraList(c.id);
         let blText=getContainerBlTextById(c.id)||'-';
-        tr.innerHTML=`<td><input type="checkbox" class="pickup-checkbox" data-id="${c.id}"></td><td>${c.batch}</td><td>${c.containerSeq||'-'}</td><td>${c.containerNo}</td><td>${blText}</td><td>${fmtDate(c.eta)}</td><td>${iraList||'-'}</td><td><input type="datetime-local" id="arrival_${c.id}" class="form-control" style="width:180px;"></td><td><select id="carrier_${c.id}" class="form-control" style="width:100px;"><option value="RG">RG</option><option value="JSL">JSL</option></select></td><td><select id="dest_${c.id}" class="form-control" style="width:130px;" onchange="toggleDockRequired(${c.id})"><option value="RG堆场">RG堆场</option><option value="Rio Claro">Rio Claro</option><option value="IRA库房">IRA库房</option><option value="工厂">工厂</option></select></td><td><input type="text" id="dock_${c.id}" class="form-control" placeholder="如120B" style="width:100px;"><div id="dockHint_${c.id}" style="font-size:11px;color:#909399;margin-top:4px;">非工厂可不填</div></td><td><button class="btn btn-sm btn-primary" onclick="publishSingle(${c.id})">发布</button></td>`;
+        tr.innerHTML=`<td><input type="checkbox" class="pickup-checkbox" data-id="${c.id}"></td><td>${c.batch}</td><td>${c.containerSeq||'-'}</td><td>${c.containerNo}</td><td>${blText}</td><td>${fmtDate(c.eta)}</td><td>${iraList||'-'}</td><td><input type="datetime-local" id="arrival_${c.id}" class="form-control" style="width:145px;"></td><td><select id="carrier_${c.id}" class="form-control" style="width:82px;"><option value="RG">RG</option><option value="JSL">JSL</option></select></td><td><select id="dest_${c.id}" class="form-control" style="width:105px;" onchange="toggleDockRequired(${c.id})"><option value="RG堆场">RG堆场</option><option value="Rio Claro">Rio Claro</option><option value="IRA库房">IRA库房</option><option value="工厂">工厂</option></select></td><td><input type="text" id="dock_${c.id}" class="form-control" placeholder="如120B" style="width:82px;"><div id="dockHint_${c.id}" style="font-size:11px;color:#909399;margin-top:4px;">非工厂可不填</div></td><td><button class="btn btn-sm btn-primary" onclick="publishSingle(${c.id})">发布</button></td>`;
         return tr;
       });
       let selectAll=document.getElementById('selectAllCheckbox');
@@ -1629,7 +1709,7 @@
         renderTable('pendingPickupTable',['批次','集装箱号','计划到货时间','目的地','卸货口','实际提箱时间','状态','操作'],filteredPickup,(item)=>{
           let destClass=getDestClass(item.destination);
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="datetime-local" id="pickupTime_${item.id}" class="form-control" style="width:180px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="datetime-local" id="pickupTime_${item.id}" class="form-control" style="width:145px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
           return tr;
         });
       }
@@ -1672,7 +1752,7 @@
         renderTable('pendingPickupTable',['批次','集装箱号','计划到货时间','目的地','卸货口','实际提箱时间','状态','操作'],filteredPickup,(item)=>{
           let destClass=getDestClass(item.destination);
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="datetime-local" id="pickupTime_${item.id}" class="form-control" style="width:180px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="datetime-local" id="pickupTime_${item.id}" class="form-control" style="width:145px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
           return tr;
         });
       }
@@ -1827,7 +1907,7 @@
         let currentLoc=getContainerLocation(c.id);
         let iraList=getIraList(c.id);
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td><input type="checkbox" class="dynamic-checkbox" data-id="${c.id}" data-loc="${currentLoc}"></td><td>${c.batch}</td><td>${c.containerNo}</td><td><span class="status-badge status-at-location">${currentLoc}</span></td><td>${iraList||'-'}</td><td><select id="dynDest_${c.id}" class="form-control" style="width:130px;"><option value="RG堆场">RG堆场</option><option value="Rio Claro">Rio Claro</option><option value="IRA库房">IRA库房</option><option value="工厂">工厂</option></select></td><td><select id="dynCarrier_${c.id}" class="form-control" style="width:100px;"><option value="RG">RG</option><option value="JSL">JSL</option></select></td><td><input type="datetime-local" id="dynEta_${c.id}" class="form-control" style="width:160px;"></td><td><button class="btn btn-sm btn-primary" onclick="publishDynamicSingle(${c.id},'${currentLoc}')">发布</button></td>`;
+        tr.innerHTML=`<td><input type="checkbox" class="dynamic-checkbox" data-id="${c.id}" data-loc="${currentLoc}"></td><td>${c.batch}</td><td>${c.containerNo}</td><td><span class="status-badge status-at-location">${currentLoc}</span></td><td>${iraList||'-'}</td><td><select id="dynDest_${c.id}" class="form-control" style="width:105px;"><option value="RG堆场">RG堆场</option><option value="Rio Claro">Rio Claro</option><option value="IRA库房">IRA库房</option><option value="工厂">工厂</option></select></td><td><select id="dynCarrier_${c.id}" class="form-control" style="width:82px;"><option value="RG">RG</option><option value="JSL">JSL</option></select></td><td><input type="datetime-local" id="dynEta_${c.id}" class="form-control" style="width:160px;"></td><td><button class="btn btn-sm btn-primary" onclick="publishDynamicSingle(${c.id},'${currentLoc}')">发布</button></td>`;
         return tr;
       });
       let selectAll=document.getElementById('selectAllDynamicCb');
@@ -2050,12 +2130,12 @@
       }
       storageConfig.forEach((cfg, idx) => {
         storageHtml += `<div class="rate-period-row">
-          <input type="date" id="storage_start_${idx}" value="${toDateInput(cfg.startDate)}" style="width:130px;">
+          <input type="date" id="storage_start_${idx}" value="${toDateInput(cfg.startDate)}" style="width:105px;">
           <span>至</span>
-          <input type="date" id="storage_end_${idx}" value="${toDateInput(cfg.endDate)}" style="width:130px;">
-          <input type="number" id="storage_fixedDays_${idx}" value="${cfg.fixedDays}" placeholder="正常天数" style="width:100px;">
-          <input type="number" id="storage_fixedRate_${idx}" value="${cfg.fixedRate}" placeholder="正常费用" style="width:100px;">
-          <input type="number" id="storage_overtimeRate_${idx}" value="${cfg.overtimeRate}" placeholder="异常日费" style="width:100px;">
+          <input type="date" id="storage_end_${idx}" value="${toDateInput(cfg.endDate)}" style="width:105px;">
+          <input type="number" id="storage_fixedDays_${idx}" value="${cfg.fixedDays}" placeholder="正常天数" style="width:82px;">
+          <input type="number" id="storage_fixedRate_${idx}" value="${cfg.fixedRate}" placeholder="正常费用" style="width:82px;">
+          <input type="number" id="storage_overtimeRate_${idx}" value="${cfg.overtimeRate}" placeholder="异常日费" style="width:82px;">
           <button class="btn btn-sm btn-danger" onclick="deleteStoragePeriod(${idx})">删除</button>
         </div>`;
       });
