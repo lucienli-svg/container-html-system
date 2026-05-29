@@ -558,6 +558,11 @@
     <div class="navbar">
       <div class="logo">📦 集装箱智能监控</div>
       <div class="user-info">
+        <select id="languageSelect" class="role-badge" style="border:none;outline:none;" onchange="setLanguage(this.value)">
+          <option value="zh-CN">简体中文</option>
+          <option value="pt-BR">Português BR</option>
+          <option value="en-US">English US</option>
+        </select>
         <span class="role-badge" id="currentRole"></span>
         <span id="currentUser"></span>
         <button class="logout-btn" onclick="logout()">退出</button>
@@ -1012,6 +1017,59 @@
     }
     
     // ==================== 渲染函数 ====================
+
+    // ==================== 多语言切换（第一阶段：核心界面文字） ====================
+    let currentLang = localStorage.getItem('cc_lang') || 'zh-CN';
+    const i18nMap = {
+      'pt-BR': {
+        '工作台':'Painel','基础数据':'Dados básicos','提单/IRA管理':'BL / IRA','清关维护':'Desembaraço','提箱计划':'Plano de retirada','运输任务':'Tarefas de transporte','到货确认':'Confirmação de chegada','还箱确认':'Confirmação de devolução','动态运输计划':'Plano dinâmico','库存看板':'Estoque','生产完成确认':'Produção concluída','费率配置':'Configuração de tarifas','费用报表':'Relatório de custos',
+        '查询':'Pesquisar','重置':'Limpar','保存':'Salvar','删除':'Excluir','编辑':'Editar','撤销':'Reverter','展开查看':'Expandir','折叠':'Recolher','退出':'Sair',
+        '每日运营报表':'Relatório operacional diário','统计日期':'Data','今日新增异常堆存费':'Armazenagem anormal de hoje','今日新增滞箱费':'Demurrage de hoje','今日清关完成':'Desembaraçados hoje','今日计划提箱':'Retiradas planejadas hoje','今日实际提箱':'Retiradas reais hoje','今日计划到厂':'Chegadas planejadas à fábrica','今日实际到厂':'Chegadas reais à fábrica','已清关待提箱':'Liberados aguardando retirada','待提箱-已产生异常堆存费':'Pendentes com armazenagem anormal','待提箱-未产生异常堆存费':'Pendentes sem armazenagem anormal',
+        '总集装箱':'Total de contêineres','待清关':'Aguardando desembaraço','运输中':'Em transporte','异常堆存费':'Armazenagem anormal','滞箱费总额':'Total demurrage','库存分布':'Distribuição de estoque',
+        '批次':'Lote','集装箱序号':'Seq. contêiner','集装箱号':'Nº contêiner','提单号':'BL','主提单号':'Master BL','分提单号':'House BL','IRA号':'IRA','清关通道':'Canal','清关时间':'Data liberação','操作':'Ação','状态':'Status','当前位置':'Local atual','目的地':'Destino','卸货口':'Doca','到货时间':'Horário chegada','运输公司':'Transportadora','到港时间':'ETA porto'
+      },
+      'en-US': {
+        '工作台':'Dashboard','基础数据':'Basic Data','提单/IRA管理':'BL / IRA','清关维护':'Customs','提箱计划':'Pickup Plan','运输任务':'Transport Tasks','到货确认':'Arrival Confirm','还箱确认':'Return Confirm','动态运输计划':'Dynamic Plan','库存看板':'Stock Board','生产完成确认':'Production Confirm','费率配置':'Rate Config','费用报表':'Fee Report',
+        '查询':'Search','重置':'Reset','保存':'Save','删除':'Delete','编辑':'Edit','撤销':'Revoke','展开查看':'Expand','折叠':'Collapse','退出':'Logout',
+        '每日运营报表':'Daily Operations Report','统计日期':'Date','今日新增异常堆存费':'New abnormal storage today','今日新增滞箱费':'New demurrage today','今日清关完成':'Customs completed today','今日计划提箱':'Planned pickups today','今日实际提箱':'Actual pickups today','今日计划到厂':'Planned factory arrivals','今日实际到厂':'Actual factory arrivals','已清关待提箱':'Cleared pending pickup','待提箱-已产生异常堆存费':'Pending pickup with abnormal storage','待提箱-未产生异常堆存费':'Pending pickup without abnormal storage',
+        '总集装箱':'Total containers','待清关':'Pending customs','运输中':'In transit','异常堆存费':'Abnormal storage fee','滞箱费总额':'Total demurrage','库存分布':'Stock distribution',
+        '批次':'Batch','集装箱序号':'Container Seq.','集装箱号':'Container No.','提单号':'BL No.','主提单号':'Master BL','分提单号':'House BL','IRA号':'IRA No.','清关通道':'Channel','清关时间':'Clearance date','操作':'Action','状态':'Status','当前位置':'Current location','目的地':'Destination','卸货口':'Dock','到货时间':'Arrival time','运输公司':'Carrier','到港时间':'Port ETA'
+      }
+    };
+
+    function t(text){
+      if(currentLang === 'zh-CN') return text;
+      return (i18nMap[currentLang] && i18nMap[currentLang][text]) || text;
+    }
+
+    window.setLanguage = function(lang){
+      currentLang = lang || 'zh-CN';
+      localStorage.setItem('cc_lang', currentLang);
+      let sel = document.getElementById('languageSelect');
+      if(sel) sel.value = currentLang;
+      renderSidebar();
+      renderContent();
+    };
+
+    function applyLanguage(){
+      let sel = document.getElementById('languageSelect');
+      if(sel) sel.value = currentLang;
+      if(currentLang === 'zh-CN') return;
+      const map = i18nMap[currentLang] || {};
+      function walk(node){
+        if(node.nodeType === 3){
+          let raw = node.nodeValue;
+          let trimmed = raw.trim();
+          if(map[trimmed]) node.nodeValue = raw.replace(trimmed, map[trimmed]);
+        } else if(node.nodeType === 1) {
+          if(node.tagName === 'INPUT' && node.placeholder && map[node.placeholder]) node.placeholder = map[node.placeholder];
+          if(node.tagName === 'OPTION') return;
+          Array.from(node.childNodes).forEach(walk);
+        }
+      }
+      walk(document.getElementById('mainApp') || document.body);
+    }
+
     function renderTable(containerId,headers,rowsData,rowRenderer){
       let container=document.getElementById(containerId);
       if(!container)return;
@@ -1034,8 +1092,8 @@
     
     function renderSidebar(){
       let menus=allMenus.filter(m => m.roles.includes(currentUser.role));
-      document.getElementById('sidebar').innerHTML=menus.map(m=>`<div class="menu-item ${currentMenu===m.id?'active':''}" data-menu="${m.id}"><span>${m.icon}</span> ${m.name}</div>`).join('');
-      document.querySelectorAll('.menu-item').forEach(item=>{item.addEventListener('click',()=>{currentMenu=item.dataset.menu;renderSidebar();renderContent();});});
+      document.getElementById('sidebar').innerHTML=menus.map(m=>`<div class="menu-item ${currentMenu===m.id?'active':''}" data-menu="${m.id}"><span>${m.icon}</span> ${t(m.name)}</div>`).join('');
+      document.querySelectorAll('.menu-item').forEach(item=>{item.addEventListener('click',()=>{currentMenu=item.dataset.menu;renderSidebar();renderContent();applyLanguage();});});
     }
     
     function renderContent(){
@@ -1056,6 +1114,7 @@
         case'feeReport':renderFeeReport(main);break;
         default:renderDashboard(main);
       }
+      applyLanguage();
     }
     
     // ==================== 工作台 ====================
@@ -1113,6 +1172,98 @@
       };
     }
 
+
+    function getRelatedBlsByContainer(c){
+      let blNos = containerBlMap.filter(m => m.containerId === c.id).map(m => m.blNo);
+      return blNos.map(no => blList.find(b => b.blNo === no || b.houseBlNo === no)).filter(Boolean);
+    }
+
+    function getContainerIdsUniqueFromTasks(tasks){
+      let ids = [];
+      tasks.forEach(t => { if(t && !ids.includes(t.containerId)) ids.push(t.containerId); });
+      return ids;
+    }
+
+    function getDailyOperationDetail(type, targetDate){
+      let prevDate = addDaysToDateStr(targetDate, -1);
+      let activeContainers = containers.filter(isOperationalVisibleContainer);
+      let rows = [];
+      if(type === 'todayAbnormalStorage'){
+        activeContainers.forEach(c => {
+          let todayFees = calculateFeesForContainer(c, targetDate);
+          let prevFees = calculateFeesForContainer(c, prevDate);
+          let amount = Math.max(0, (todayFees.abnormalStorageFee || 0) - (prevFees.abnormalStorageFee || 0));
+          if(amount > 0) rows.push(Object.assign({_amount: amount, _metric: 'R$ ' + amount.toFixed(2)}, c));
+        });
+      } else if(type === 'todayDemurrage'){
+        activeContainers.forEach(c => {
+          let todayFees = calculateFeesForContainer(c, targetDate);
+          let prevFees = calculateFeesForContainer(c, prevDate);
+          let amount = Math.max(0, (todayFees.demurrageFee || 0) - (prevFees.demurrageFee || 0));
+          if(amount > 0) rows.push(Object.assign({_amount: amount, _metric: '$ ' + amount.toFixed(2)}, c));
+        });
+      } else if(type === 'clearanceCompleted'){
+        rows = activeContainers.filter(c => {
+          let relatedBls = getRelatedBlsByContainer(c);
+          if(relatedBls.length === 0) return false;
+          return relatedBls.every(bl => bl.isCleared) && relatedBls.some(bl => isDateEqual(bl.clearanceDate, targetDate));
+        });
+      } else if(type === 'plannedPickup'){
+        let ids = pickupPlans.filter(p => p.status !== 'cancelled' && isDateEqual(p.arrivalDate, targetDate)).map(p=>p.containerId);
+        rows = activeContainers.filter(c => ids.includes(c.id));
+      } else if(type === 'actualPickup'){
+        rows = activeContainers.filter(c => isDateEqual(c.actualPickupTime, targetDate));
+        if(rows.length === 0){
+          let ids = pickupPlans.filter(p => p.status === 'confirmed' && isDateEqual(p.actualPickupTime, targetDate)).map(p=>p.containerId);
+          rows = activeContainers.filter(c => ids.includes(c.id));
+        }
+      } else if(type === 'plannedFactoryArrival'){
+        let ids = pickupPlans.filter(p => p.status !== 'cancelled' && p.destination === '工厂' && isDateEqual(p.arrivalDate, targetDate)).map(p=>p.containerId);
+        rows = activeContainers.filter(c => ids.includes(c.id));
+      } else if(type === 'actualFactoryArrival'){
+        let ids = getContainerIdsUniqueFromTasks(transportTasks.filter(t => t.to === '工厂' && (t.status === 'arrived' || t.actualArrival) && isDateEqual(t.actualArrival, targetDate)));
+        rows = activeContainers.filter(c => ids.includes(c.id));
+      } else if(type === 'clearedPendingPickup'){
+        rows = activeContainers.filter(c => c.customsStatus === '已清关' && !c.actualPickupTime);
+      } else if(type === 'clearedPendingPickupAbnormal'){
+        rows = activeContainers.filter(c => c.customsStatus === '已清关' && !c.actualPickupTime && (calculateFeesForContainer(c, targetDate).abnormalStorageFee || 0) > 0);
+      } else if(type === 'clearedPendingPickupNormal'){
+        rows = activeContainers.filter(c => c.customsStatus === '已清关' && !c.actualPickupTime && (calculateFeesForContainer(c, targetDate).abnormalStorageFee || 0) <= 0);
+      }
+      return rows;
+    }
+
+    window.showDailyReportDetail = function(type){
+      let targetDate = getTodayStr();
+      let titleMap = {
+        todayAbnormalStorage:'今日新增异常堆存费明细',
+        todayDemurrage:'今日新增滞箱费明细',
+        clearanceCompleted:'今日清关完成集装箱明细',
+        plannedPickup:'今日计划提箱集装箱明细',
+        actualPickup:'今日实际提箱集装箱明细',
+        plannedFactoryArrival:'今日计划到厂集装箱明细',
+        actualFactoryArrival:'今日实际到厂集装箱明细',
+        clearedPendingPickup:'已清关待提箱集装箱明细',
+        clearedPendingPickupAbnormal:'待提箱-已产生异常堆存费明细',
+        clearedPendingPickupNormal:'待提箱-未产生异常堆存费明细'
+      };
+      let list = getDailyOperationDetail(type, targetDate);
+      document.getElementById('modalTitle').innerText = (titleMap[type] || '明细') + `（${list.length}）`;
+      document.getElementById('modalBody').innerHTML = '<div id="dailyDetailTable"></div>';
+      openModal();
+      let headers = ['批次','集装箱序号','集装箱号','提单号','IRA号','当前位置','状态'];
+      if(type === 'todayAbnormalStorage' || type === 'todayDemurrage') headers.push('今日新增金额');
+      renderTable('dailyDetailTable', headers, list, (c)=>{
+        let st = getContainerFullStatus(c);
+        let tr = document.createElement('tr');
+        let base = `<td>${c.batch||'-'}</td><td>${c.containerSeq||'-'}</td><td>${c.containerNo||'-'}</td><td>${getContainerBlTextById(c.id)||'-'}</td><td>${getIraList(c.id)||'-'}</td><td><span class="status-badge status-pending">${st.loc}</span></td><td><span class="status-badge ${st.cls}">${st.text}</span></td>`;
+        if(type === 'todayAbnormalStorage' || type === 'todayDemurrage') base += `<td>${c._metric||'-'}</td>`;
+        tr.innerHTML = base;
+        return tr;
+      });
+      applyLanguage();
+    };
+
     function renderDashboard(container){
       let activeContainers=containers.filter(isOperationalVisibleContainer);
       let total=activeContainers.length;
@@ -1130,16 +1281,16 @@
         <div class="card">
           <div class="card-header"><span class="card-title">📅 每日运营报表</span><span style="font-size:12px;color:#909399;">统计日期：${fmtDate(getTodayStr())}</span></div>
           <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 8px;">
-            <div class="stat-card warning-card" style="padding:12px;cursor:default;"><div class="stat-number warning-number" style="font-size:22px;">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="stat-label">今日新增异常堆存费</div></div>
-            <div class="stat-card danger-card" style="padding:12px;cursor:default;"><div class="stat-number danger-number" style="font-size:22px;">$ ${dailyReport.todayDemurrage.toFixed(2)}</div><div class="stat-label">今日新增滞箱费</div></div>
-            <div class="stat-card" style="padding:12px;cursor:default;"><div class="stat-number" style="font-size:24px;">${dailyReport.clearanceCompleted}</div><div class="stat-label">今日清关完成</div></div>
-            <div class="stat-card" style="padding:12px;cursor:default;"><div class="stat-number" style="font-size:24px;">${dailyReport.plannedPickup}</div><div class="stat-label">今日计划提箱</div></div>
-            <div class="stat-card" style="padding:12px;cursor:default;"><div class="stat-number" style="font-size:24px;">${dailyReport.actualPickup}</div><div class="stat-label">今日实际提箱</div></div>
-            <div class="stat-card" style="padding:12px;cursor:default;"><div class="stat-number" style="font-size:24px;">${dailyReport.plannedFactoryArrival}</div><div class="stat-label">今日计划到厂</div></div>
-            <div class="stat-card" style="padding:12px;cursor:default;"><div class="stat-number" style="font-size:24px;">${dailyReport.actualFactoryArrival}</div><div class="stat-label">今日实际到厂</div></div>
-            <div class="stat-card" style="padding:12px;cursor:default;"><div class="stat-number" style="font-size:24px;">${dailyReport.clearedPendingPickup}</div><div class="stat-label">已清关待提箱</div></div>
-            <div class="stat-card warning-card" style="padding:12px;cursor:default;"><div class="stat-number warning-number" style="font-size:24px;">${dailyReport.clearedPendingPickupAbnormal}</div><div class="stat-label">待提箱-已产生异常堆存费</div></div>
-            <div class="stat-card" style="padding:12px;cursor:default;"><div class="stat-number" style="font-size:24px;">${dailyReport.clearedPendingPickupNormal}</div><div class="stat-label">待提箱-未产生异常堆存费</div></div>
+            <div class="stat-card warning-card" onclick="showDailyReportDetail(\'todayAbnormalStorage\')" style="padding:12px;cursor:pointer;"><div class="stat-number warning-number" style="font-size:22px;">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="stat-label">今日新增异常堆存费</div></div>
+            <div class="stat-card danger-card" onclick="showDailyReportDetail(\'todayDemurrage\')" style="padding:12px;cursor:pointer;"><div class="stat-number danger-number" style="font-size:22px;">$ ${dailyReport.todayDemurrage.toFixed(2)}</div><div class="stat-label">今日新增滞箱费</div></div>
+            <div class="stat-card" onclick="showDailyReportDetail(\'clearanceCompleted\')" style="padding:12px;cursor:pointer;"><div class="stat-number" style="font-size:24px;">${dailyReport.clearanceCompleted}</div><div class="stat-label">今日清关完成</div></div>
+            <div class="stat-card" onclick="showDailyReportDetail(\'plannedPickup\')" style="padding:12px;cursor:pointer;"><div class="stat-number" style="font-size:24px;">${dailyReport.plannedPickup}</div><div class="stat-label">今日计划提箱</div></div>
+            <div class="stat-card" onclick="showDailyReportDetail(\'actualPickup\')" style="padding:12px;cursor:pointer;"><div class="stat-number" style="font-size:24px;">${dailyReport.actualPickup}</div><div class="stat-label">今日实际提箱</div></div>
+            <div class="stat-card" onclick="showDailyReportDetail(\'plannedFactoryArrival\')" style="padding:12px;cursor:pointer;"><div class="stat-number" style="font-size:24px;">${dailyReport.plannedFactoryArrival}</div><div class="stat-label">今日计划到厂</div></div>
+            <div class="stat-card" onclick="showDailyReportDetail(\'actualFactoryArrival\')" style="padding:12px;cursor:pointer;"><div class="stat-number" style="font-size:24px;">${dailyReport.actualFactoryArrival}</div><div class="stat-label">今日实际到厂</div></div>
+            <div class="stat-card" onclick="showDailyReportDetail(\'clearedPendingPickup\')" style="padding:12px;cursor:pointer;"><div class="stat-number" style="font-size:24px;">${dailyReport.clearedPendingPickup}</div><div class="stat-label">已清关待提箱</div></div>
+            <div class="stat-card warning-card" onclick="showDailyReportDetail(\'clearedPendingPickupAbnormal\')" style="padding:12px;cursor:pointer;"><div class="stat-number warning-number" style="font-size:24px;">${dailyReport.clearedPendingPickupAbnormal}</div><div class="stat-label">待提箱-已产生异常堆存费</div></div>
+            <div class="stat-card" onclick="showDailyReportDetail(\'clearedPendingPickupNormal\')" style="padding:12px;cursor:pointer;"><div class="stat-number" style="font-size:24px;">${dailyReport.clearedPendingPickupNormal}</div><div class="stat-label">待提箱-未产生异常堆存费</div></div>
           </div>
           <div style="font-size:12px;color:#909399;margin-top:6px;">说明：提箱指从港口提出的集装箱；到厂数量仅统计目的地为“工厂”的集装箱；已清关待提箱指清关完成但尚未确认实际提箱的集装箱。</div>
         </div>
@@ -1761,14 +1912,14 @@
       renderEmptyOrTable('pendingCustomsEvergreen', '📌 长荣提单', ['批次','主提单号','分提单号','IRA号','清关通道','清关时间','操作'], pendingMaster, (bl)=>{
         let key=getBlIdentifier(bl), sid=safeId(key);
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.masterBlNo||'-'}</td><td>${bl.houseBlNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><select id="ch_${sid}"><option value="绿色" ${bl.channel==='绿色'?'selected':''}>绿色</option><option value="黄色" ${bl.channel==='黄色'?'selected':''}>黄色</option><option value="红色" ${bl.channel==='红色'?'selected':''}>红色</option></select></td><td><input type="date" id="clrDate_${sid}"></td><td><button class="btn btn-sm btn-success" onclick="doClearance('${key}')">确认清关</button></td>`;
+        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.masterBlNo||'-'}</td><td>${bl.houseBlNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><select id="ch_${sid}"><option value="绿色" ${bl.channel==='绿色'?'selected':''}>绿色</option><option value="黄色" ${bl.channel==='黄色'?'selected':''}>黄色</option><option value="红色" ${bl.channel==='红色'?'selected':''}>红色</option></select></td><td><input type="date" id="clrDate_${sid}"></td><td><button class="btn btn-sm btn-primary" onclick="saveCustomsChannel('${key}')">保存通道</button> <button class="btn btn-sm btn-success" onclick="doClearance('${key}')">确认完成</button></td>`;
         return tr;
       });
 
       renderEmptyOrTable('pendingCustomsSimple', '📌 MSC / COSCO / 其他提单', ['批次','提单号','IRA号','清关通道','清关时间','操作'], pendingSimple, (bl)=>{
         let key=getBlIdentifier(bl), sid=safeId(key);
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.isPlaceholder?'⚠️ ':''}${bl.blNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><select id="ch_${sid}"><option value="绿色" ${bl.channel==='绿色'?'selected':''}>绿色</option><option value="黄色" ${bl.channel==='黄色'?'selected':''}>黄色</option><option value="红色" ${bl.channel==='红色'?'selected':''}>红色</option></select></td><td><input type="date" id="clrDate_${sid}"></td><td><button class="btn btn-sm btn-success" onclick="doClearance('${key}')">确认清关</button></td>`;
+        tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.isPlaceholder?'⚠️ ':''}${bl.blNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><select id="ch_${sid}"><option value="绿色" ${bl.channel==='绿色'?'selected':''}>绿色</option><option value="黄色" ${bl.channel==='黄色'?'selected':''}>黄色</option><option value="红色" ${bl.channel==='红色'?'selected':''}>红色</option></select></td><td><input type="date" id="clrDate_${sid}"></td><td><button class="btn btn-sm btn-primary" onclick="saveCustomsChannel('${key}')">保存通道</button> <button class="btn btn-sm btn-success" onclick="doClearance('${key}')">确认完成</button></td>`;
         return tr;
       });
 
@@ -1795,11 +1946,25 @@
       renderCustomsTable();
     }
     
+    window.saveCustomsChannel = function(identifier){
+      let sid = safeId(identifier);
+      let channelEl = document.getElementById(`ch_${sid}`);
+      if(!channelEl){ alert('未找到清关通道'); return; }
+      let bl = blList.find(b => getBlIdentifier(b) === identifier);
+      if(bl){
+        bl.channel = channelEl.value;
+        // 只保存通道，不改变清关完成状态，不要求清关时间
+        saveData();
+        renderCustomsTable();
+        alert('清关通道已保存');
+      }
+    };
+
     window.doClearance = function(identifier){
       let sid = safeId(identifier);
       let date = document.getElementById(`clrDate_${sid}`).value;
       let channel = document.getElementById(`ch_${sid}`).value;
-      if(!date){alert('请选择清关时间');return;}
+      if(!date){alert('请选择清关完成时间');return;}
       let bl = blList.find(b => getBlIdentifier(b) === identifier);
       if(bl){
         bl.clearanceDate = fmtDate(date);
@@ -1808,7 +1973,7 @@
         updateContainerStatus();
         saveData();
         renderCustomsTable();
-        alert('已清关');
+        alert('清关已完成');
       }
     };
     
