@@ -589,7 +589,7 @@
 
     // ==================== 菜单配置 ====================
     const allMenus = [
-      { id:'dashboard', name:'工作台', icon:'📊', roles:['订购科','关务','运输公司RG','运输公司JSL','RG堆场管理员','Rio Claro管理员','IRA库房管理员','工厂管理员'] },
+      { id:'dashboard', name:'工作台', icon:'📊', roles:['订购科'] },
       { id:'containers', name:'基础数据', icon:'📦', roles:['订购科'] },
       { id:'blIra', name:'提单/IRA管理', icon:'📋', roles:['订购科','关务'] },
       { id:'customs', name:'清关维护', icon:'🛃', roles:['订购科','关务'] },
@@ -1092,6 +1092,7 @@
     
     function renderSidebar(){
       let menus=allMenus.filter(m => m.roles.includes(currentUser.role));
+      if(!menus.some(m => m.id === currentMenu)){ currentMenu = menus.length ? menus[0].id : ''; }
       document.getElementById('sidebar').innerHTML=menus.map(m=>`<div class="menu-item ${currentMenu===m.id?'active':''}" data-menu="${m.id}"><span>${m.icon}</span> ${t(m.name)}</div>`).join('');
       document.querySelectorAll('.menu-item').forEach(item=>{item.addEventListener('click',()=>{currentMenu=item.dataset.menu;renderSidebar();renderContent();applyLanguage();});});
     }
@@ -2385,7 +2386,43 @@
     
     function resetReturnFilter(){document.getElementById('returnSearch').value='';filterReturnList();}
     
-    window.doReturn = function(containerId){let retDate=document.getElementById(`retDate_${containerId}`).value;let file=document.getElementById(`proof_${containerId}`).files[0];if(!retDate){alert('请填写还箱时间');return;}if(!file){alert('请上传还箱凭证');return;}let reader=new FileReader();reader.onload=function(e){let record=returnRecords.find(r=>r.containerId===containerId&&!r.isReturnConfirmed&&r.type==='return_needed');if(record){record.returnDate=fmtDate(retDate);record.isReturnConfirmed=true;record.type='return';record.proof=e.target.result;saveData();filterReturnList();alert('还箱确认成功');}};reader.readAsDataURL(file);};
+    window.doReturn = function(containerId){
+      try{
+        let retDateEl = document.getElementById(`retDate_${containerId}`);
+        let proofEl = document.getElementById(`proof_${containerId}`);
+        let retDate = retDateEl ? retDateEl.value : '';
+        let file = proofEl && proofEl.files ? proofEl.files[0] : null;
+        if(!retDate){ alert('请填写还箱时间'); return; }
+
+        let record = returnRecords.find(r => r.containerId === containerId && !r.isReturnConfirmed && r.type === 'return_needed');
+        if(!record){ alert('未找到待还箱记录，可能已经确认过，请刷新页面后再试。'); return; }
+
+        const finishReturn = function(proofData){
+          record.returnDate = fmtDate(retDate);
+          record.isReturnConfirmed = true;
+          record.type = 'return';
+          record.proof = proofData || '';
+          saveData();
+          filterReturnList();
+          alert('还箱确认成功');
+        };
+
+        // 还箱凭证支持上传；如现场暂时没有凭证，也允许先确认还箱，避免按钮无响应。
+        if(!file){
+          if(confirm('未上传还箱凭证，是否继续确认还箱？')){
+            finishReturn('');
+          }
+          return;
+        }
+
+        let reader = new FileReader();
+        reader.onload = function(e){ finishReturn(e.target.result); };
+        reader.onerror = function(){ alert('凭证读取失败，请重新选择文件，或不上传凭证直接确认。'); };
+        reader.readAsDataURL(file);
+      }catch(err){
+        alert('确认还箱失败：' + (err && err.message ? err.message : err));
+      }
+    };
     
     // 动态运输计划
     function renderDynamicPlan(container){
