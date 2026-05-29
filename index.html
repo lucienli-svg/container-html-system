@@ -2708,63 +2708,233 @@
     
     // 生产完成确认
     function renderProductionConfirm(container){
+      // 生产确认逻辑优化：
+      // 1. 不再按“批次整体数量”确认，避免把未到厂/未清关/未提箱的同批次集装箱误确认生产；
+      // 2. 支持跨批次选择具体集装箱用于同一个生产批次；
+      // 3. 已确认生产记录支持编辑和撤销。
       let factoryContainers = containers.filter(c => {
         let loc = getContainerLocation(c.id);
         let produced = productionRecords.some(p => p.containerIds && p.containerIds.includes(c.id));
         return loc === '工厂' && !produced;
       });
-      let grouped = new Map();
-      factoryContainers.forEach(c => {if(!grouped.has(c.batch)) grouped.set(c.batch, []); grouped.get(c.batch).push(c);});
-      let html = `<div class="card"><div class="card-header"><span class="card-title">🏭 生产完成确认</span></div>`;
-      if(grouped.size === 0){ html += '<div style="padding:20px;text-align:center">✅ 暂无待生产的集装箱</div>'; }
-      else {
-        for(let [batch, containersList] of grouped.entries()){
-          let totalCount = containersList.length;
-          let producedCount = productionRecords.filter(p => p.batchNo === batch).reduce((sum, p) => sum + p.quantity, 0);
-          let pendingCount = totalCount - producedCount;
-          html += `<div class="card" style="margin-bottom:16px;">
-            <h3>批次: ${batch}</h3>
-            <div>在厂数量: ${totalCount} | 已生产: ${producedCount} | 待生产: ${pendingCount}</div>
-            <div style="margin-top:12px;">
-              <input type="number" id="prodQty_${batch}" placeholder="生产数量" max="${pendingCount}" style="width:150px;padding:8px;border-radius:8px;border:1px solid #dcdfe6;">
-              <input type="date" id="prodDate_${batch}" value="${getTodayStr()}" style="width:150px;padding:8px;border-radius:8px;border:1px solid #dcdfe6;margin-left:10px;">
-              <textarea id="prodRemark_${batch}" placeholder="备注" style="width:200px;padding:8px;border-radius:8px;border:1px solid #dcdfe6;margin-left:10px;"></textarea>
-              <button class="btn btn-success" style="margin-left:10px;" onclick="confirmProduction('${batch}')">确认生产</button>
-            </div>
-            <div style="margin-top:12px;font-size:12px;color:#909399;">集装箱列表: ${containersList.map(c => c.containerNo).join(', ')}</div>
-          </div>`;
-        }
-      }
-      html += `<div class="card"><div class="card-header"><span class="card-title">📋 生产历史记录</span></div><div id="productionHistoryTable"></div></div></div>`;
-      container.innerHTML = html;
+      factoryContainers.sort((a,b)=>String(a.batch||'').localeCompare(String(b.batch||'')) || String(a.containerSeq||'').localeCompare(String(b.containerSeq||'')) || String(a.containerNo||'').localeCompare(String(b.containerNo||'')));
+
+      container.innerHTML = `
+        <div class="card">
+          <div class="card-header"><span class="card-title">🏭 生产完成确认</span></div>
+          <div class="search-bar">
+            <input type="text" id="prodSearchBatch" placeholder="原始批次">
+            <input type="text" id="prodSearchSeq" placeholder="集装箱序号">
+            <input type="text" id="prodSearchNo" placeholder="集装箱号">
+            <input type="text" id="prodSearchBl" placeholder="提单号">
+            <button class="btn btn-primary" onclick="filterProductionPending()">查询</button>
+            <button class="btn" onclick="clearProductionSearch()">重置</button>
+          </div>
+          <div style="font-size:12px;color:#909399;margin-bottom:10px;">
+            说明：生产确认必须选择具体集装箱。系统只允许确认“当前位置=工厂、尚未生产”的集装箱；支持一个生产批次使用不同原始批次的集装箱。
+          </div>
+          <div class="rate-period-row" style="align-items:center;">
+            <input type="text" id="prodBatchNo" placeholder="生产批次/实际使用批次" style="width:180px;">
+            <input type="date" id="prodDateAll" value="${getTodayStr()}" style="width:145px;">
+            <input type="text" id="prodRemarkAll" placeholder="备注" style="width:260px;">
+            <button class="btn btn-success" onclick="confirmSelectedProduction()">确认所选生产完成</button>
+            <button class="btn" onclick="selectAllProductionPending()">全选当前列表</button>
+          </div>
+          <div id="productionPendingTable"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">📋 已确认生产记录</span>
+            <button class="btn btn-sm" id="btnProductionHistory" onclick="toggleHistorySection('productionHistoryBody','btnProductionHistory')">展开查看</button>
+          </div>
+          <div id="productionHistoryBody" style="display:none;">
+            <div id="productionHistoryTable"></div>
+          </div>
+        </div>
+      `;
+      renderProductionPendingTable(factoryContainers);
       renderProductionHistory();
     }
-    
-    function renderProductionHistory(){
-      if(productionRecords.length === 0){ document.getElementById('productionHistoryTable').innerHTML = '<div style="padding:20px;text-align:center">暂无生产记录</div>'; return; }
-      renderTable('productionHistoryTable',['批次','生产数量','生产日期','操作人','备注'],productionRecords,(p)=>{
-        let tr=document.createElement('tr');
-        tr.innerHTML=`<td>${p.batchNo}</td><td>${p.quantity}</td><td>${fmtDate(p.productionDate)}</td><td>${p.operator}</td><td>${p.remark||'-'}</td>`;
-        return tr;
-      });
+
+    function getProductionPendingRows(){
+      let batch = (document.getElementById('prodSearchBatch')?.value || '').toLowerCase().trim();
+      let seq = (document.getElementById('prodSearchSeq')?.value || '').toLowerCase().trim();
+      let no = (document.getElementById('prodSearchNo')?.value || '').toLowerCase().trim();
+      let bl = (document.getElementById('prodSearchBl')?.value || '').toLowerCase().trim();
+      return containers.filter(c => {
+        let loc = getContainerLocation(c.id);
+        let produced = productionRecords.some(p => p.containerIds && p.containerIds.includes(c.id));
+        if(loc !== '工厂' || produced) return false;
+        let blText = getContainerBlTextById(c.id).toLowerCase();
+        return (!batch || String(c.batch||'').toLowerCase().includes(batch)) &&
+               (!seq || String(c.containerSeq||'').toLowerCase().includes(seq)) &&
+               (!no || String(c.containerNo||'').toLowerCase().includes(no)) &&
+               (!bl || blText.includes(bl));
+      }).sort((a,b)=>String(a.batch||'').localeCompare(String(b.batch||'')) || String(a.containerSeq||'').localeCompare(String(b.containerSeq||'')) || String(a.containerNo||'').localeCompare(String(b.containerNo||'')));
     }
-    
-    window.confirmProduction = function(batch){
-      let qty = parseInt(document.getElementById(`prodQty_${batch}`).value);
-      let prodDate = document.getElementById(`prodDate_${batch}`).value;
-      let remark = document.getElementById(`prodRemark_${batch}`).value;
-      if(!qty || qty <= 0){ alert('请输入生产数量'); return; }
-      let batchContainers = containers.filter(c => c.batch === batch);
-      let producedCount = productionRecords.filter(p => p.batchNo === batch).reduce((sum, p) => sum + p.quantity, 0);
-      let availableCount = batchContainers.length - producedCount;
-      if(qty > availableCount){ alert(`最多可生产 ${availableCount} 个集装箱`); return; }
-      let producedContainerIds = batchContainers.slice(0, producedCount + qty).map(c => c.id);
-      productionRecords.push({id: nextIds.production++, batchNo: batch, quantity: qty, productionDate: fmtDate(prodDate), operator: currentUser.name, remark: remark, containerIds: producedContainerIds});
+
+    function renderProductionPendingTable(rows){
+      if(!rows || rows.length === 0){
+        document.getElementById('productionPendingTable').innerHTML = '<div style="padding:20px;text-align:center">✅ 暂无符合条件的待生产集装箱</div>';
+        return;
+      }
+      renderTable('productionPendingTable',
+        ['<input type="checkbox" id="prodSelectAll" onclick="toggleAllProductionPending(this)">','原始批次','集装箱序号','集装箱号','提单号','IRA号','当前位置','状态'],
+        rows,
+        (c)=>{
+          let st = getContainerFullStatus(c);
+          let tr = document.createElement('tr');
+          tr.innerHTML = `<td><input type="checkbox" class="prodCheck" value="${c.id}"></td>
+            <td>${c.batch||'-'}</td>
+            <td>${c.containerSeq||'-'}</td>
+            <td>${c.containerNo||'-'}</td>
+            <td title="${getContainerBlTextById(c.id)||'-'}">${getContainerBlTextById(c.id)||'-'}</td>
+            <td>${getIraList(c.id)||'-'}</td>
+            <td><span class="status-badge status-pending">${st.loc}</span></td>
+            <td><span class="status-badge ${st.cls}">${st.text}</span></td>`;
+          return tr;
+        }
+      );
+    }
+
+    window.filterProductionPending = function(){
+      renderProductionPendingTable(getProductionPendingRows());
+    };
+
+    window.clearProductionSearch = function(){
+      ['prodSearchBatch','prodSearchSeq','prodSearchNo','prodSearchBl'].forEach(id=>{let el=document.getElementById(id); if(el) el.value='';});
+      filterProductionPending();
+    };
+
+    window.toggleAllProductionPending = function(box){
+      document.querySelectorAll('.prodCheck').forEach(ch => ch.checked = box.checked);
+    };
+
+    window.selectAllProductionPending = function(){
+      document.querySelectorAll('.prodCheck').forEach(ch => ch.checked = true);
+      let all = document.getElementById('prodSelectAll');
+      if(all) all.checked = true;
+    };
+
+    window.confirmSelectedProduction = function(){
+      let selectedIds = Array.from(document.querySelectorAll('.prodCheck:checked')).map(ch => parseInt(ch.value));
+      let prodBatch = (document.getElementById('prodBatchNo').value || '').trim();
+      let prodDate = document.getElementById('prodDateAll').value;
+      let remark = document.getElementById('prodRemarkAll').value || '';
+      if(selectedIds.length === 0){ alert('请选择要确认生产的集装箱'); return; }
+      if(!prodBatch){ alert('请填写生产批次/实际使用批次'); return; }
+      if(!prodDate){ alert('请选择生产日期'); return; }
+
+      let invalid = selectedIds.filter(id => {
+        let c = containers.find(x => x.id === id);
+        let produced = productionRecords.some(p => p.containerIds && p.containerIds.includes(id));
+        return !c || getContainerLocation(id) !== '工厂' || produced;
+      });
+      if(invalid.length > 0){
+        alert('所选集装箱中存在非工厂库存或已生产记录，请刷新后重新选择。');
+        return;
+      }
+
+      productionRecords.push({
+        id: nextIds.production++,
+        batchNo: prodBatch,
+        sourceBatches: [...new Set(selectedIds.map(id => (containers.find(c=>c.id===id)||{}).batch).filter(Boolean))],
+        quantity: selectedIds.length,
+        productionDate: fmtDate(prodDate),
+        operator: currentUser.name,
+        remark,
+        containerIds: selectedIds
+      });
       saveData();
       renderProductionConfirm(document.getElementById('mainContent'));
-      alert(`已确认生产 ${qty} 个集装箱`);
+      alert(`已确认生产 ${selectedIds.length} 个集装箱`);
     };
-    
+
+    function renderProductionHistory(){
+      if(productionRecords.length === 0){
+        document.getElementById('productionHistoryTable').innerHTML = '<div style="padding:20px;text-align:center">暂无生产记录</div>';
+        return;
+      }
+      let rows = [...productionRecords].sort((a,b)=>Number(b.id||0)-Number(a.id||0));
+      renderTable('productionHistoryTable',
+        ['生产批次','来源批次','数量','集装箱明细','生产日期','操作人','备注','操作'],
+        rows,
+        (p)=>{
+          let conts = (p.containerIds||[]).map(id=>containers.find(c=>c.id===id)).filter(Boolean);
+          let sourceBatches = p.sourceBatches && p.sourceBatches.length ? p.sourceBatches.join(',') : [...new Set(conts.map(c=>c.batch).filter(Boolean))].join(',');
+          let contText = conts.map(c=>`${c.containerSeq||'-'} / ${c.containerNo}`).join(', ');
+          let tr=document.createElement('tr');
+          tr.innerHTML=`<td>${p.batchNo||'-'}</td>
+            <td>${sourceBatches||'-'}</td>
+            <td>${(p.containerIds||[]).length || p.quantity || 0}</td>
+            <td title="${contText||'-'}">${contText||'-'}</td>
+            <td>${fmtDate(p.productionDate)}</td>
+            <td>${p.operator||'-'}</td>
+            <td>${p.remark||'-'}</td>
+            <td><button class="btn btn-sm btn-warning" onclick="editProductionRecord(${p.id})">编辑</button> <button class="btn btn-sm btn-danger" onclick="revokeProductionRecord(${p.id})">撤销</button></td>`;
+          return tr;
+        }
+      );
+    }
+
+    window.editProductionRecord = function(recordId){
+      let rec = productionRecords.find(p => p.id === recordId);
+      if(!rec){ alert('未找到生产记录'); return; }
+      let oldConts = (rec.containerIds || []).map(id => containers.find(c=>c.id===id)).filter(Boolean);
+      let oldNos = oldConts.map(c=>c.containerNo).join(',');
+      let newBatch = prompt('修改生产批次/实际使用批次', rec.batchNo || '');
+      if(newBatch === null) return;
+      newBatch = newBatch.trim();
+      if(!newBatch){ alert('生产批次不能为空'); return; }
+
+      let newDate = prompt('修改生产日期，格式：YYYY/MM/DD 或 YYYY-MM-DD', rec.productionDate || getTodayStr());
+      if(newDate === null) return;
+      let newRemark = prompt('修改备注', rec.remark || '');
+      if(newRemark === null) return;
+
+      let newContainerNos = prompt('修改本次生产使用的集装箱号，多个用英文逗号分隔。\\n注意：新增集装箱必须已经在工厂且未被其他生产记录占用。', oldNos);
+      if(newContainerNos === null) return;
+      let noList = newContainerNos.split(',').map(s=>s.trim()).filter(Boolean);
+      if(noList.length === 0){ alert('至少保留一个集装箱'); return; }
+
+      let newIds = [];
+      for(let no of noList){
+        let c = containers.find(x => x.containerNo === no);
+        if(!c){ alert(`未找到集装箱：${no}`); return; }
+        let usedByOther = productionRecords.some(p => p.id !== recordId && p.containerIds && p.containerIds.includes(c.id));
+        if(usedByOther){ alert(`集装箱 ${no} 已被其他生产记录使用，不能重复确认生产`); return; }
+        let alreadyInThisRecord = rec.containerIds && rec.containerIds.includes(c.id);
+        if(!alreadyInThisRecord && getContainerLocation(c.id) !== '工厂'){
+          alert(`集装箱 ${no} 当前不在工厂，不能新增到生产完成记录`);
+          return;
+        }
+        newIds.push(c.id);
+      }
+
+      rec.batchNo = newBatch;
+      rec.productionDate = fmtDate(newDate);
+      rec.remark = newRemark;
+      rec.containerIds = [...new Set(newIds)];
+      rec.quantity = rec.containerIds.length;
+      rec.sourceBatches = [...new Set(rec.containerIds.map(id => (containers.find(c=>c.id===id)||{}).batch).filter(Boolean))];
+      saveData();
+      renderProductionConfirm(document.getElementById('mainContent'));
+      alert('生产记录已更新');
+    };
+
+    window.revokeProductionRecord = function(recordId){
+      if(!confirm('确定撤销这条生产完成记录吗？撤销后相关集装箱会重新回到待生产状态。')) return;
+      productionRecords = productionRecords.filter(p => p.id !== recordId);
+      saveData();
+      renderProductionConfirm(document.getElementById('mainContent'));
+      alert('生产记录已撤销');
+    };
+
+    // 兼容旧版本调用
+    window.confirmProduction = function(batch){
+      alert('生产确认逻辑已升级：请在列表中选择具体集装箱后点击“确认所选生产完成”。');
+    };
+
     // 费率配置
     function renderRateConfig(container){
       let carriers = ['MSC', 'COSCO', '长荣'];
