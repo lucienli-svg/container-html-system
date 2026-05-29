@@ -2360,7 +2360,7 @@
     function renderReturnConfirm(container){
       let pendingReturns=returnRecords.filter(r=>!r.isReturnConfirmed&&r.type==='return_needed'&&!isProducedCompletedContainerId(r.containerId));
       let myPending=[];
-      pendingReturns.forEach(r=>{let task=transportTasks.find(t=>t.containerId===r.containerId&&t.to===r.location);if(task&&task.carrier===currentUser.carrier){let c=containers.find(c=>c.id===r.containerId);let blText=getContainerBlTextById(r.containerId)||'-';myPending.push({...r,containerNo:task.containerNo,batch:task.batch||c?.batch,containerSeq:c?.containerSeq,blText});}});
+      pendingReturns.forEach(r=>{let realIndex=returnRecords.indexOf(r);let task=transportTasks.find(t=>String(t.containerId)===String(r.containerId)&&t.to===r.location);if(task&&task.carrier===currentUser.carrier){let c=containers.find(c=>String(c.id)===String(r.containerId));let blText=getContainerBlTextById(r.containerId)||'-';myPending.push({...r,returnIndex:realIndex,containerNo:task.containerNo,batch:task.batch||c?.batch,containerSeq:c?.containerSeq,blText});}});
       let html='<div class="card"><div class="card-header"><span class="card-title">🔄 还箱确认</span></div><div class="search-bar"><input type="text" id="returnSearch" placeholder="集装箱号 / 提单号" style="width:250px;"><button class="btn btn-primary" onclick="filterReturnList()">查询</button><button class="btn" onclick="resetReturnFilter()">重置</button></div><div id="returnList"></div></div>';
       container.innerHTML=html;
       renderReturnList(myPending);
@@ -2372,7 +2372,7 @@
       if(filtered.length===0){document.getElementById('returnList').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">暂无待还箱任务</div></div>';return;}
       renderTable('returnList',['批次','集装箱号','提单号','地点','掏箱时间','还箱时间','凭证','操作'],filtered,(r)=>{
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td>${r.batch||''}</td><td>${r.containerNo||''}</td><td title="${r.blText||'-'}">${r.blText||'-'}</td><td>${r.location||''}</td><td>${fmtDate(r.unpackDate)}</td><td><input type="date" id="retDate_${r.containerId}" class="form-control" style="width:140px;"></td><td><input type="file" id="proof_${r.containerId}" class="form-control" style="width:120px;" accept="image/*,.pdf"></td><td><button class="btn btn-sm btn-primary" onclick="doReturn(${r.containerId})">确认还箱</button></td>`;
+        tr.innerHTML=`<td>${r.batch||''}</td><td>${r.containerNo||''}</td><td title="${r.blText||'-'}">${r.blText||'-'}</td><td>${r.location||''}</td><td>${fmtDate(r.unpackDate)}</td><td><input type="date" id="retDate_${r.containerId}" class="form-control" style="width:140px;"></td><td><input type="file" id="proof_${r.containerId}" class="form-control" style="width:120px;" accept="image/*,.pdf"></td><td><button class="btn btn-sm btn-primary" onclick="doReturnByIndex(${r.returnIndex})">确认还箱</button></td>`;
         return tr;
       });
     }
@@ -2380,34 +2380,41 @@
     function filterReturnList(){
       let pendingReturns=returnRecords.filter(r=>!r.isReturnConfirmed&&r.type==='return_needed'&&!isProducedCompletedContainerId(r.containerId));
       let myPending=[];
-      pendingReturns.forEach(r=>{let task=transportTasks.find(t=>t.containerId===r.containerId&&t.to===r.location);if(task&&task.carrier===currentUser.carrier){let c=containers.find(c=>c.id===r.containerId);let blText=getContainerBlTextById(r.containerId)||'-';myPending.push({...r,containerNo:task.containerNo,batch:task.batch||c?.batch,containerSeq:c?.containerSeq,blText});}});
+      pendingReturns.forEach(r=>{let realIndex=returnRecords.indexOf(r);let task=transportTasks.find(t=>String(t.containerId)===String(r.containerId)&&t.to===r.location);if(task&&task.carrier===currentUser.carrier){let c=containers.find(c=>String(c.id)===String(r.containerId));let blText=getContainerBlTextById(r.containerId)||'-';myPending.push({...r,returnIndex:realIndex,containerNo:task.containerNo,batch:task.batch||c?.batch,containerSeq:c?.containerSeq,blText});}});
       renderReturnList(myPending);
     }
     
     function resetReturnFilter(){document.getElementById('returnSearch').value='';filterReturnList();}
     
-    window.doReturn = function(containerId){
+    window.doReturnByIndex = function(returnIndex){
       try{
+        let record = returnRecords[returnIndex];
+        if(!record || record.isReturnConfirmed || record.type !== 'return_needed'){
+          alert('未找到待还箱记录，可能已经确认过，请刷新页面后再试。');
+          return;
+        }
+        let containerId = record.containerId;
         let retDateEl = document.getElementById(`retDate_${containerId}`);
         let proofEl = document.getElementById(`proof_${containerId}`);
         let retDate = retDateEl ? retDateEl.value : '';
         let file = proofEl && proofEl.files ? proofEl.files[0] : null;
         if(!retDate){ alert('请填写还箱时间'); return; }
 
-        let record = returnRecords.find(r => r.containerId === containerId && !r.isReturnConfirmed && r.type === 'return_needed');
-        if(!record){ alert('未找到待还箱记录，可能已经确认过，请刷新页面后再试。'); return; }
-
         const finishReturn = function(proofData){
           record.returnDate = fmtDate(retDate);
           record.isReturnConfirmed = true;
           record.type = 'return';
           record.proof = proofData || '';
-          saveData();
+          try{
+            saveData();
+          }catch(e){
+            alert('还箱已确认，但保存失败：' + (e.message || e));
+            return;
+          }
           filterReturnList();
           alert('还箱确认成功');
         };
 
-        // 还箱凭证支持上传；如现场暂时没有凭证，也允许先确认还箱，避免按钮无响应。
         if(!file){
           if(confirm('未上传还箱凭证，是否继续确认还箱？')){
             finishReturn('');
@@ -2423,7 +2430,17 @@
         alert('确认还箱失败：' + (err && err.message ? err.message : err));
       }
     };
-    
+
+    // 兼容旧按钮：如果旧页面缓存仍调用 doReturn，则按 containerId 宽松匹配第一条待还箱记录
+    window.doReturn = function(containerId){
+      let idx = returnRecords.findIndex(r => String(r.containerId) === String(containerId) && !r.isReturnConfirmed && r.type === 'return_needed');
+      if(idx < 0){
+        alert('未找到待还箱记录，可能已经确认过，请刷新页面后再试。');
+        return;
+      }
+      doReturnByIndex(idx);
+    };
+
     // 动态运输计划
     function renderDynamicPlan(container){
       let available = getDynamicAvailableContainers();
