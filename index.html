@@ -613,7 +613,7 @@
    
     // 缓存费用计算结果
     let cachedFeeData = { date: null, fees: {}, totalStorage: 0, totalNormalStorage: 0, totalAbnormalStorage: 0, totalDemurrage: 0, storageWarningList: [], demurrageWarningList: [] };
-    const STORAGE_NORMAL_DAYS = 15;
+    // 正常收费时长由堆存费配置中的 fixedDays 字段维护，不再固定为 15 天。
 
     // ==================== 辅助函数 ====================
     function fmtDate(dateStr) {
@@ -800,6 +800,18 @@
       return { text: c.customsStatus || '清关中', cls: 'status-clearing', loc };
     }
     
+    function isProducedCompletedContainerId(containerId){
+      return productionRecords.some(p => p.containerIds && p.containerIds.includes(containerId));
+    }
+
+    function isOperationalVisibleContainer(c){
+      return c && !isProducedCompletedContainerId(c.id);
+    }
+
+    function isOperationalVisibleTask(t){
+      return t && !isProducedCompletedContainerId(t.containerId);
+    }
+
     function getIraList(containerId) {
       let bls = containerBlMap.filter(m => m.containerId === containerId).map(m => m.blNo);
       let iraList = [];
@@ -826,22 +838,24 @@
     
     // ==================== 费用计算函数 ====================
     function calculateStorageFeeBreakdown(container, currentDate) {
-      if (!container.eta) return { total: 0, normal: 0, abnormal: 0, days: 0, normalDays: 0, abnormalDays: 0 };
+      if (!container.eta) return { total: 0, normal: 0, abnormal: 0, days: 0, normalDays: 0, abnormalDays: 0, normalLimitDays: 0, config: null };
       let config = getStorageConfigByDate(container.eta);
-      if(!config) return { total: 0, normal: 0, abnormal: 0, days: 0, normalDays: 0, abnormalDays: 0 };
+      if(!config) return { total: 0, normal: 0, abnormal: 0, days: 0, normalDays: 0, abnormalDays: 0, normalLimitDays: 0, config: null };
       let etaDate = container.eta.replace(/\//g, '-');
       let startDate = etaDate;
       let endDate = container.actualPickupTime ? container.actualPickupTime.split('T')[0] : currentDate;
       let days = getDaysDiff(startDate, endDate);
-      if (days <= 0) return { total: 0, normal: 0, abnormal: 0, days: 0, normalDays: 0, abnormalDays: 0 };
+      if (days <= 0) return { total: 0, normal: 0, abnormal: 0, days: 0, normalDays: 0, abnormalDays: 0, normalLimitDays: Number(config.fixedDays || 0), config };
 
-      // 业务逻辑：到港后第 1-15 天为正常堆存费，第 16 天开始为异常堆存费。
-      // 正常费用使用配置中的正常费用，异常费用按“异常日费/天”累计。
-      let normalDays = Math.min(days, STORAGE_NORMAL_DAYS);
-      let abnormalDays = Math.max(0, days - STORAGE_NORMAL_DAYS);
+      // 堆存费配置逻辑：
+      // 正常收费时长、正常费用、超期每日异常费用都由“费率配置”按生效时间段维护。
+      // 系统根据集装箱到港日期匹配对应时段的配置。
+      let normalLimitDays = Math.max(0, Number(config.fixedDays || 0));
+      let normalDays = Math.min(days, normalLimitDays);
+      let abnormalDays = Math.max(0, days - normalLimitDays);
       let normal = normalDays > 0 ? Number(config.fixedRate || 0) : 0;
       let abnormal = abnormalDays * Number(config.overtimeRate || 0);
-      return { total: normal + abnormal, normal, abnormal, days, normalDays, abnormalDays };
+      return { total: normal + abnormal, normal, abnormal, days, normalDays, abnormalDays, normalLimitDays, config };
     }
 
     function calculateStorageFee(container, currentDate) {
@@ -875,7 +889,7 @@
       if (type === 'storage') {
         let config = getStorageConfigByDate(container.eta);
         if(!config) return 999;
-        let remaining = config.fixedDays - daysFromEta;
+        let remaining = Number(config.fixedDays || 0) - daysFromEta;
         return remaining > 0 ? remaining : 0;
       } else {
         let config = getDemurrageConfigByDate(container, container.eta);
@@ -916,7 +930,7 @@
       let storageWarningList = [];
       let demurrageWarningList = [];
       let fees = {};
-      for (let c of containers) {
+      for (let c of containers.filter(isOperationalVisibleContainer)) {
         let result = calculateFeesForContainer(c, currentDate);
         fees[c.id] = result;
         totalStorage += result.storageFee;
@@ -1050,7 +1064,8 @@
       let todayAbnormalStorage = 0;
       let todayDemurrage = 0;
 
-      containers.forEach(c => {
+      let activeContainers = containers.filter(isOperationalVisibleContainer);
+      activeContainers.forEach(c => {
         let todayFees = calculateFeesForContainer(c, targetDate);
         let prevFees = calculateFeesForContainer(c, prevDate);
         todayAbnormalStorage += Math.max(0, (todayFees.abnormalStorageFee || 0) - (prevFees.abnormalStorageFee || 0));
@@ -1058,7 +1073,7 @@
       });
 
       // 今日清关完成数量按集装箱统计：该集装箱关联的提单全部清关，且至少一个关联提单清关时间为今天
-      let clearanceCompleted = containers.filter(c => {
+      let clearanceCompleted = activeContainers.filter(c => {
         let blNos = containerBlMap.filter(m => m.containerId === c.id).map(m => m.blNo);
         if (blNos.length === 0) return false;
         let relatedBls = blNos.map(no => blList.find(b => b.blNo === no || b.houseBlNo === no)).filter(Boolean);
@@ -1070,13 +1085,13 @@
       let plannedPickup = pickupPlans.filter(p => p.status !== 'cancelled' && isDateEqual(p.arrivalDate, targetDate)).length;
       let actualPickup = pickupPlans.filter(p => p.status === 'confirmed' && isDateEqual(p.actualPickupTime, targetDate)).length;
       if (actualPickup === 0) {
-        actualPickup = containers.filter(c => isDateEqual(c.actualPickupTime, targetDate)).length;
+        actualPickup = activeContainers.filter(c => isDateEqual(c.actualPickupTime, targetDate)).length;
       }
       let plannedFactoryArrival = pickupPlans.filter(p => p.status !== 'cancelled' && p.destination === '工厂' && isDateEqual(p.arrivalDate, targetDate)).length;
       let actualFactoryArrival = transportTasks.filter(t => t.to === '工厂' && (t.status === 'arrived' || t.actualArrival) && isDateEqual(t.actualArrival, targetDate)).length;
 
       // 已清关待提箱：清关已完成，但运输公司还没有确认实际提箱时间
-      let clearedPendingPickupList = containers.filter(c => c.customsStatus === '已清关' && !c.actualPickupTime);
+      let clearedPendingPickupList = activeContainers.filter(c => c.customsStatus === '已清关' && !c.actualPickupTime);
       let clearedPendingPickup = clearedPendingPickupList.length;
       let clearedPendingPickupAbnormal = clearedPendingPickupList.filter(c => {
         let fees = calculateFeesForContainer(c, targetDate);
@@ -1099,11 +1114,12 @@
     }
 
     function renderDashboard(container){
-      let total=containers.length;
-      let waiting=containers.filter(c=>c.customsStatus==='清关中').length;
-      let inTransit=transportTasks.filter(t=>t.status==='in_transit').length;
-      let stock={'港口':0,'RG堆场':0,'Rio Claro':0,'IRA库房':0,'工厂':0,'已生产':0};
-      containers.forEach(c=>{let loc=getContainerLocation(c.id);let produced=productionRecords.some(p=>p.containerIds&&p.containerIds.includes(c.id));if(produced) stock['已生产']++; else stock[loc]=(stock[loc]||0)+1;});
+      let activeContainers=containers.filter(isOperationalVisibleContainer);
+      let total=activeContainers.length;
+      let waiting=activeContainers.filter(c=>c.customsStatus==='清关中').length;
+      let inTransit=transportTasks.filter(t=>t.status==='in_transit' && isOperationalVisibleTask(t)).length;
+      let stock={'港口':0,'RG堆场':0,'Rio Claro':0,'IRA库房':0,'工厂':0};
+      activeContainers.forEach(c=>{let loc=getContainerLocation(c.id); stock[loc]=(stock[loc]||0)+1;});
       let totalStorage = cachedFeeData.totalStorage || 0;
       let totalAbnormalStorage = cachedFeeData.totalAbnormalStorage || 0;
       let totalDemurrage = cachedFeeData.totalDemurrage || 0;
@@ -1571,6 +1587,7 @@
       });
 
       renderEmptyOrTable('completedIraEvergreen', '📌 长荣提单', ['批次','主提单号','分提单号','IRA号','状态','操作'], completedMaster, (bl)=>{
+        let key=getBlIdentifier(bl);
         let tr=document.createElement('tr');
         tr.innerHTML=`<td>${getRelatedBatchText(bl)||'-'}</td><td>${bl.masterBlNo||'-'}</td><td>${bl.houseBlNo||'-'}</td><td>${bl.iraNo||'-'}</td><td><span class="status-badge ${bl.isCleared?'status-ready':'status-clearing'}">${bl.isCleared?'已清关':'清关中'}</span></td><td><button class="btn btn-sm btn-warning" onclick="editIraRecord('${key}')">编辑</button></td>`;
         return tr;
@@ -1812,7 +1829,7 @@
     // ==================== 以下为简化版的其他模块（保持原有功能） ====================
     function renderPickupPlan(container){
       updateContainerStatus();
-      let allReady=containers.filter(c=>c.customsStatus==='已清关'&&!c.actualPickupTime&&!pickupPlans.some(p=>p.containerId===c.id&&p.status!=='cancelled'));
+      let allReady=containers.filter(c=>isOperationalVisibleContainer(c)&&c.customsStatus==='已清关'&&!c.actualPickupTime&&!pickupPlans.some(p=>p.containerId===c.id&&p.status!=='cancelled'));
       allReady.sort((a,b)=>String(a.batch||'').localeCompare(String(b.batch||'')) || String(a.containerNo||'').localeCompare(String(b.containerNo||'')));
       let published=pickupPlans.filter(p=>p.status!=='cancelled');
       container.innerHTML=`
@@ -1854,7 +1871,7 @@
 
     window.filterPickupTable = function(){
       // 顶部查询条件同时作用于“待发布集装箱”和“已发布提箱计划”
-      let ready=containers.filter(c=>c.customsStatus==='已清关'&&!c.actualPickupTime&&!pickupPlans.some(p=>p.containerId===c.id&&p.status!=='cancelled'));
+      let ready=containers.filter(c=>isOperationalVisibleContainer(c)&&c.customsStatus==='已清关'&&!c.actualPickupTime&&!pickupPlans.some(p=>p.containerId===c.id&&p.status!=='cancelled'));
       let published=pickupPlans.filter(p=>p.status!=='cancelled');
       renderPickupTable(filterPickupRows(ready,'pickup'));
       renderPublishedPlans(filterPickupRows(published,'pickup'));
@@ -1991,8 +2008,8 @@
     
     // 运输任务（带日期筛选）
     function renderTransportTasks(container){
-      let myPickupTasks = pickupPlans.filter(p => p.carrier === currentUser.carrier && p.status !== 'confirmed' && p.status !== 'cancelled');
-      let myTransitTasks = transportTasks.filter(t => t.carrier === currentUser.carrier && t.status === 'in_transit');
+      let myPickupTasks = pickupPlans.filter(p => p.carrier === currentUser.carrier && p.status !== 'confirmed' && p.status !== 'cancelled' && !isProducedCompletedContainerId(p.containerId));
+      let myTransitTasks = transportTasks.filter(t => t.carrier === currentUser.carrier && t.status === 'in_transit' && isOperationalVisibleTask(t));
       myPickupTasks.sort((a,b)=>String(a.arrivalDate||'').localeCompare(String(b.arrivalDate||'')));
       myTransitTasks.sort((a,b)=>String(a.estimatedArrival||'').localeCompare(String(b.estimatedArrival||'')));
       let dateGroups = new Map();
@@ -2037,8 +2054,8 @@
     }
     
     function renderTransportTasksWithDate(container, selectedDate){
-      let myPickupTasks = pickupPlans.filter(p => p.carrier === currentUser.carrier && p.status !== 'confirmed' && p.status !== 'cancelled');
-      let myTransitTasks = transportTasks.filter(t => t.carrier === currentUser.carrier && t.status === 'in_transit');
+      let myPickupTasks = pickupPlans.filter(p => p.carrier === currentUser.carrier && p.status !== 'confirmed' && p.status !== 'cancelled' && !isProducedCompletedContainerId(p.containerId));
+      let myTransitTasks = transportTasks.filter(t => t.carrier === currentUser.carrier && t.status === 'in_transit' && isOperationalVisibleTask(t));
       let filteredPickup = myPickupTasks.filter(p => getDatePart(p.arrivalDate) === selectedDate);
       let filteredTransit = myTransitTasks.filter(t => {let td = t.estimatedArrival ? t.estimatedArrival.split('T')[0] : null; return td === selectedDate;});
       let dateGroups = new Map();
@@ -2104,8 +2121,8 @@
     };
     
     window.exportTransportTasks = function(){
-      let myPickupTasks = pickupPlans.filter(p => p.carrier === currentUser.carrier && p.status !== 'confirmed' && p.status !== 'cancelled');
-      let myTransitTasks = transportTasks.filter(t => t.carrier === currentUser.carrier && t.status === 'in_transit');
+      let myPickupTasks = pickupPlans.filter(p => p.carrier === currentUser.carrier && p.status !== 'confirmed' && p.status !== 'cancelled' && !isProducedCompletedContainerId(p.containerId));
+      let myTransitTasks = transportTasks.filter(t => t.carrier === currentUser.carrier && t.status === 'in_transit' && isOperationalVisibleTask(t));
       let wsData = [['类型','批次','集装箱号','计划到箱时间','目的地','状态']];
       myPickupTasks.forEach(item=>{wsData.push(['待确认提箱',item.batch,item.containerNo,fmtDateTime(item.arrivalDate),item.destination||'-','待确认']);});
       myTransitTasks.forEach(item=>{wsData.push(['运输中',item.batch,item.containerNo,fmtDateTime(item.estimatedArrival),item.to||'-','运输中']);});
@@ -2118,15 +2135,27 @@
     
     // 到货确认
     function renderLocationConfirm(container){
-      let arriving=transportTasks.filter(t=>t.status==='in_transit'&&t.to===currentUser.location);
-      let arrived=transportTasks.filter(t=>t.status==='arrived'&&t.to===currentUser.location);
+      let arriving=transportTasks.filter(t=>t.status==='in_transit'&&t.to===currentUser.location&&isOperationalVisibleTask(t));
+      let arrived=transportTasks.filter(t=>t.status==='arrived'&&t.to===currentUser.location&&isOperationalVisibleTask(t));
+      let pendingUnpack=[];
+      let completedUnpack=[];
+      arrived.forEach(t=>{
+        let needUnpack=(t.to==='Rio Claro'||t.to==='IRA库房'||t.to==='工厂');
+        let existingRecord=returnRecords.find(r=>r.containerId===t.containerId&&r.location===t.to);
+        if(existingRecord&&(existingRecord.type==='unpack'||existingRecord.isReturnConfirmed||existingRecord.type==='return_needed')) completedUnpack.push(t);
+        else if(needUnpack) pendingUnpack.push(t);
+        else pendingUnpack.push(t);
+      });
       let html='<div class="card"><div class="card-header"><span class="card-title">✅ 在途运输 - 到货确认</span></div>';
       if(arriving.length===0)html+='<div style="padding:20px;text-align:center">暂无在途运输</div>';
       else html+='<div id="arrivingTable"></div>';
-      html+=`</div><div class="card"><div class="card-header"><span class="card-title">📦 已到达 - ${currentUser.location}</span></div>`;
-      if(arrived.length===0)html+='<div style="padding:20px;text-align:center">暂无已到达</div>';
-      else html+='<div id="arrivedTable"></div>';
-      html+='</div>';
+      html+=`</div><div class="card"><div class="card-header"><span class="card-title">📦 待确认掏箱 - ${currentUser.location}（${pendingUnpack.length}）</span></div>`;
+      if(pendingUnpack.length===0)html+='<div style="padding:20px;text-align:center">暂无待确认掏箱</div>';
+      else html+='<div id="pendingUnpackTable"></div>';
+      html+=`</div><div class="card"><div class="card-header"><span class="card-title">✅ 已掏箱 / 已完成 - ${currentUser.location}（${completedUnpack.length}）</span><button class="btn btn-sm" id="btnCompletedUnpack" onclick="toggleHistorySection('completedUnpackBody','btnCompletedUnpack')">展开查看</button></div><div id="completedUnpackBody" style="display:none;">`;
+      if(completedUnpack.length===0)html+='<div style="padding:20px;text-align:center">暂无已掏箱记录</div>';
+      else html+='<div id="completedUnpackTable"></div>';
+      html+='</div></div>';
       container.innerHTML=html;
       if(arriving.length>0){
         renderTable('arrivingTable',['批次','集装箱号','出发地','目的地','预计到达','操作'],arriving,(t)=>{
@@ -2135,17 +2164,23 @@
           return tr;
         });
       }
-      if(arrived.length>0){
-        renderTable('arrivedTable',['批次','集装箱号','到达时间','操作'],arrived,(t)=>{
+      if(pendingUnpack.length>0){
+        renderTable('pendingUnpackTable',['批次','集装箱号','到达时间','操作'],pendingUnpack,(t)=>{
           let needUnpack=(t.to==='Rio Claro'||t.to==='IRA库房'||t.to==='工厂');
-          let existingRecord=returnRecords.find(r=>r.containerId===t.containerId&&r.location===t.to);
-          let actionHtml='';
-          if(existingRecord&&existingRecord.type==='return_needed'&&!existingRecord.isReturnConfirmed) actionHtml='<span class="status-badge status-return-pending">待还箱</span>';
-          else if(existingRecord&&(existingRecord.type==='unpack'||existingRecord.isReturnConfirmed)) actionHtml='<span class="status-badge status-ready">已完成</span>';
-          else if(!needUnpack) actionHtml=`<button class="btn btn-sm btn-success" onclick="confirmArrivalOnly(${t.id})">确认到达</button>`;
-          else actionHtml=`<button class="btn btn-sm btn-warning" onclick="doUnpack(${t.id})">确认掏箱</button>`;
+          let actionHtml=!needUnpack?`<button class="btn btn-sm btn-success" onclick="confirmArrivalOnly(${t.id})">确认到达</button>`:`<button class="btn btn-sm btn-warning" onclick="doUnpack(${t.id})">确认掏箱</button>`;
           let tr=document.createElement('tr');
           tr.innerHTML=`<td>${t.batch}</td><td>${t.containerNo}</td><td>${t.actualArrival?fmtDate(t.actualArrival.split('T')[0]):'-'}</td><td>${actionHtml}</td>`;
+          return tr;
+        });
+      }
+      if(completedUnpack.length>0){
+        renderTable('completedUnpackTable',['批次','集装箱号','到达时间','掏箱/还箱状态'],completedUnpack,(t)=>{
+          let existingRecord=returnRecords.find(r=>r.containerId===t.containerId&&r.location===t.to);
+          let status='已完成';
+          let cls='status-ready';
+          if(existingRecord&&existingRecord.type==='return_needed'&&!existingRecord.isReturnConfirmed){status='待还箱';cls='status-return-pending';}
+          let tr=document.createElement('tr');
+          tr.innerHTML=`<td>${t.batch}</td><td>${t.containerNo}</td><td>${t.actualArrival?fmtDate(t.actualArrival.split('T')[0]):'-'}</td><td><span class="status-badge ${cls}">${status}</span></td>`;
           return tr;
         });
       }
@@ -2157,7 +2192,7 @@
     
     // 还箱确认
     function renderReturnConfirm(container){
-      let pendingReturns=returnRecords.filter(r=>!r.isReturnConfirmed&&r.type==='return_needed');
+      let pendingReturns=returnRecords.filter(r=>!r.isReturnConfirmed&&r.type==='return_needed'&&!isProducedCompletedContainerId(r.containerId));
       let myPending=[];
       pendingReturns.forEach(r=>{let task=transportTasks.find(t=>t.containerId===r.containerId&&t.to===r.location);if(task&&task.carrier===currentUser.carrier){let c=containers.find(c=>c.id===r.containerId);let blText=getContainerBlTextById(r.containerId)||'-';myPending.push({...r,containerNo:task.containerNo,batch:task.batch||c?.batch,containerSeq:c?.containerSeq,blText});}});
       let html='<div class="card"><div class="card-header"><span class="card-title">🔄 还箱确认</span></div><div class="search-bar"><input type="text" id="returnSearch" placeholder="集装箱号 / 提单号" style="width:250px;"><button class="btn btn-primary" onclick="filterReturnList()">查询</button><button class="btn" onclick="resetReturnFilter()">重置</button></div><div id="returnList"></div></div>';
@@ -2177,7 +2212,7 @@
     }
     
     function filterReturnList(){
-      let pendingReturns=returnRecords.filter(r=>!r.isReturnConfirmed&&r.type==='return_needed');
+      let pendingReturns=returnRecords.filter(r=>!r.isReturnConfirmed&&r.type==='return_needed'&&!isProducedCompletedContainerId(r.containerId));
       let myPending=[];
       pendingReturns.forEach(r=>{let task=transportTasks.find(t=>t.containerId===r.containerId&&t.to===r.location);if(task&&task.carrier===currentUser.carrier){let c=containers.find(c=>c.id===r.containerId);let blText=getContainerBlTextById(r.containerId)||'-';myPending.push({...r,containerNo:task.containerNo,batch:task.batch||c?.batch,containerSeq:c?.containerSeq,blText});}});
       renderReturnList(myPending);
@@ -2190,10 +2225,10 @@
     // 动态运输计划
     function renderDynamicPlan(container){
       let available = getDynamicAvailableContainers();
-      let published = transportTasks.filter(t => t.status === 'in_transit' && t.source === 'dynamic');
+      let published = transportTasks.filter(t => t.status === 'in_transit' && t.source === 'dynamic' && isOperationalVisibleTask(t));
       // 兼容旧数据：历史动态运输任务没有 source 字段时，也纳入已发布动态计划
       if(published.length === 0){
-        published = transportTasks.filter(t => t.status === 'in_transit' && t.from !== '港口');
+        published = transportTasks.filter(t => t.status === 'in_transit' && t.from !== '港口' && isOperationalVisibleTask(t));
       }
       container.innerHTML=`
         <div class="card dynamic-card">
@@ -2298,7 +2333,7 @@
 
     function filterDynamicList(){
       renderDynamicTable(getDynamicAvailableContainers());
-      let published = transportTasks.filter(t => t.status === 'in_transit' && (t.source === 'dynamic' || t.from !== '港口'));
+      let published = transportTasks.filter(t => t.status === 'in_transit' && (t.source === 'dynamic' || t.from !== '港口') && isOperationalVisibleTask(t));
       renderPublishedDynamic(filterDynamicTasks(published));
     }
 
@@ -2347,8 +2382,8 @@
 
     // 库存看板
     function renderLocationStock(container){
-      let stock={'港口':0,'RG堆场':0,'Rio Claro':0,'IRA库房':0,'工厂':0,'已生产':0};
-      containers.forEach(c=>{let loc=getContainerLocation(c.id);let produced=productionRecords.some(p=>p.containerIds&&p.containerIds.includes(c.id));if(produced) stock['已生产']++; else stock[loc]=(stock[loc]||0)+1;});
+      let stock={'港口':0,'RG堆场':0,'Rio Claro':0,'IRA库房':0,'工厂':0};
+      containers.filter(isOperationalVisibleContainer).forEach(c=>{let loc=getContainerLocation(c.id); stock[loc]=(stock[loc]||0)+1;});
       container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📍 库存看板</span></div><div style="font-size:13px;color:#909399;margin-bottom:12px;text-align:center;">点击库存地点可查看该地点的集装箱明细</div><div class="location-stock-grid">${Object.entries(stock).map(([k,v])=>`<div class="location-stock-item" onclick="showLocationStockDetail('${k}')" title="查看${k}集装箱明细"><div class="location-stock-count">${v}</div><div>${k}</div><div style="font-size:12px;color:#909399;margin-top:6px;">查看明细</div></div>`).join('')}</div></div>`;
     }
 
@@ -2492,22 +2527,22 @@
     function renderRateConfig(container){
       let carriers = ['MSC', 'COSCO', '长荣'];
       let types = ['普柜', '冷柜'];
-      let storageHtml = '<h3>📊 堆存费配置（按时间段）</h3><div style="font-size:12px;color:#909399;margin-bottom:10px;">说明：系统按 1-15 天计算正常费用，第 16 天开始按异常日费累计异常费用。</div>';
+      let storageHtml = '<h3>📊 堆存费配置（按时间段）</h3><div style="font-size:12px;color:#909399;margin-bottom:10px;">说明：系统根据集装箱到港日期匹配生效时间段；正常收费时长、正常费用、超期每日异常费用均可手动维护。工作台只展示异常堆存费。</div>';
+      storageHtml += '<div class="table-wrapper"><table class="data-table"><thead><tr><th>生效开始</th><th>生效结束</th><th>正常收费时长/天</th><th>正常费用(BRL)</th><th>超期异常日费(BRL/天)</th><th>操作</th></tr></thead><tbody>';
       if(storageConfig.length === 0){
-        storageHtml += '<div style="padding:20px;text-align:center;color:#909399;">暂无配置，点击下方按钮添加</div>';
+        storageHtml += '<tr><td colspan="6" style="text-align:center;color:#909399;">暂无配置，点击下方按钮添加</td></tr>';
       }
       storageConfig.forEach((cfg, idx) => {
-        storageHtml += `<div class="rate-period-row">
-          <input type="date" id="storage_start_${idx}" value="${toDateInput(cfg.startDate)}" style="width:105px;">
-          <span>至</span>
-          <input type="date" id="storage_end_${idx}" value="${toDateInput(cfg.endDate)}" style="width:105px;">
-          <input type="number" id="storage_fixedDays_${idx}" value="${cfg.fixedDays}" placeholder="正常天数" style="width:82px;">
-          <input type="number" id="storage_fixedRate_${idx}" value="${cfg.fixedRate}" placeholder="正常费用" style="width:82px;">
-          <input type="number" id="storage_overtimeRate_${idx}" value="${cfg.overtimeRate}" placeholder="异常日费" style="width:82px;">
-          <button class="btn btn-sm btn-danger" onclick="deleteStoragePeriod(${idx})">删除</button>
-        </div>`;
+        storageHtml += `<tr>
+          <td><input type="date" id="storage_start_${idx}" value="${toDateInput(cfg.startDate)}" style="width:118px;"></td>
+          <td><input type="date" id="storage_end_${idx}" value="${toDateInput(cfg.endDate)}" style="width:118px;"></td>
+          <td><input type="number" id="storage_fixedDays_${idx}" value="${cfg.fixedDays ?? 15}" min="0" placeholder="例如15" style="width:110px;"></td>
+          <td><input type="number" id="storage_fixedRate_${idx}" value="${cfg.fixedRate ?? 0}" min="0" step="0.01" placeholder="正常费用" style="width:110px;"></td>
+          <td><input type="number" id="storage_overtimeRate_${idx}" value="${cfg.overtimeRate ?? 0}" min="0" step="0.01" placeholder="异常日费" style="width:130px;"></td>
+          <td><button class="btn btn-sm btn-danger" onclick="deleteStoragePeriod(${idx})">删除</button></td>
+        </tr>`;
       });
-      storageHtml += `<div class="rate-period-row"><button class="btn btn-sm btn-success" onclick="addStoragePeriod()">+ 添加堆存费时段</button></div>`;
+      storageHtml += `</tbody></table></div><div style="margin-top:12px;"><button class="btn btn-sm btn-success" onclick="addStoragePeriod()">+ 添加堆存费时段</button></div>`;
       
       let demurrageHtml = '<h3>🚢 滞箱费配置（按时间段）</h3><div class="table-wrapper"><table class="data-table"><thead><tr><th>船公司</th><th>箱型</th><th>生效开始</th><th>生效结束</th><th>免费天数</th><th>日费率(USD)</th><th>操作</th></tr></thead><tbody>';
       if(demurrageConfig.length === 0){
@@ -2535,7 +2570,7 @@
       container.innerHTML = `<div class="card"><div class="card-header"><span class="card-title">💰 费率配置</span></div>${storageHtml}<hr>${demurrageHtml}<hr>${warningHtml}<div style="margin-top:16px;"><button class="btn btn-primary" onclick="saveAllRates()">保存所有配置</button></div></div>`;
     }
     
-    window.addStoragePeriod = function(){ storageConfig.push({startDate: fmtDate(getTodayStr()), endDate: fmtDate(getTodayStr()), fixedDays: 15, fixedRate: 1000, overtimeRate: 100}); renderRateConfig(document.getElementById('mainContent')); };
+    window.addStoragePeriod = function(){ storageConfig.push({startDate: fmtDate(getTodayStr()), endDate: fmtDate(getTodayStr()), fixedDays: 15, fixedRate: 0, overtimeRate: 0}); renderRateConfig(document.getElementById('mainContent')); };
     window.deleteStoragePeriod = function(idx){ storageConfig.splice(idx,1); renderRateConfig(document.getElementById('mainContent')); };
     window.addDemPeriod = function(){ demurrageConfig.push({carrier: "MSC", type: "普柜", startDate: fmtDate(getTodayStr()), endDate: fmtDate(getTodayStr()), freeDays: 28, ratePerDay: 170}); renderRateConfig(document.getElementById('mainContent')); };
     window.deleteDemPeriod = function(idx){ demurrageConfig.splice(idx,1); renderRateConfig(document.getElementById('mainContent')); };
@@ -2558,7 +2593,10 @@
         let fixedRateInput = document.getElementById(`storage_fixedRate_${i}`);
         let overtimeRateInput = document.getElementById(`storage_overtimeRate_${i}`);
         if(startInput && endInput){
-          newStorageConfig.push({startDate: fmtDate(startInput.value), endDate: fmtDate(endInput.value), fixedDays: parseInt(fixedDaysInput.value), fixedRate: parseFloat(fixedRateInput.value), overtimeRate: parseFloat(overtimeRateInput.value)});
+          let fixedDays = Math.max(0, parseInt(fixedDaysInput.value || '0'));
+          let fixedRate = Math.max(0, parseFloat(fixedRateInput.value || '0'));
+          let overtimeRate = Math.max(0, parseFloat(overtimeRateInput.value || '0'));
+          newStorageConfig.push({startDate: fmtDate(startInput.value), endDate: fmtDate(endInput.value), fixedDays, fixedRate, overtimeRate});
         }
       }
       if(newStorageConfig.length > 0) storageConfig = newStorageConfig;
@@ -2596,7 +2634,7 @@
       let totalDemurrage = feeData.reduce((sum, c) => sum + c.demurrageFee, 0);
       container.innerHTML = `<div class="card"><div class="card-header"><span class="card-title">📈 费用报表</span><div><button class="btn export-btn" onclick="exportFeeReport()">📥 导出Excel</button></div></div>
         <div class="stats-grid"><div class="stat-card"><div class="stat-number">R$ ${totalNormalStorage.toFixed(2)}</div><div class="stat-label">正常堆存费</div></div><div class="stat-card warning-card"><div class="stat-number warning-number">R$ ${totalAbnormalStorage.toFixed(2)}</div><div class="stat-label">异常堆存费</div></div><div class="stat-card"><div class="stat-number">R$ ${totalStorage.toFixed(2)}</div><div class="stat-label">堆存费合计</div></div><div class="stat-card"><div class="stat-number">$ ${totalDemurrage.toFixed(2)}</div><div class="stat-label">滞箱费总额</div></div></div>
-        <div class="fee-card"><div class="fee-row"><span class="fee-label">费用计算截止日期:</span><span class="fee-value">${fmtDate(currentDate)}</span></div><div class="fee-row"><span class="fee-label">说明:</span><span class="fee-label">堆存费计算至提箱日，1-15天为正常费用，第16天开始为异常费用；滞箱费计算至还箱日，未发生事件则以今日为截止</span></div></div>
+        <div class="fee-card"><div class="fee-row"><span class="fee-label">费用计算截止日期:</span><span class="fee-value">${fmtDate(currentDate)}</span></div><div class="fee-row"><span class="fee-label">说明:</span><span class="fee-label">堆存费计算至提箱日，正常收费时长和异常日费按费率配置匹配；滞箱费计算至还箱日，未发生事件则以今日为截止</span></div></div>
         <div id="feeTable"></div></div>`;
       renderTable('feeTable',['批次','箱号','船公司','箱型','到港日期','提箱日期','还箱日期','堆存天数','正常堆存费(雷亚尔)','异常堆存费(雷亚尔)','堆存费合计(雷亚尔)','滞箱费(美元)'],feeData,(c)=>{
         let returnRec = returnRecords.find(r => r.containerId === c.id && r.isReturnConfirmed);
