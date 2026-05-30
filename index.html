@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V38.1 Cloud</title>
+  <title>集装箱智能监控管理系统 V38.2 Cloud Login Fix</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -544,7 +544,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V38 Cloud：使用 Google 账号登录，业务数据保存到 Supabase 云端数据库。
+        V38.2 Cloud：使用 Google 账号登录，业务数据保存到 Supabase 云端数据库。
       </div>
       <button class="login-btn" onclick="loginWithGoogle()">使用 Google 登录</button>
       <div style="margin-top: 18px; font-size: 12px; color: #909399; line-height:1.7;">
@@ -598,8 +598,7 @@
             persistSession: true,
             autoRefreshToken: true,
             detectSessionInUrl: true,
-            flowType: 'pkce',
-            storage: window.localStorage
+            flowType: 'implicit'
           }
         });
       }
@@ -708,10 +707,16 @@
         alert('请先在源码顶部填写 SUPABASE_ANON_KEY。');
         return;
       }
+
+      // V38.2: 静态 HTML / Vercel 部署使用 implicit flow，避免 PKCE code_verifier 丢失
       const { error } = await sb.auth.signInWithOAuth({
         provider: 'google',
-        options: { redirectTo: window.location.origin + window.location.pathname, queryParams: { prompt: 'select_account' } }
+        options: {
+          redirectTo: 'https://container-html-system.vercel.app',
+          queryParams: { prompt: 'select_account' }
+        }
       });
+
       if(error) alert('Google登录失败：' + error.message);
     };
 
@@ -721,46 +726,27 @@
       cloudUser = null;
       cloudProfile = null;
       currentUser = null;
+      if(window.location.hash || window.location.search){
+        window.history.replaceState({}, document.title, window.location.origin + window.location.pathname);
+      }
       document.getElementById('mainApp').style.display='none';
       document.getElementById('loginPage').style.display='flex';
-    }
-
-
-    async function completeOAuthCallbackIfNeeded(){
-      const sb = initSupabaseClient();
-      if(!sb) return null;
-
-      const url = new URL(window.location.href);
-      const hasCode = url.searchParams.has('code');
-      const hasError = url.searchParams.has('error') || url.searchParams.has('error_description');
-
-      if(hasError){
-        console.error('OAuth callback error:', url.search);
-        alert('Google登录回调失败：' + (url.searchParams.get('error_description') || url.searchParams.get('error') || '未知错误'));
-        return null;
-      }
-
-      if(hasCode){
-        const { data, error } = await sb.auth.exchangeCodeForSession(window.location.href);
-        if(error){
-          console.error('exchangeCodeForSession error:', error);
-          alert('登录会话创建失败：' + error.message);
-          return null;
-        }
-        // 清理 URL 上的 code，避免刷新后重复交换
-        window.history.replaceState({}, document.title, window.location.origin + window.location.pathname);
-        return data.session || null;
-      }
-
-      const { data } = await sb.auth.getSession();
-      return data.session || null;
     }
 
     async function ensureCloudSession(){
       const sb = initSupabaseClient();
       if(!sb) return false;
-      const session = await completeOAuthCallbackIfNeeded();
+
+      const { data, error: sessionError } = await sb.auth.getSession();
+      if(sessionError){
+        console.error('getSession error', sessionError);
+        alert('读取登录会话失败：' + sessionError.message);
+        return false;
+      }
+
+      const session = data && data.session ? data.session : null;
       if(!session || !session.user) return false;
+
       cloudUser = session.user;
 
       const { data: profile, error } = await sb
