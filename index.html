@@ -781,7 +781,17 @@
       return null;
     }
     
-    function getContainerLocation(cid){
+    
+    function getDemurrageLastFreeDay(container){
+      if(!container || !container.eta) return '-';
+      let config = getDemurrageConfigByDate(container, container.eta);
+      if(!config || config.freeDays === undefined || config.freeDays === null || isNaN(Number(config.freeDays))) return '-';
+      let eta = normalizeDateOnly(container.eta);
+      if(!eta) return '-';
+      return fmtDate(addDaysToDateStr(eta, Number(config.freeDays || 0)));
+    }
+
+function getContainerLocation(cid){
       let s = locationStock.find(s => s.containerId === cid);
       if (s) return s.location;
       let c = containers.find(c => c.id === cid);
@@ -1397,7 +1407,7 @@
                (!locFilter||st.loc===locFilter) &&
                (!statusFilter||st.text===statusFilter);
       });
-      renderTable('containerTable',['序号','批次','集装箱序号','集装箱号','船公司','箱型','到港时间','关联提单','IRA号','当前位置','状态','操作'],filtered,(c,i)=>{
+      renderTable('containerTable',['序号','批次','集装箱序号','集装箱号','船公司','箱型','到港时间','滞箱费最后免费日','关联提单','IRA号','当前位置','状态','操作'],filtered,(c,i)=>{
         let tr=document.createElement('tr');
         let bls = containerBlMap.filter(m=>m.containerId===c.id).map(m=>{
           let bl = blList.find(b => b.blNo === m.blNo || b.houseBlNo === m.blNo);
@@ -1408,7 +1418,7 @@
         }).join(',');
         let iraList=getIraList(c.id);
         let st=getContainerFullStatus(c);
-        tr.innerHTML=`<td>${i+1}</td><td>${c.batch}</td><td>${c.containerSeq||'-'}</td><td>${c.containerNo}</td><td>${c.vessel}</td><td>${c.containerType||'-'}</td><td>${fmtDate(c.eta)}</td><td>${bls||'-'}</td><td>${iraList||'-'}</td><td><span class="status-badge status-pending">${st.loc}</span></td><td><span class="status-badge ${st.cls}">${st.text}</span></td><td><button class="btn btn-sm btn-warning" onclick="editContainer(${c.id})">编辑</button> <button class="btn btn-sm btn-danger" onclick="deleteContainer(${c.id})">删除</button></td>`;
+        tr.innerHTML=`<td>${i+1}</td><td>${c.batch}</td><td>${c.containerSeq||'-'}</td><td>${c.containerNo}</td><td>${c.vessel}</td><td>${c.containerType||'-'}</td><td>${fmtDate(c.eta)}</td><td>${getDemurrageLastFreeDay(c)}</td><td>${bls||'-'}</td><td>${iraList||'-'}</td><td><span class="status-badge status-pending">${st.loc}</span></td><td><span class="status-badge ${st.cls}">${st.text}</span></td><td><button class="btn btn-sm btn-warning" onclick="editContainer(${c.id})">编辑</button> <button class="btn btn-sm btn-danger" onclick="deleteContainer(${c.id})">删除</button></td>`;
         return tr;
       });
     }
@@ -2034,6 +2044,7 @@
             <input type="text" id="pickupSearchBatch" placeholder="批次">
             <input type="text" id="pickupSearchContainer" placeholder="集装箱号">
             <input type="text" id="pickupSearchBl" placeholder="提单号/分提单号">
+            <input type="date" id="pickupSearchDate" title="按到箱计划日期查询">
             <button class="btn btn-primary" onclick="filterPickupTable()">查询</button>
             <button class="btn" onclick="clearPickupSearch()">重置</button>
           </div>
@@ -2054,13 +2065,16 @@
       let batch=(document.getElementById(`${prefix}SearchBatch`)?.value||'').toLowerCase().trim();
       let contNo=(document.getElementById(`${prefix}SearchContainer`)?.value||'').toLowerCase().trim();
       let blNo=(document.getElementById(`${prefix}SearchBl`)?.value||'').toLowerCase().trim();
+      let planDate=(document.getElementById(`${prefix}SearchDate`)?.value||'').trim();
       return rows.filter(item=>{
         let c = item.containerNo !== undefined && item.containerId !== undefined ? containers.find(x=>x.id===item.containerId) || item : item;
         let containerId = c.id || item.containerId;
         let blText = getContainerBlTextById(containerId).toLowerCase();
+        let itemPlanDate = getDatePart(item.arrivalDate || item.estimatedArrival || '');
         return (!batch || String(c.batch||item.batch||'').toLowerCase().includes(batch)) &&
                (!contNo || String(c.containerNo||item.containerNo||'').toLowerCase().includes(contNo)) &&
-               (!blNo || blText.includes(blNo));
+               (!blNo || blText.includes(blNo)) &&
+               (!planDate || itemPlanDate === planDate);
       });
     }
 
@@ -2073,7 +2087,7 @@
     };
 
     window.clearPickupSearch = function(){
-      ['pickupSearchBatch','pickupSearchContainer','pickupSearchBl'].forEach(id=>{let el=document.getElementById(id);if(el)el.value='';});
+      ['pickupSearchBatch','pickupSearchContainer','pickupSearchBl','pickupSearchDate'].forEach(id=>{let el=document.getElementById(id);if(el)el.value='';});
       filterPickupTable();
     };
 
@@ -2215,7 +2229,9 @@
       let filteredPickup = selectedDate?myPickupTasks.filter(p=>getDatePart(p.arrivalDate)===selectedDate):[];
       let filteredTransit = selectedDate?myTransitTasks.filter(t=>{let td=t.estimatedArrival?t.estimatedArrival.split('T')[0]:null;return td===selectedDate;}):[];
       let dateTabsHtml = activeDates.length>0?`<div class="transport-date-scroll">${activeDates.map(d=>`<div class="date-tab ${selectedDate===d?'active':''}" data-date="${d}" style="background:${selectedDate===d?'#2a5298':'#f0f2f5'};color:${selectedDate===d?'white':'#333'};padding:8px 18px;border-radius:30px;cursor:pointer;">📅 ${fmtDate(d)}</div>`).join('')}</div>`:'<div style="margin-bottom:20px;padding:10px;background:#fef0e6;border-radius:8px;text-align:center;">✅ 所有日期的计划均已完成</div>';
-      let html = `<div class="card"><div class="card-header"><span class="card-title">🚛 运输任务</span><button class="btn export-btn" onclick="exportTransportTasks()">📥 导出运输任务</button></div>${dateTabsHtml}`;
+      let html = `<div class="card"><div class="card-header"><span class="card-title">🚛 运输任务</span><button class="btn export-btn" onclick="exportTransportTasks()">📥 导出运输任务</button></div>
+        <div class="search-bar"><input type="date" id="transportPlanDate" value="${selectedDate||''}" title="按日期查询到箱计划"><button class="btn btn-primary" onclick="searchTransportPlanByDate()">查询日期</button><button class="btn" onclick="resetTransportPlanDate()">重置</button></div>
+        ${dateTabsHtml}`;
       if(filteredPickup.length>0){
         html += '<div class="section-divider"></div><div class="section-label">📋 待确认提箱</div><div id="pendingPickupTable"></div>';
       } else if(selectedDate){
@@ -2234,7 +2250,7 @@
         renderTable('pendingPickupTable',['批次','集装箱号','计划到货时间','目的地','卸货口','实际提箱时间','状态','操作'],filteredPickup,(item)=>{
           let destClass=getDestClass(item.destination);
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="datetime-local" id="pickupTime_${item.id}" class="form-control" style="width:145px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="date" id="pickupTime_${item.id}" class="form-control" style="width:125px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
           return tr;
         });
       }
@@ -2258,7 +2274,9 @@
       myTransitTasks.forEach(t=>{let td=t.estimatedArrival?t.estimatedArrival.split('T')[0]:null;if(td){if(!dateGroups.has(td))dateGroups.set(td,[]);dateGroups.get(td).push(t);}});
       let activeDates = Array.from(dateGroups.keys()).sort();
       let dateTabsHtml = activeDates.length>0?`<div class="transport-date-scroll">${activeDates.map(d=>`<div class="date-tab ${selectedDate===d?'active':''}" data-date="${d}" style="background:${selectedDate===d?'#2a5298':'#f0f2f5'};color:${selectedDate===d?'white':'#333'};padding:8px 18px;border-radius:30px;cursor:pointer;">📅 ${fmtDate(d)}</div>`).join('')}</div>`:'<div style="margin-bottom:20px;padding:10px;background:#fef0e6;border-radius:8px;text-align:center;">✅ 所有日期的计划均已完成</div>';
-      let html = `<div class="card"><div class="card-header"><span class="card-title">🚛 运输任务</span><button class="btn export-btn" onclick="exportTransportTasks()">📥 导出运输任务</button></div>${dateTabsHtml}`;
+      let html = `<div class="card"><div class="card-header"><span class="card-title">🚛 运输任务</span><button class="btn export-btn" onclick="exportTransportTasks()">📥 导出运输任务</button></div>
+        <div class="search-bar"><input type="date" id="transportPlanDate" value="${selectedDate||''}" title="按日期查询到箱计划"><button class="btn btn-primary" onclick="searchTransportPlanByDate()">查询日期</button><button class="btn" onclick="resetTransportPlanDate()">重置</button></div>
+        ${dateTabsHtml}`;
       if(filteredPickup.length>0){
         html += '<div class="section-divider"></div><div class="section-label">📋 待确认提箱</div><div id="pendingPickupTable"></div>';
       } else if(selectedDate){
@@ -2277,7 +2295,7 @@
         renderTable('pendingPickupTable',['批次','集装箱号','计划到货时间','目的地','卸货口','实际提箱时间','状态','操作'],filteredPickup,(item)=>{
           let destClass=getDestClass(item.destination);
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="datetime-local" id="pickupTime_${item.id}" class="form-control" style="width:145px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="date" id="pickupTime_${item.id}" class="form-control" style="width:125px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
           return tr;
         });
       }
@@ -2291,11 +2309,22 @@
       }
     }
     
+
+    window.searchTransportPlanByDate = function(){
+      let d = document.getElementById('transportPlanDate')?.value;
+      if(!d){ alert('请选择查询日期'); return; }
+      renderTransportTasksWithDate(document.getElementById('mainContent'), d);
+    };
+
+    window.resetTransportPlanDate = function(){
+      renderTransportTasks(document.getElementById('mainContent'));
+    };
+
     window.confirmPickupTask = function(planId){
       let plan = pickupPlans.find(p => p.id === planId);
       if(!plan){alert('找不到计划');return;}
-      let actualTime = document.getElementById(`pickupTime_${planId}`).value;
-      if(!actualTime){alert('请填写实际提箱时间');return;}
+      let actualTime = document.getElementById(`pickupTime_${planId}`).value; // 仅维护年月日，不维护具体时间
+      if(!actualTime){alert('请填写实际提箱日期');return;}
       let cont = containers.find(c => c.id === plan.containerId);
       if(cont) cont.actualPickupTime = actualTime;
       plan.status = 'confirmed';
@@ -2386,35 +2415,111 @@
     window.doUnpack = function(taskId){let task=transportTasks.find(t=>t.id===taskId);if(task){let existingRecord=returnRecords.find(r=>r.containerId===task.containerId&&r.location===task.to);if(existingRecord){alert('已完成掏箱');return;}let needReturnConfirm=needsReturn(task.containerId,task.to,task.from);if(needReturnConfirm){returnRecords.push({containerId:task.containerId,location:task.to,type:'return_needed',unpackDate:fmtDate(new Date().toISOString().split('T')[0]),isReturnConfirmed:false,fromLocation:task.from});alert('已确认掏箱，请运输公司进行还箱确认');}else{returnRecords.push({containerId:task.containerId,location:task.to,type:'unpack',unpackDate:fmtDate(new Date().toISOString().split('T')[0]),isReturnConfirmed:true,fromLocation:task.from});alert('已确认掏箱，可在动态运输计划中继续运输');}saveData();renderContent();}};
     
     // 还箱确认
-    function renderReturnConfirm(container){
-      let pendingReturns=returnRecords.filter(r=>!r.isReturnConfirmed&&r.type==='return_needed'&&!isProducedCompletedContainerId(r.containerId));
-      let myPending=[];
-      pendingReturns.forEach(r=>{let realIndex=returnRecords.indexOf(r);let task=transportTasks.find(t=>String(t.containerId)===String(r.containerId)&&t.to===r.location);if(task&&task.carrier===currentUser.carrier){let c=containers.find(c=>String(c.id)===String(r.containerId));let blText=getContainerBlTextById(r.containerId)||'-';myPending.push({...r,returnIndex:realIndex,containerNo:task.containerNo,batch:task.batch||c?.batch,containerSeq:c?.containerSeq,blText});}});
-      let html='<div class="card"><div class="card-header"><span class="card-title">🔄 还箱确认</span></div><div class="search-bar"><input type="text" id="returnSearch" placeholder="集装箱号 / 提单号" style="width:250px;"><button class="btn btn-primary" onclick="filterReturnList()">查询</button><button class="btn" onclick="resetReturnFilter()">重置</button></div><div id="returnList"></div></div>';
-      container.innerHTML=html;
-      renderReturnList(myPending);
+    function buildReturnRows(onlyConfirmed){
+      let rows = [];
+      returnRecords.forEach(r => {
+        if(isProducedCompletedContainerId(r.containerId)) return;
+        let isConfirmed = !!r.isReturnConfirmed || r.type === 'return';
+        if(onlyConfirmed !== isConfirmed) return;
+        let task = transportTasks.find(t => String(t.containerId) === String(r.containerId) && t.to === r.location);
+        if(!task || task.carrier !== currentUser.carrier) return;
+        let c = containers.find(c => String(c.id) === String(r.containerId));
+        let blText = getContainerBlTextById(r.containerId) || '-';
+        rows.push({
+          ...r,
+          returnIndex: returnRecords.indexOf(r),
+          containerNo: task.containerNo || c?.containerNo || '',
+          batch: task.batch || c?.batch || '',
+          containerSeq: c?.containerSeq || '',
+          blText
+        });
+      });
+      return rows.sort((a,b)=>String(a.batch||'').localeCompare(String(b.batch||'')) || String(a.containerNo||'').localeCompare(String(b.containerNo||'')));
     }
-    
+
+    function renderReturnConfirm(container){
+      let pendingRows = buildReturnRows(false);
+      let completedRows = buildReturnRows(true);
+      let html = `
+        <div class="card">
+          <div class="card-header"><span class="card-title">🔄 还箱确认</span></div>
+          <div class="search-bar">
+            <input type="text" id="returnSearch" placeholder="集装箱号 / 提单号" style="width:250px;">
+            <button class="btn btn-primary" onclick="filterReturnList()">查询</button>
+            <button class="btn" onclick="resetReturnFilter()">重置</button>
+          </div>
+          <div class="section-label">📋 待确认还箱</div>
+          <div id="returnList"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">✅ 已确认还箱</span>
+            <button class="btn btn-sm" id="btnCompletedReturn" onclick="toggleHistorySection('completedReturnBody','btnCompletedReturn')">展开查看</button>
+          </div>
+          <div id="completedReturnBody" style="display:none;">
+            <div id="completedReturnList"></div>
+          </div>
+        </div>`;
+      container.innerHTML = html;
+      renderReturnList(pendingRows);
+      renderCompletedReturnList(completedRows);
+    }
+
+    function filterReturnRows(list){
+      let search = (document.getElementById('returnSearch')?.value || '').toLowerCase().trim();
+      return list.filter(r => !search || String(r.containerNo||'').toLowerCase().includes(search) || String(r.blText||'').toLowerCase().includes(search));
+    }
+
     function renderReturnList(list){
-      let search=document.getElementById('returnSearch')?.value.toLowerCase()||'';
-      let filtered=list.filter(r=>!search||r.containerNo.toLowerCase().includes(search)||(r.blText||'').toLowerCase().includes(search));
-      if(filtered.length===0){document.getElementById('returnList').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">暂无待还箱任务</div></div>';return;}
-      renderTable('returnList',['批次','集装箱号','提单号','地点','掏箱时间','还箱时间','凭证','操作'],filtered,(r)=>{
+      let filtered = filterReturnRows(list);
+      if(filtered.length === 0){
+        document.getElementById('returnList').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">暂无待还箱任务</div></div>';
+        return;
+      }
+      renderTable('returnList',['批次','集装箱号','提单号','地点','掏箱时间','还箱日期','凭证','操作'],filtered,(r)=>{
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td>${r.batch||''}</td><td>${r.containerNo||''}</td><td title="${r.blText||'-'}">${r.blText||'-'}</td><td>${r.location||''}</td><td>${fmtDate(r.unpackDate)}</td><td><input type="date" id="retDate_${r.containerId}" class="form-control" style="width:140px;"></td><td><input type="file" id="proof_${r.containerId}" class="form-control" style="width:120px;" accept="image/*,.pdf"></td><td><button class="btn btn-sm btn-primary" onclick="doReturnByIndex(${r.returnIndex})">确认还箱</button></td>`;
+        tr.innerHTML=`<td>${r.batch||''}</td>
+          <td>${r.containerNo||''}</td>
+          <td title="${r.blText||'-'}">${r.blText||'-'}</td>
+          <td>${r.location||''}</td>
+          <td>${fmtDate(r.unpackDate)}</td>
+          <td><input type="date" id="retDate_${r.returnIndex}" class="form-control" style="width:125px;"></td>
+          <td><input type="file" id="proof_${r.returnIndex}" class="form-control" style="width:120px;" accept="image/*,.pdf"></td>
+          <td><button class="btn btn-sm btn-primary" onclick="doReturnByIndex(${r.returnIndex})">确认还箱</button></td>`;
         return tr;
       });
     }
-    
-    function filterReturnList(){
-      let pendingReturns=returnRecords.filter(r=>!r.isReturnConfirmed&&r.type==='return_needed'&&!isProducedCompletedContainerId(r.containerId));
-      let myPending=[];
-      pendingReturns.forEach(r=>{let realIndex=returnRecords.indexOf(r);let task=transportTasks.find(t=>String(t.containerId)===String(r.containerId)&&t.to===r.location);if(task&&task.carrier===currentUser.carrier){let c=containers.find(c=>String(c.id)===String(r.containerId));let blText=getContainerBlTextById(r.containerId)||'-';myPending.push({...r,returnIndex:realIndex,containerNo:task.containerNo,batch:task.batch||c?.batch,containerSeq:c?.containerSeq,blText});}});
-      renderReturnList(myPending);
+
+    function renderCompletedReturnList(list){
+      let filtered = filterReturnRows(list);
+      if(filtered.length === 0){
+        document.getElementById('completedReturnList').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">暂无已还箱记录</div></div>';
+        return;
+      }
+      renderTable('completedReturnList',['批次','集装箱号','提单号','地点','掏箱时间','还箱日期','凭证','操作'],filtered,(r)=>{
+        let tr=document.createElement('tr');
+        tr.innerHTML=`<td>${r.batch||''}</td>
+          <td>${r.containerNo||''}</td>
+          <td title="${r.blText||'-'}">${r.blText||'-'}</td>
+          <td>${r.location||''}</td>
+          <td>${fmtDate(r.unpackDate)}</td>
+          <td>${fmtDate(r.returnDate)}</td>
+          <td>${r.proofUploaded ? (r.proofName || '已上传') : '-'}</td>
+          <td><button class="btn btn-sm btn-warning" onclick="editReturnRecord(${r.returnIndex})">编辑</button></td>`;
+        return tr;
+      });
     }
-    
-    function resetReturnFilter(){document.getElementById('returnSearch').value='';filterReturnList();}
-    
+
+    function filterReturnList(){
+      renderReturnList(buildReturnRows(false));
+      renderCompletedReturnList(buildReturnRows(true));
+    }
+
+    function resetReturnFilter(){
+      document.getElementById('returnSearch').value='';
+      filterReturnList();
+    }
+
     window.doReturnByIndex = function(returnIndex){
       try{
         let record = returnRecords[returnIndex];
@@ -2422,12 +2527,11 @@
           alert('未找到待还箱记录，可能已经确认过，请刷新页面后再试。');
           return;
         }
-        let containerId = record.containerId;
-        let retDateEl = document.getElementById(`retDate_${containerId}`);
-        let proofEl = document.getElementById(`proof_${containerId}`);
+        let retDateEl = document.getElementById(`retDate_${returnIndex}`);
+        let proofEl = document.getElementById(`proof_${returnIndex}`);
         let retDate = retDateEl ? retDateEl.value : '';
         let file = proofEl && proofEl.files ? proofEl.files[0] : null;
-        if(!retDate){ alert('请填写还箱时间'); return; }
+        if(!retDate){ alert('请填写还箱日期'); return; }
 
         if(!file){
           if(!confirm('未上传还箱凭证，是否继续确认还箱？')) return;
@@ -2438,13 +2542,12 @@
         record.type = 'return';
         record.proofUploaded = !!file;
         record.proofName = file ? file.name : '';
-        // 不保存 proof 文件内容，避免 localStorage 超限。
         if(record.proof) delete record.proof;
 
         try{
           saveData();
         }catch(e){
-          alert('保存失败：浏览器存储空间不足。系统已不再保存凭证文件内容，请刷新后重试；如仍失败，需要清理旧版保存的凭证数据。' + (e.message ? '\\n' + e.message : ''));
+          alert('保存失败：浏览器存储空间不足。系统已不再保存凭证文件内容，请刷新后重试；如仍失败，需要清理旧版保存的凭证数据。' + (e.message ? '\n' + e.message : ''));
           return;
         }
         filterReturnList();
@@ -2452,6 +2555,26 @@
       }catch(err){
         alert('确认还箱失败：' + (err && err.message ? err.message : err));
       }
+    };
+
+    window.editReturnRecord = function(returnIndex){
+      let record = returnRecords[returnIndex];
+      if(!record || (!record.isReturnConfirmed && record.type !== 'return')){
+        alert('未找到已还箱记录');
+        return;
+      }
+      let newDate = prompt('修改还箱日期，格式：YYYY/MM/DD 或 YYYY-MM-DD', record.returnDate || getTodayStr());
+      if(newDate === null) return;
+      if(!newDate.trim()){ alert('还箱日期不能为空'); return; }
+      let newProofName = prompt('修改凭证文件名/备注（可为空）', record.proofName || '');
+      if(newProofName === null) return;
+      record.returnDate = fmtDate(newDate);
+      record.proofName = newProofName.trim();
+      record.proofUploaded = !!record.proofName;
+      if(record.proof) delete record.proof;
+      saveData();
+      filterReturnList();
+      alert('已还箱记录已更新');
     };
 
     // 兼容旧按钮：如果旧页面缓存仍调用 doReturn，则按 containerId 宽松匹配第一条待还箱记录
