@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V38.3 Cloud Realtime</title>
+  <title>集装箱智能监控管理系统 V38.4 Admin Permissions</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -544,7 +544,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V38.3 Cloud：Google 登录 + Supabase 云端数据 + 实时同步。
+        V38.4 Cloud：Google 登录 + 云端实时同步 + Admin 全权限。
       </div>
       <button class="login-btn" onclick="loginWithGoogle()">使用 Google 登录</button>
       <div style="margin-top: 18px; font-size: 12px; color: #909399; line-height:1.7;">
@@ -611,7 +611,7 @@
 
     function mapProfileToCurrentUser(profile, user){
       const roleMap = {
-        'Admin': '订购科',
+        'Admin': 'Admin',
         'Purchasing': '订购科',
         'Customs': '关务',
         'RG': '运输公司RG',
@@ -637,6 +637,15 @@
       if(mappedRole === 'IRA库房管理员') mapped.location = 'IRA库房';
       if(mappedRole === '工厂管理员') mapped.location = '工厂';
       return mapped;
+    }
+
+    function isAdminUser(){
+      return currentUser && (currentUser.cloudRole === 'Admin' || currentUser.role === 'Admin');
+    }
+
+    function canAccessMenu(menu){
+      if(isAdminUser()) return true;
+      return menu.roles.includes(currentUser?.role);
     }
 
     function getCloudStatePayload(){
@@ -789,7 +798,7 @@
 
       cloudProfile = profile;
       currentUser = mapProfileToCurrentUser(profile, cloudUser);
-      currentMenu = currentUser.role === '订购科' ? 'dashboard' : (allMenus.find(m => m.roles.includes(currentUser.role))?.id || 'containers');
+      currentMenu = (currentUser.role === '订购科' || isAdminUser()) ? 'dashboard' : (allMenus.find(m => canAccessMenu(m))?.id || 'containers');
 
       let hasCloud = await loadCloudState();
       if(!hasCloud){
@@ -936,7 +945,8 @@
       { id:'locationStock', name:'库存看板', icon:'📍', roles:['订购科','RG堆场管理员','Rio Claro管理员','IRA库房管理员','工厂管理员'] },
       { id:'productionConfirm', name:'生产完成确认', icon:'🏭', roles:['工厂管理员'] },
       { id:'rateConfig', name:'费率配置', icon:'💰', roles:['订购科'] },
-      { id:'feeReport', name:'费用报表', icon:'📈', roles:['订购科','关务'] }
+      { id:'feeReport', name:'费用报表', icon:'📈', roles:['订购科','关务'] },
+      { id:'userManagement', name:'账号权限管理', icon:'👤', roles:['Admin'] }
     ];
 
     // ==================== 全局变量 ====================
@@ -1476,7 +1486,7 @@ function getContainerLocation(cid){
     }
     
     function renderSidebar(){
-      let menus=allMenus.filter(m => m.roles.includes(currentUser.role));
+      let menus=allMenus.filter(m => canAccessMenu(m));
       if(!menus.some(m => m.id === currentMenu)){ currentMenu = menus.length ? menus[0].id : ''; }
       document.getElementById('sidebar').innerHTML=menus.map(m=>`<div class="menu-item ${currentMenu===m.id?'active':''}" data-menu="${m.id}"><span>${m.icon}</span> ${t(m.name)}</div>`).join('');
       document.querySelectorAll('.menu-item').forEach(item=>{item.addEventListener('click',()=>{currentMenu=item.dataset.menu;renderSidebar();renderContent();applyLanguage();});});
@@ -3539,6 +3549,102 @@ function getContainerLocation(cid){
       XLSX.writeFile(wb, `费用报表_${currentDate}.xlsx`);
     };
     
+
+    function renderUserManagement(){
+      if(!isAdminUser()){
+        document.getElementById('mainContent').innerHTML = '<div class="card"><div class="card-title">无权限</div></div>';
+        return;
+      }
+      document.getElementById('mainContent').innerHTML = `
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">👤 账号权限管理</span>
+            <button class="btn btn-primary" onclick="loadUserProfiles()">刷新账号</button>
+          </div>
+          <div class="search-bar">
+            <input type="email" id="newUserEmail" class="form-control" placeholder="邮箱，例如 user@gwm.com.br">
+            <input type="text" id="newUserName" class="form-control" placeholder="姓名">
+            <select id="newUserRole" class="form-control">
+              <option value="Admin">Admin 主账号</option>
+              <option value="Purchasing">Purchasing 订购</option>
+              <option value="Customs">Customs 关务</option>
+              <option value="RG">RG 运输</option>
+              <option value="JSL">JSL 运输</option>
+              <option value="Warehouse">Warehouse 库房</option>
+              <option value="Unloading">Unloading 卸货口</option>
+              <option value="Viewer">Viewer 只读</option>
+            </select>
+            <input type="text" id="newUserCompany" class="form-control" placeholder="公司/部门">
+            <button class="btn btn-success" onclick="saveUserProfileFromForm()">保存/更新权限</button>
+          </div>
+          <div style="font-size:12px;color:#909399;margin-bottom:10px;">
+            说明：用户先用 Google 登录一次，或管理员提前在这里录入邮箱；系统按 user_profiles 的 role 控制菜单权限。
+          </div>
+          <div id="userProfilesTable"></div>
+        </div>`;
+      loadUserProfiles();
+    }
+
+    async function loadUserProfiles(){
+      const sb = initSupabaseClient();
+      if(!sb) return;
+      const { data, error } = await sb.from('user_profiles').select('*').order('email', {ascending:true});
+      if(error){
+        alert('读取账号失败：' + error.message);
+        return;
+      }
+      const esc = (v) => String(v || '').replace(/'/g, "\\'").replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const rows = (data || []).map(u => `
+        <tr>
+          <td>${esc(u.email)}</td>
+          <td>${esc(u.name)}</td>
+          <td>${esc(u.role)}</td>
+          <td>${esc(u.company)}</td>
+          <td>${u.is_active === false ? '禁用' : '启用'}</td>
+          <td>
+            <button class="btn btn-sm btn-warning" onclick="fillUserProfileForm('${esc(u.email)}','${esc(u.name)}','${esc(u.role)}','${esc(u.company)}')">编辑</button>
+            <button class="btn btn-sm ${u.is_active === false ? 'btn-success' : 'btn-danger'}" onclick="toggleUserActive('${esc(u.email)}', ${u.is_active === false ? 'true' : 'false'})">${u.is_active === false ? '启用' : '禁用'}</button>
+          </td>
+        </tr>`).join('');
+      document.getElementById('userProfilesTable').innerHTML = `
+        <div class="table-wrapper">
+          <table class="data-table" style="min-width:900px!important;">
+            <thead><tr><th>邮箱</th><th>姓名</th><th>角色</th><th>公司/部门</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="6">暂无账号数据</td></tr>'}</tbody>
+          </table>
+        </div>`;
+    }
+
+    window.fillUserProfileForm = function(email,name,role,company){
+      document.getElementById('newUserEmail').value = email || '';
+      document.getElementById('newUserName').value = name || '';
+      document.getElementById('newUserRole').value = role || 'Viewer';
+      document.getElementById('newUserCompany').value = company || '';
+    };
+
+    window.saveUserProfileFromForm = async function(){
+      const sb = initSupabaseClient();
+      const email = document.getElementById('newUserEmail').value.trim().toLowerCase();
+      const name = document.getElementById('newUserName').value.trim();
+      const role = document.getElementById('newUserRole').value;
+      const company = document.getElementById('newUserCompany').value.trim();
+      if(!email){ alert('请填写邮箱'); return; }
+      const { error } = await sb.from('user_profiles').upsert({
+        email, name, role, company, is_active: true
+      }, { onConflict: 'email' });
+      if(error){ alert('保存失败：' + error.message); return; }
+      alert('账号权限已保存');
+      loadUserProfiles();
+    };
+
+    window.toggleUserActive = async function(email, active){
+      const sb = initSupabaseClient();
+      const { error } = await sb.from('user_profiles').update({is_active: active}).eq('email', email);
+      if(error){ alert('更新失败：' + error.message); return; }
+      loadUserProfiles();
+    };
+
+
     function openModal(){ document.getElementById('modal').style.display='flex'; }
     function closeModal(){ document.getElementById('modal').style.display='none'; }
     
