@@ -3,8 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V19</title>
-  <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+  <title>集装箱智能监控管理系统 V38 Cloud</title>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
+    window.onload=()=>{loadData();};
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">
+    window.onload=()=>{loadData();};
+  </script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; }
@@ -541,16 +546,14 @@
 <body>
   <div id="loginPage" class="login-container">
     <div class="login-card">
-      <div class="login-title">📦 集装箱智能监控</div>
-      <input type="text" id="loginUsername" class="login-input" placeholder="用户名" value="dinggou">
-      <input type="password" id="loginPassword" class="login-input" placeholder="密码" value="123456">
-      <button class="login-btn" onclick="login()">登录系统</button>
-      <div style="margin-top: 20px; font-size: 12px; color: #909399;">
-        <div>订购科: dinggou / 123456</div>
-        <div>关务: guanwu / 123456</div>
-        <div>RG运输: yunshu_rg / 123456</div>
-        <div>JSL运输: yunshu_jsl / 123456</div>
-        <div>堆场/Rio/IRA/工厂管理员: rg_admin 等 / 123456</div>
+      <div class="login-title">📦 集装箱智能监控 Cloud</div>
+      <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
+        V38 Cloud：使用 Google 账号登录，业务数据保存到 Supabase 云端数据库。
+      </div>
+      <button class="login-btn" onclick="loginWithGoogle()">使用 Google 登录</button>
+      <div style="margin-top: 18px; font-size: 12px; color: #909399; line-height:1.7;">
+        登录后系统会根据 Supabase user_profiles 表中的角色显示菜单。
+        <br>未授权账号将显示“等待管理员授权”。
       </div>
     </div>
   </div>
@@ -565,7 +568,7 @@
         </select>
         <span class="role-badge" id="currentRole"></span>
         <span id="currentUser"></span>
-        <button class="logout-btn" onclick="logout()">退出</button>
+        <button class="logout-btn" onclick="downloadCloudBackup()">备份</button><button class="logout-btn" onclick="migrateLocalToCloud()">本地→云端</button><button class="logout-btn" onclick="logout()">退出</button>
       </div>
     </div>
     <div class="app-container">
@@ -575,6 +578,221 @@
   </div>
   <div id="modal" class="modal"><div class="modal-content"><div class="modal-header"><h3 id="modalTitle">标题</h3><span class="close-btn" onclick="closeModal()">&times;</span></div><div id="modalBody"></div></div></div>
   <script>
+
+    // ==================== V38 Cloud / Supabase 配置 ====================
+    // 重要：请把 SUPABASE_ANON_KEY 替换为 Supabase → Settings → API Keys → Publishable key。
+    const SUPABASE_URL = 'https://qqmmffvgebmebjntjaxn.supabase.co';
+    const SUPABASE_ANON_KEY = 'sb_publishable_Nj1V8Ck1np7cNHi63CeoXQ_rv8pPv-g';
+    const CLOUD_STATE_ID = 'container-monitoring-main';
+    const cloudEnabled = !SUPABASE_ANON_KEY.includes('PASTE_YOUR_SUPABASE');
+
+    let supabaseClient = null;
+    let cloudUser = null;
+    let cloudProfile = null;
+    let isCloudSaving = false;
+
+    function initSupabaseClient(){
+      if(!cloudEnabled){
+        console.warn('V38 Cloud: 请先填写 SUPABASE_ANON_KEY。');
+        return null;
+      }
+      if(!supabaseClient){
+        supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+          auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+        });
+      }
+      return supabaseClient;
+    }
+
+    function mapProfileToCurrentUser(profile, user){
+      const roleMap = {
+        'Admin': '订购科',
+        'Purchasing': '订购科',
+        'Customs': '关务',
+        'RG': '运输公司RG',
+        'JSL': '运输公司JSL',
+        'Warehouse': 'IRA库房管理员',
+        'Unloading': '工厂管理员',
+        'Factory': '工厂管理员',
+        'Viewer': '订购科'
+      };
+      let role = profile?.role || '';
+      let mappedRole = roleMap[role] || role || '未授权';
+      let mapped = {
+        email: user?.email || profile?.email || '',
+        name: profile?.name || user?.user_metadata?.full_name || user?.email || 'User',
+        role: mappedRole,
+        cloudRole: role,
+        company: profile?.company || ''
+      };
+      if(mappedRole === '运输公司RG') mapped.carrier = 'RG';
+      if(mappedRole === '运输公司JSL') mapped.carrier = 'JSL';
+      if(mappedRole === 'RG堆场管理员') mapped.location = 'RG堆场';
+      if(mappedRole === 'Rio Claro管理员') mapped.location = 'Rio Claro';
+      if(mappedRole === 'IRA库房管理员') mapped.location = 'IRA库房';
+      if(mappedRole === '工厂管理员') mapped.location = '工厂';
+      return mapped;
+    }
+
+    function getCloudStatePayload(){
+      compactLargeStorageFields();
+      return {
+        containers, blList, containerBlMap, transportTasks, locationStock, returnRecords,
+        pickupPlans, productionRecords, nextIds, storageConfig, demurrageConfig, warningConfig,
+        version: 'V38 Cloud',
+        updatedAt: new Date().toISOString(),
+        updatedBy: cloudUser?.email || currentUser?.email || currentUser?.name || ''
+      };
+    }
+
+    function applyCloudState(data){
+      if(!data) return;
+      containers = Array.isArray(data.containers) ? data.containers : [];
+      blList = Array.isArray(data.blList) ? data.blList : [];
+      containerBlMap = Array.isArray(data.containerBlMap) ? data.containerBlMap : [];
+      transportTasks = Array.isArray(data.transportTasks) ? data.transportTasks : [];
+      locationStock = Array.isArray(data.locationStock) ? data.locationStock : [];
+      returnRecords = Array.isArray(data.returnRecords) ? data.returnRecords : [];
+      pickupPlans = Array.isArray(data.pickupPlans) ? data.pickupPlans : [];
+      productionRecords = Array.isArray(data.productionRecords) ? data.productionRecords : [];
+      nextIds = data.nextIds || {container:1, task:1, plan:1, production:1};
+      storageConfig = Array.isArray(data.storageConfig) ? data.storageConfig : [];
+      demurrageConfig = Array.isArray(data.demurrageConfig) ? data.demurrageConfig : [];
+      warningConfig = data.warningConfig || { storageWarningDays: 5, demurrageWarningDays: 7 };
+      updateContainerStatus();
+      updateDailyFees();
+    }
+
+    async function loadCloudState(){
+      const sb = initSupabaseClient();
+      if(!sb) return false;
+      const { data, error } = await sb.from('app_state').select('data').eq('id', CLOUD_STATE_ID).maybeSingle();
+      if(error){
+        console.error('loadCloudState error', error);
+        alert('云端数据读取失败：' + error.message);
+        return false;
+      }
+      if(data && data.data){
+        applyCloudState(data.data);
+        return true;
+      }
+      return false;
+    }
+
+    async function saveCloudState(){
+      const sb = initSupabaseClient();
+      if(!sb || isCloudSaving) return;
+      isCloudSaving = true;
+      try{
+        const payload = getCloudStatePayload();
+        const { error } = await sb.from('app_state').upsert({
+          id: CLOUD_STATE_ID,
+          data: payload,
+          updated_by: cloudUser?.email || '',
+          updated_at: new Date().toISOString()
+        });
+        if(error) throw error;
+      }catch(err){
+        console.error('saveCloudState error', err);
+        alert('云端保存失败：' + (err.message || err));
+      }finally{
+        isCloudSaving = false;
+      }
+    }
+
+    window.loginWithGoogle = async function(){
+      const sb = initSupabaseClient();
+      if(!sb){
+        alert('请先在源码顶部填写 SUPABASE_ANON_KEY。');
+        return;
+      }
+      const { error } = await sb.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: window.location.origin + window.location.pathname }
+      });
+      if(error) alert('Google登录失败：' + error.message);
+    };
+
+    async function logoutCloud(){
+      const sb = initSupabaseClient();
+      if(sb) await sb.auth.signOut();
+      cloudUser = null;
+      cloudProfile = null;
+      currentUser = null;
+      document.getElementById('mainApp').style.display='none';
+      document.getElementById('loginPage').style.display='flex';
+    }
+
+    async function ensureCloudSession(){
+      const sb = initSupabaseClient();
+      if(!sb) return false;
+      const { data: { session } } = await sb.auth.getSession();
+      if(!session || !session.user) return false;
+      cloudUser = session.user;
+
+      const { data: profile, error } = await sb
+        .from('user_profiles')
+        .select('*')
+        .ilike('email', cloudUser.email)
+        .maybeSingle();
+
+      if(error){
+        console.error('profile error', error);
+        alert('读取用户权限失败：' + error.message);
+        return false;
+      }
+
+      if(!profile || profile.is_active === false){
+        document.getElementById('loginPage').style.display='none';
+        document.getElementById('mainApp').style.display='block';
+        document.getElementById('sidebar').innerHTML='';
+        document.getElementById('mainContent').innerHTML=`
+          <div class="card">
+            <div class="card-header"><span class="card-title">⏳ 等待管理员授权</span></div>
+            <p>当前 Google 账号：<b>${cloudUser.email}</b></p>
+            <p style="margin-top:10px;color:#606266;">该账号尚未在 user_profiles 中分配角色，请联系系统管理员添加权限。</p>
+            <button class="btn btn-primary" onclick="logoutCloud()">退出</button>
+          </div>`;
+        return false;
+      }
+
+      cloudProfile = profile;
+      currentUser = mapProfileToCurrentUser(profile, cloudUser);
+      currentMenu = currentUser.role === '订购科' ? 'dashboard' : (allMenus.find(m => m.roles.includes(currentUser.role))?.id || 'containers');
+
+      let hasCloud = await loadCloudState();
+      if(!hasCloud){
+        loadLocalDataOnly();
+        await saveCloudState();
+      }
+
+      document.getElementById('loginPage').style.display='none';
+      document.getElementById('mainApp').style.display='block';
+      document.getElementById('currentRole').innerText = currentUser.role;
+      document.getElementById('currentUser').innerText = currentUser.name;
+      renderSidebar();
+      renderContent();
+      applyLanguage();
+      return true;
+    }
+
+    window.migrateLocalToCloud = async function(){
+      if(!confirm('确定要把当前浏览器 localStorage 中的数据覆盖上传到云端吗？此操作会覆盖云端主数据。')) return;
+      loadLocalDataOnly();
+      await saveCloudState();
+      alert('本地数据已上传到 Supabase 云端。');
+      renderContent();
+    };
+
+    window.downloadCloudBackup = function(){
+      const blob = new Blob([JSON.stringify(getCloudStatePayload(), null, 2)], {type:'application/json'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `container_cloud_backup_${getTodayStr()}.json`;
+      a.click();
+    };
+
+
     // ==================== 用户配置 ====================
     const users = {
       'dinggou':{password:'123456',role:'订购科',name:'张经理'},
@@ -1013,9 +1231,10 @@ function getContainerLocation(cid){
       localStorage.setItem('cc_demurrageConfig',JSON.stringify(demurrageConfig));
       localStorage.setItem('cc_warningConfig',JSON.stringify(warningConfig));
       localStorage.removeItem('cc_lastFeeUpdate');
+      if(cloudUser) saveCloudState();
     }
     
-    function loadData(){
+    function loadLocalDataOnly(){
       let saved = localStorage.getItem('cc_containers');
       if(saved && saved !== '[]'){
         containers = JSON.parse(saved);
@@ -1055,6 +1274,16 @@ function getContainerLocation(cid){
       updateDailyFees();
     }
     
+
+    async function loadData(){
+      if(cloudEnabled){
+        const ok = await ensureCloudSession();
+        if(ok) return;
+      }
+      document.getElementById('loginPage').style.display='flex';
+      document.getElementById('mainApp').style.display='none';
+    }
+
     // ==================== 渲染函数 ====================
 
     // ==================== 多语言切换（第一阶段：核心界面文字） ====================
@@ -3197,22 +3426,14 @@ function getContainerLocation(cid){
     function closeModal(){ document.getElementById('modal').style.display='none'; }
     
     function login(){
-      let user=users[document.getElementById('loginUsername').value];
-      if(user&&user.password===document.getElementById('loginPassword').value){
-        currentUser=user;
-        document.getElementById('loginPage').style.display='none';
-        document.getElementById('mainApp').style.display='block';
-        document.getElementById('currentRole').innerText=user.role;
-        document.getElementById('currentUser').innerText=user.name;
-        loadData();
-        renderSidebar();
-        renderContent();
-      } else { alert('用户名或密码错误'); }
+      loginWithGoogle();
     }
     
     function logout(){ currentUser=null; document.getElementById('loginPage').style.display='flex'; document.getElementById('mainApp').style.display='none'; }
     
     loadData();
+  
+    window.onload=()=>{loadData();};
   </script>
 </body>
 </html>
