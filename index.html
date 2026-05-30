@@ -3,13 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V38 Cloud</title>
-  <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
-    window.onload=()=>{loadData();};
-  </script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">
-    window.onload=()=>{loadData();};
-  </script>
+  <title>集装箱智能监控管理系统 V38.1 Cloud</title>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; }
@@ -598,7 +594,13 @@
       }
       if(!supabaseClient){
         supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-          auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+          auth: {
+            persistSession: true,
+            autoRefreshToken: true,
+            detectSessionInUrl: true,
+            flowType: 'pkce',
+            storage: window.localStorage
+          }
         });
       }
       return supabaseClient;
@@ -708,7 +710,7 @@
       }
       const { error } = await sb.auth.signInWithOAuth({
         provider: 'google',
-        options: { redirectTo: window.location.origin + window.location.pathname }
+        options: { redirectTo: window.location.origin + window.location.pathname, queryParams: { prompt: 'select_account' } }
       });
       if(error) alert('Google登录失败：' + error.message);
     };
@@ -723,10 +725,41 @@
       document.getElementById('loginPage').style.display='flex';
     }
 
+
+    async function completeOAuthCallbackIfNeeded(){
+      const sb = initSupabaseClient();
+      if(!sb) return null;
+
+      const url = new URL(window.location.href);
+      const hasCode = url.searchParams.has('code');
+      const hasError = url.searchParams.has('error') || url.searchParams.has('error_description');
+
+      if(hasError){
+        console.error('OAuth callback error:', url.search);
+        alert('Google登录回调失败：' + (url.searchParams.get('error_description') || url.searchParams.get('error') || '未知错误'));
+        return null;
+      }
+
+      if(hasCode){
+        const { data, error } = await sb.auth.exchangeCodeForSession(window.location.href);
+        if(error){
+          console.error('exchangeCodeForSession error:', error);
+          alert('登录会话创建失败：' + error.message);
+          return null;
+        }
+        // 清理 URL 上的 code，避免刷新后重复交换
+        window.history.replaceState({}, document.title, window.location.origin + window.location.pathname);
+        return data.session || null;
+      }
+
+      const { data } = await sb.auth.getSession();
+      return data.session || null;
+    }
+
     async function ensureCloudSession(){
       const sb = initSupabaseClient();
       if(!sb) return false;
-      const { data: { session } } = await sb.auth.getSession();
+      const session = await completeOAuthCallbackIfNeeded();
       if(!session || !session.user) return false;
       cloudUser = session.user;
 
@@ -3429,11 +3462,10 @@ function getContainerLocation(cid){
       loginWithGoogle();
     }
     
-    function logout(){ currentUser=null; document.getElementById('loginPage').style.display='flex'; document.getElementById('mainApp').style.display='none'; }
-    
-    loadData();
-  
-    window.onload=()=>{loadData();};
-  </script>
+    function logout(){
+      logoutCloud();
+    }
+    window.addEventListener('DOMContentLoaded', () => { loadData(); });
+</script>
 </body>
 </html>
