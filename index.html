@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V38.2 Cloud Login Fix</title>
+  <title>集装箱智能监控管理系统 V38.3 Cloud Realtime</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -544,7 +544,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V38.2 Cloud：使用 Google 账号登录，业务数据保存到 Supabase 云端数据库。
+        V38.3 Cloud：Google 登录 + Supabase 云端数据 + 实时同步。
       </div>
       <button class="login-btn" onclick="loginWithGoogle()">使用 Google 登录</button>
       <div style="margin-top: 18px; font-size: 12px; color: #909399; line-height:1.7;">
@@ -586,6 +586,10 @@
     let cloudUser = null;
     let cloudProfile = null;
     let isCloudSaving = false;
+    let realtimeChannel = null;
+    let realtimePullTimer = null;
+    let lastCloudUpdatedAt = null;
+    let lastSelfSaveAt = 0;
 
     function initSupabaseClient(){
       if(!cloudEnabled){
@@ -667,7 +671,7 @@
     async function loadCloudState(){
       const sb = initSupabaseClient();
       if(!sb) return false;
-      const { data, error } = await sb.from('app_state').select('data').eq('id', CLOUD_STATE_ID).maybeSingle();
+      const { data, error } = await sb.from('app_state').select('data, updated_at, updated_by').eq('id', CLOUD_STATE_ID).maybeSingle();
       if(error){
         console.error('loadCloudState error', error);
         alert('云端数据读取失败：' + error.message);
@@ -675,6 +679,7 @@
       }
       if(data && data.data){
         applyCloudState(data.data);
+        if(data.updated_at) lastCloudUpdatedAt = data.updated_at;
         return true;
       }
       return false;
@@ -686,11 +691,14 @@
       isCloudSaving = true;
       try{
         const payload = getCloudStatePayload();
+        const nowIso = new Date().toISOString();
+        lastSelfSaveAt = Date.now();
+        lastCloudUpdatedAt = nowIso;
         const { error } = await sb.from('app_state').upsert({
           id: CLOUD_STATE_ID,
           data: payload,
           updated_by: cloudUser?.email || '',
-          updated_at: new Date().toISOString()
+          updated_at: nowIso
         });
         if(error) throw error;
       }catch(err){
@@ -726,6 +734,10 @@
       cloudUser = null;
       cloudProfile = null;
       currentUser = null;
+      if(realtimeChannel && supabaseClient){
+        try { await supabaseClient.removeChannel(realtimeChannel); } catch(e) { console.warn(e); }
+        realtimeChannel = null;
+      }
       if(window.location.hash || window.location.search){
         window.history.replaceState({}, document.title, window.location.origin + window.location.pathname);
       }
@@ -792,7 +804,93 @@
       renderSidebar();
       renderContent();
       applyLanguage();
+      startRealtimeSync();
       return true;
+    }
+
+
+    function showRealtimeSyncHint(text){
+      let el = document.getElementById('realtimeSyncHint');
+      if(!el){
+        el = document.createElement('span');
+        el.id = 'realtimeSyncHint';
+        el.className = 'role-badge';
+        el.style.background = 'rgba(255,255,255,0.16)';
+        el.style.fontSize = '12px';
+        const userInfo = document.querySelector('.user-info');
+        if(userInfo) userInfo.insertBefore(el, userInfo.firstChild);
+      }
+      el.innerText = text;
+    }
+
+    async function pullCloudStateAndRefresh(reason){
+      const sb = initSupabaseClient();
+      if(!sb || isCloudSaving) return;
+      try{
+        const { data, error } = await sb
+          .from('app_state')
+          .select('data, updated_at, updated_by')
+          .eq('id', CLOUD_STATE_ID)
+          .maybeSingle();
+
+        if(error) throw error;
+        if(!data || !data.data) return;
+
+        if(data.updated_at && lastCloudUpdatedAt && data.updated_at === lastCloudUpdatedAt) return;
+
+        applyCloudState(data.data);
+        if(data.updated_at) lastCloudUpdatedAt = data.updated_at;
+
+        if(currentUser){
+          renderSidebar();
+          renderContent();
+          applyLanguage();
+        }
+
+        showRealtimeSyncHint('已同步最新数据');
+        setTimeout(()=>showRealtimeSyncHint('实时同步已开启'), 2500);
+        console.log('Realtime synced:', reason, data.updated_at, data.updated_by);
+      }catch(err){
+        console.error('pullCloudStateAndRefresh error', err);
+        showRealtimeSyncHint('同步失败');
+      }
+    }
+
+    function startRealtimeSync(){
+      const sb = initSupabaseClient();
+      if(!sb || realtimeChannel) return;
+
+      realtimeChannel = sb
+        .channel('app_state_realtime_sync')
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'app_state',
+            filter: `id=eq.${CLOUD_STATE_ID}`
+          },
+          (payload) => {
+            // 避免自己刚保存后立刻重复刷新
+            if(Date.now() - lastSelfSaveAt < 1200) return;
+            if(realtimePullTimer) clearTimeout(realtimePullTimer);
+            realtimePullTimer = setTimeout(() => pullCloudStateAndRefresh('postgres_changes'), 500);
+          }
+        )
+        .subscribe((status) => {
+          console.log('Realtime status:', status);
+          if(status === 'SUBSCRIBED') showRealtimeSyncHint('实时同步已开启');
+          if(status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') showRealtimeSyncHint('实时同步异常');
+        });
+
+      // 兜底轮询：如果网络或浏览器阻止 Realtime，最多每30秒检查一次
+      if(!window.__cloudFallbackPoller){
+        window.__cloudFallbackPoller = setInterval(() => {
+          if(cloudUser && document.visibilityState === 'visible'){
+            pullCloudStateAndRefresh('fallback_polling');
+          }
+        }, 30000);
+      }
     }
 
     window.migrateLocalToCloud = async function(){
