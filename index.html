@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V38.4 Admin Permissions</title>
+  <title>集装箱智能监控管理系统 V38.6 Admin All Locations</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -544,7 +544,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V38.4 Cloud：Google 登录 + 云端实时同步 + Admin 全权限。
+        V38.6 Cloud：Admin 全权限 + 全运输公司 + 全库房地点数据可见。
       </div>
       <button class="login-btn" onclick="loginWithGoogle()">使用 Google 登录</button>
       <div style="margin-top: 18px; font-size: 12px; color: #909399; line-height:1.7;">
@@ -646,6 +646,16 @@
     function canAccessMenu(menu){
       if(isAdminUser()) return true;
       return menu.roles.includes(currentUser?.role);
+    }
+
+    function canViewCarrier(carrier){
+      if(isAdminUser()) return true;
+      return carrier === currentUser?.carrier;
+    }
+
+    function canViewLocation(location){
+      if(isAdminUser()) return true;
+      return location === currentUser?.location;
     }
 
     function getCloudStatePayload(){
@@ -2573,8 +2583,8 @@ function getContainerLocation(cid){
     
     // 运输任务（带日期筛选）
     function renderTransportTasks(container){
-      let myPickupTasks = pickupPlans.filter(p => p.carrier === currentUser.carrier && p.status !== 'confirmed' && p.status !== 'cancelled' && !isProducedCompletedContainerId(p.containerId));
-      let myTransitTasks = transportTasks.filter(t => t.carrier === currentUser.carrier && t.status === 'in_transit' && isOperationalVisibleTask(t));
+      let myPickupTasks = pickupPlans.filter(p => canViewCarrier(p.carrier) && p.status !== 'confirmed' && p.status !== 'cancelled' && !isProducedCompletedContainerId(p.containerId));
+      let myTransitTasks = transportTasks.filter(t => canViewCarrier(t.carrier) && t.status === 'in_transit' && isOperationalVisibleTask(t));
       myPickupTasks.sort((a,b)=>String(a.arrivalDate||'').localeCompare(String(b.arrivalDate||'')));
       myTransitTasks.sort((a,b)=>String(a.estimatedArrival||'').localeCompare(String(b.estimatedArrival||'')));
       let dateGroups = new Map();
@@ -2585,7 +2595,7 @@ function getContainerLocation(cid){
       let filteredPickup = selectedDate?myPickupTasks.filter(p=>getDatePart(p.arrivalDate)===selectedDate):[];
       let filteredTransit = selectedDate?myTransitTasks.filter(t=>{let td=t.estimatedArrival?t.estimatedArrival.split('T')[0]:null;return td===selectedDate;}):[];
       let dateTabsHtml = activeDates.length>0?`<div class="transport-date-scroll">${activeDates.map(d=>`<div class="date-tab ${selectedDate===d?'active':''}" data-date="${d}" style="background:${selectedDate===d?'#2a5298':'#f0f2f5'};color:${selectedDate===d?'white':'#333'};padding:8px 18px;border-radius:30px;cursor:pointer;">📅 ${fmtDate(d)}</div>`).join('')}</div>`:'<div style="margin-bottom:20px;padding:10px;background:#fef0e6;border-radius:8px;text-align:center;">✅ 所有日期的计划均已完成</div>';
-      let html = `<div class="card"><div class="card-header"><span class="card-title">🚛 运输任务</span><button class="btn export-btn" onclick="exportTransportTasks()">📥 导出运输任务</button></div>
+      let html = `<div class="card"><div class="card-header"><span class="card-title">🚛 运输任务${isAdminUser()?'（Admin：RG+JSL全部）':''}</span><button class="btn export-btn" onclick="exportTransportTasks()">📥 导出运输任务</button></div>
         <div class="search-bar"><input type="date" id="transportPlanDate" value="${selectedDate||''}" title="按日期查询到箱计划"><button class="btn btn-primary" onclick="searchTransportPlanByDate()">查询日期</button><button class="btn" onclick="resetTransportPlanDate()">重置</button></div>
         ${dateTabsHtml}`;
       if(filteredPickup.length>0){
@@ -2621,8 +2631,8 @@ function getContainerLocation(cid){
     }
     
     function renderTransportTasksWithDate(container, selectedDate){
-      let myPickupTasks = pickupPlans.filter(p => p.carrier === currentUser.carrier && p.status !== 'confirmed' && p.status !== 'cancelled' && !isProducedCompletedContainerId(p.containerId));
-      let myTransitTasks = transportTasks.filter(t => t.carrier === currentUser.carrier && t.status === 'in_transit' && isOperationalVisibleTask(t));
+      let myPickupTasks = pickupPlans.filter(p => canViewCarrier(p.carrier) && p.status !== 'confirmed' && p.status !== 'cancelled' && !isProducedCompletedContainerId(p.containerId));
+      let myTransitTasks = transportTasks.filter(t => canViewCarrier(t.carrier) && t.status === 'in_transit' && isOperationalVisibleTask(t));
       let filteredPickup = myPickupTasks.filter(p => getDatePart(p.arrivalDate) === selectedDate);
       let filteredTransit = myTransitTasks.filter(t => {let td = t.estimatedArrival ? t.estimatedArrival.split('T')[0] : null; return td === selectedDate;});
       let dateGroups = new Map();
@@ -2630,7 +2640,7 @@ function getContainerLocation(cid){
       myTransitTasks.forEach(t=>{let td=t.estimatedArrival?t.estimatedArrival.split('T')[0]:null;if(td){if(!dateGroups.has(td))dateGroups.set(td,[]);dateGroups.get(td).push(t);}});
       let activeDates = Array.from(dateGroups.keys()).sort();
       let dateTabsHtml = activeDates.length>0?`<div class="transport-date-scroll">${activeDates.map(d=>`<div class="date-tab ${selectedDate===d?'active':''}" data-date="${d}" style="background:${selectedDate===d?'#2a5298':'#f0f2f5'};color:${selectedDate===d?'white':'#333'};padding:8px 18px;border-radius:30px;cursor:pointer;">📅 ${fmtDate(d)}</div>`).join('')}</div>`:'<div style="margin-bottom:20px;padding:10px;background:#fef0e6;border-radius:8px;text-align:center;">✅ 所有日期的计划均已完成</div>';
-      let html = `<div class="card"><div class="card-header"><span class="card-title">🚛 运输任务</span><button class="btn export-btn" onclick="exportTransportTasks()">📥 导出运输任务</button></div>
+      let html = `<div class="card"><div class="card-header"><span class="card-title">🚛 运输任务${isAdminUser()?'（Admin：RG+JSL全部）':''}</span><button class="btn export-btn" onclick="exportTransportTasks()">📥 导出运输任务</button></div>
         <div class="search-bar"><input type="date" id="transportPlanDate" value="${selectedDate||''}" title="按日期查询到箱计划"><button class="btn btn-primary" onclick="searchTransportPlanByDate()">查询日期</button><button class="btn" onclick="resetTransportPlanDate()">重置</button></div>
         ${dateTabsHtml}`;
       if(filteredPickup.length>0){
@@ -2701,8 +2711,8 @@ function getContainerLocation(cid){
     };
     
     window.exportTransportTasks = function(){
-      let myPickupTasks = pickupPlans.filter(p => p.carrier === currentUser.carrier && p.status !== 'confirmed' && p.status !== 'cancelled' && !isProducedCompletedContainerId(p.containerId));
-      let myTransitTasks = transportTasks.filter(t => t.carrier === currentUser.carrier && t.status === 'in_transit' && isOperationalVisibleTask(t));
+      let myPickupTasks = pickupPlans.filter(p => canViewCarrier(p.carrier) && p.status !== 'confirmed' && p.status !== 'cancelled' && !isProducedCompletedContainerId(p.containerId));
+      let myTransitTasks = transportTasks.filter(t => canViewCarrier(t.carrier) && t.status === 'in_transit' && isOperationalVisibleTask(t));
       let wsData = [['类型','批次','集装箱号','计划到箱时间','目的地','状态']];
       myPickupTasks.forEach(item=>{wsData.push(['待确认提箱',item.batch,item.containerNo,fmtDateTime(item.arrivalDate),item.destination||'-','待确认']);});
       myTransitTasks.forEach(item=>{wsData.push(['运输中',item.batch,item.containerNo,fmtDateTime(item.estimatedArrival),item.to||'-','运输中']);});
@@ -2778,7 +2788,7 @@ function getContainerLocation(cid){
         let isConfirmed = !!r.isReturnConfirmed || r.type === 'return';
         if(onlyConfirmed !== isConfirmed) return;
         let task = transportTasks.find(t => String(t.containerId) === String(r.containerId) && t.to === r.location);
-        if(!task || task.carrier !== currentUser.carrier) return;
+        if(!task || !canViewCarrier(task.carrier)) return;
         let c = containers.find(c => String(c.id) === String(r.containerId));
         let blText = getContainerBlTextById(r.containerId) || '-';
         rows.push({
@@ -2787,7 +2797,8 @@ function getContainerLocation(cid){
           containerNo: task.containerNo || c?.containerNo || '',
           batch: task.batch || c?.batch || '',
           containerSeq: c?.containerSeq || '',
-          blText
+          blText,
+          carrier: task.carrier || '-'
         });
       });
       return rows.sort((a,b)=>String(a.batch||'').localeCompare(String(b.batch||'')) || String(a.containerNo||'').localeCompare(String(b.containerNo||'')));
@@ -2798,7 +2809,7 @@ function getContainerLocation(cid){
       let completedRows = buildReturnRows(true);
       let html = `
         <div class="card">
-          <div class="card-header"><span class="card-title">🔄 还箱确认</span></div>
+          <div class="card-header"><span class="card-title">🔄 还箱确认${isAdminUser()?'（Admin：RG+JSL全部）':''}</span></div>
           <div class="search-bar">
             <input type="text" id="returnSearch" placeholder="集装箱号 / 提单号" style="width:250px;">
             <button class="btn btn-primary" onclick="filterReturnList()">查询</button>
@@ -3105,7 +3116,7 @@ function getContainerLocation(cid){
     function renderLocationStock(container){
       let stock={'港口':0,'RG堆场':0,'Rio Claro':0,'IRA库房':0,'工厂':0};
       containers.filter(isOperationalVisibleContainer).forEach(c=>{let loc=getContainerLocation(c.id); stock[loc]=(stock[loc]||0)+1;});
-      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📍 库存看板</span></div><div style="font-size:13px;color:#909399;margin-bottom:12px;text-align:center;">点击库存地点可查看该地点的集装箱明细</div><div class="location-stock-grid">${Object.entries(stock).map(([k,v])=>`<div class="location-stock-item" onclick="showLocationStockDetail('${k}')" title="查看${k}集装箱明细"><div class="location-stock-count">${v}</div><div>${k}</div><div style="font-size:12px;color:#909399;margin-top:6px;">查看明细</div></div>`).join('')}</div></div>`;
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📍 库存看板${isAdminUser()?'（Admin：全部地点）':''}</span></div><div style="font-size:13px;color:#909399;margin-bottom:12px;text-align:center;">点击库存地点可查看该地点的集装箱明细</div><div class="location-stock-grid">${Object.entries(stock).map(([k,v])=>`<div class="location-stock-item" onclick="showLocationStockDetail('${k}')" title="查看${k}集装箱明细"><div class="location-stock-count">${v}</div><div>${k}</div><div style="font-size:12px;color:#909399;margin-top:6px;">查看明细</div></div>`).join('')}</div></div>`;
     }
 
     window.showLocationStockDetail = function(locationName){
@@ -3200,7 +3211,7 @@ function getContainerLocation(cid){
 
       container.innerHTML = `
         <div class="card">
-          <div class="card-header"><span class="card-title">🏭 生产完成确认</span></div>
+          <div class="card-header"><span class="card-title">🏭 生产完成确认${isAdminUser()?'（Admin：全部地点）':''}</span></div>
           <div class="search-bar">
             <input type="text" id="prodSearchBatch" placeholder="原始批次">
             <input type="text" id="prodSearchSeq" placeholder="集装箱序号">
