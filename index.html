@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V39.1 Admin Global View</title>
+  <title>集装箱智能监控管理系统 V39.2 Multi Login Admin Arrival Fix</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -584,9 +584,18 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V39.1 Cloud：Admin全局视图 + 云附件 + 实时同步。
+        V39.2 Cloud：多方式登录 + Admin到货确认全局视图。
       </div>
-      <button class="login-btn" onclick="loginWithGoogle()">使用 Google 登录</button>
+      <button class="login-btn" onclick="loginWithGoogle()" style="width:100%;margin-bottom:14px;">使用 Google 登录</button>
+
+      <div style="border-top:1px solid #eef2f6;margin:16px 0;padding-top:16px;text-align:left;">
+        <input id="loginEmail" class="login-input" type="email" placeholder="邮箱">
+        <input id="loginPassword" class="login-input" type="password" placeholder="密码（邮箱+密码登录/注册使用）">
+        <button class="login-btn" onclick="loginWithEmailPassword()" style="width:100%;margin-bottom:8px;">邮箱 + 密码登录</button>
+        <button class="btn btn-success" onclick="registerWithEmailPassword()" style="width:100%;margin-bottom:8px;">邮箱 + 密码注册</button>
+        <button class="btn" onclick="loginWithMagicLink()" style="width:100%;">发送邮箱验证码 / 登录链接</button>
+      </div>
+
       <div style="margin-top: 18px; font-size: 12px; color: #909399; line-height:1.7;">
         登录后系统会根据 Supabase user_profiles 表中的角色显示菜单。
         <br>未授权账号将显示“等待管理员授权”。
@@ -800,6 +809,50 @@
 
       if(error) alert('Google登录失败：' + error.message);
     };
+
+
+    function getLoginEmailPassword(){
+      const email = document.getElementById('loginEmail')?.value.trim().toLowerCase();
+      const password = document.getElementById('loginPassword')?.value || '';
+      return { email, password };
+    }
+
+    window.loginWithEmailPassword = async function(){
+      const sb = initSupabaseClient();
+      const { email, password } = getLoginEmailPassword();
+      if(!email){ alert('请输入邮箱'); return; }
+      if(!password){ alert('请输入密码'); return; }
+      const { error } = await sb.auth.signInWithPassword({ email, password });
+      if(error){ alert('邮箱登录失败：' + error.message); return; }
+      await loadData();
+    };
+
+    window.registerWithEmailPassword = async function(){
+      const sb = initSupabaseClient();
+      const { email, password } = getLoginEmailPassword();
+      if(!email){ alert('请输入邮箱'); return; }
+      if(!password || password.length < 6){ alert('密码至少需要6位'); return; }
+      const { error } = await sb.auth.signUp({
+        email,
+        password,
+        options: { emailRedirectTo: window.location.origin + window.location.pathname }
+      });
+      if(error){ alert('邮箱注册失败：' + error.message); return; }
+      alert('注册申请已提交。如 Supabase 开启邮箱确认，请先到邮箱中点击确认链接；确认后再登录。');
+    };
+
+    window.loginWithMagicLink = async function(){
+      const sb = initSupabaseClient();
+      const email = document.getElementById('loginEmail')?.value.trim().toLowerCase();
+      if(!email){ alert('请输入邮箱'); return; }
+      const { error } = await sb.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: window.location.origin + window.location.pathname }
+      });
+      if(error){ alert('发送邮箱验证码/登录链接失败：' + error.message); return; }
+      alert('已发送邮箱验证码/登录链接，请到邮箱中打开链接完成登录。');
+    };
+
 
     async function logoutCloud(){
       const sb = initSupabaseClient();
@@ -2806,6 +2859,15 @@ let main=document.getElementById('mainContent');
     };
     
     // 到货确认
+
+    function isTaskVisibleForArrivalConfirm(task){
+      if(!task) return false;
+      if(isAdminUser()) return true;
+      const dest = task.destination || task.location || '';
+      return canViewLocation(dest);
+    }
+
+
     function renderLocationConfirm(container){
       let arriving=transportTasks.filter(t=>t.status==='in_transit'&&t.to===currentUser.location&&isOperationalVisibleTask(t));
       let arrived=transportTasks.filter(t=>t.status==='arrived'&&t.to===currentUser.location&&isOperationalVisibleTask(t));
