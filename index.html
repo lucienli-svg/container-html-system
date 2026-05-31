@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V39 Cloud Storage Enterprise</title>
+  <title>集装箱智能监控管理系统 V39.1 Admin Global View</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -584,7 +584,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V39 Cloud Storage：账号权限 + 实时同步 + 附件云存储。
+        V39.1 Cloud：Admin全局视图 + 云附件 + 实时同步。
       </div>
       <button class="login-btn" onclick="loginWithGoogle()">使用 Google 登录</button>
       <div style="margin-top: 18px; font-size: 12px; color: #909399; line-height:1.7;">
@@ -703,6 +703,7 @@
       if(scopes.length > 0) return scopes.includes(carrier);
       return carrier === currentUser?.carrier;
     }
+
     function canViewLocation(location){
       if(isAdminUser()) return true;
       const scopes = normalizeScopeArray(cloudProfile?.location_scope || cloudProfile?.location_scopes);
