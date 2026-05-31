@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V39.3 Admin Arrival To Field Fix</title>
+  <title>集装箱智能监控管理系统 V39.5 Yard Arrival No Unpack</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -584,7 +584,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V39.3 Cloud：修复Admin到货确认to字段全局视图。
+        V39.5 Cloud：RG堆场到货确认后不再进入待掏箱。
       </div>
       <button class="login-btn" onclick="loginWithGoogle()" style="width:100%;margin-bottom:14px;">使用 Google 登录</button>
 
@@ -949,6 +949,65 @@
       el.innerText = text;
     }
 
+
+    function captureCurrentUiState(){
+      const state = {
+        currentMenu,
+        activeElementId: document.activeElement && document.activeElement.id ? document.activeElement.id : '',
+        scrollTop: document.querySelector('.main-content')?.scrollTop || 0,
+        fields: {}
+      };
+
+      document.querySelectorAll('#mainContent input, #mainContent select, #mainContent textarea').forEach(el => {
+        if(!el.id) return;
+        if(el.type === 'checkbox' || el.type === 'radio') state.fields[el.id] = el.checked;
+        else state.fields[el.id] = el.value;
+      });
+
+      return state;
+    }
+
+    function restoreCurrentUiState(state){
+      if(!state) return;
+
+      Object.entries(state.fields || {}).forEach(([id, value]) => {
+        const el = document.getElementById(id);
+        if(!el) return;
+        if(el.type === 'checkbox' || el.type === 'radio') el.checked = value;
+        else el.value = value;
+      });
+
+      const main = document.querySelector('.main-content');
+      if(main) main.scrollTop = state.scrollTop || 0;
+
+      if(state.activeElementId){
+        const el = document.getElementById(state.activeElementId);
+        if(el && typeof el.focus === 'function') {
+          try { el.focus(); } catch(e) {}
+        }
+      }
+
+      try{
+        if(currentMenu === 'attachmentsCenter' && typeof searchAttachments === 'function') searchAttachments();
+      }catch(e){
+        console.warn('restore filter skipped', e);
+      }
+    }
+
+    function isUserActivelyEditing(){
+      const el = document.activeElement;
+      if(!el) return false;
+      const tag = (el.tagName || '').toLowerCase();
+      return tag === 'input' || tag === 'select' || tag === 'textarea' || el.isContentEditable;
+    }
+
+    function isModalOpen(){
+      const modal = document.getElementById('modal');
+      if(!modal) return false;
+      return modal.style.display && modal.style.display !== 'none';
+    }
+
+
     async function pullCloudStateAndRefresh(reason){
       const sb = initSupabaseClient();
       if(!sb || isCloudSaving) return;
@@ -968,12 +1027,21 @@
         if(data.updated_at) lastCloudUpdatedAt = data.updated_at;
 
         if(currentUser){
-          renderSidebar();
-          renderContent();
-          applyLanguage();
-        }
+          const uiState = captureCurrentUiState();
 
-        showRealtimeSyncHint('已同步最新数据');
+          if(isModalOpen() || isUserActivelyEditing()){
+            renderSidebar();
+            showRealtimeSyncHint('已同步最新数据（当前操作未打断）');
+          }else{
+            renderSidebar();
+            renderContent();
+            applyLanguage();
+            restoreCurrentUiState(uiState);
+            showRealtimeSyncHint('已同步最新数据');
+          }
+        }else{
+          showRealtimeSyncHint('已同步最新数据');
+        }
         setTimeout(()=>showRealtimeSyncHint('实时同步已开启'), 2500);
         console.log('Realtime synced:', reason, data.updated_at, data.updated_by);
       }catch(err){
@@ -1000,7 +1068,10 @@
             // 避免自己刚保存后立刻重复刷新
             if(Date.now() - lastSelfSaveAt < 1200) return;
             if(realtimePullTimer) clearTimeout(realtimePullTimer);
-            realtimePullTimer = setTimeout(() => pullCloudStateAndRefresh('postgres_changes'), 500);
+
+            // 用户正在输入/筛选时，延迟同步，避免打断当前操作
+            const delay = (isModalOpen() || isUserActivelyEditing()) ? 5000 : 500;
+            realtimePullTimer = setTimeout(() => pullCloudStateAndRefresh('postgres_changes'), delay);
           }
         )
         .subscribe((status) => {
@@ -1012,10 +1083,10 @@
       // 兜底轮询：如果网络或浏览器阻止 Realtime，最多每30秒检查一次
       if(!window.__cloudFallbackPoller){
         window.__cloudFallbackPoller = setInterval(() => {
-          if(cloudUser && document.visibilityState === 'visible'){
+          if(cloudUser && document.visibilityState === 'visible' && !isModalOpen() && !isUserActivelyEditing()){
             pullCloudStateAndRefresh('fallback_polling');
           }
-        }, 30000);
+        }, 60000);
       }
     }
 
@@ -2879,12 +2950,12 @@ let main=document.getElementById('mainContent');
         let existingRecord=returnRecords.find(r=>r.containerId===t.containerId&&r.location===t.to);
         if(existingRecord&&(existingRecord.type==='unpack'||existingRecord.isReturnConfirmed||existingRecord.type==='return_needed')) completedUnpack.push(t);
         else if(needUnpack) pendingUnpack.push(t);
-        else pendingUnpack.push(t);
+        // RG堆场等不需要掏箱的地点：在“在途运输-到货确认”点击确认到达后即完成，不再进入“待确认掏箱”
       });
       let html='<div class="card"><div class="card-header"><span class="card-title">✅ 在途运输 - 到货确认</span></div>';
       if(arriving.length===0)html+='<div style="padding:20px;text-align:center">暂无在途运输</div>';
       else html+='<div id="arrivingTable"></div>';
-      html+=`</div><div class="card"><div class="card-header"><span class="card-title">📦 待确认掏箱 - ${isAdminUser()?'全部地点':currentUser.location}（${pendingUnpack.length}）</span></div>`;
+      html+=`</div><div class="card"><div class="card-header"><span class="card-title">📦 待确认掏箱 - ${isAdminUser()?'全部掏箱地点':currentUser.location}（${pendingUnpack.length}）</span></div>`;
       if(pendingUnpack.length===0)html+='<div style="padding:20px;text-align:center">暂无待确认掏箱</div>';
       else html+='<div id="pendingUnpackTable"></div>';
       html+=`</div><div class="card"><div class="card-header"><span class="card-title">✅ 已掏箱 / 已完成 - ${isAdminUser()?'全部地点':currentUser.location}（${completedUnpack.length}）</span><button class="btn btn-sm" id="btnCompletedUnpack" onclick="toggleHistorySection('completedUnpackBody','btnCompletedUnpack')">展开查看</button></div><div id="completedUnpackBody" style="display:none;">`;
@@ -2902,7 +2973,7 @@ let main=document.getElementById('mainContent');
       if(pendingUnpack.length>0){
         renderTable('pendingUnpackTable',['批次','集装箱号','目的地','到达时间','操作'],pendingUnpack,(t)=>{
           let needUnpack=(t.to==='Rio Claro'||t.to==='IRA库房'||t.to==='工厂');
-          let actionHtml=!needUnpack?`<button class="btn btn-sm btn-success" onclick="confirmArrivalOnly(${t.id})">确认到达</button>`:`<button class="btn btn-sm btn-warning" onclick="doUnpack(${t.id})">确认掏箱</button>`;
+          let actionHtml=!needUnpack?`<span class="status-badge status-ready">已到达，无需掏箱</span>`:`<button class="btn btn-sm btn-warning" onclick="doUnpack(${t.id})">确认掏箱</button>`;
           let tr=document.createElement('tr');
           tr.innerHTML=`<td>${t.batch}</td><td>${t.containerNo}</td><td>${t.to || '-'}</td><td>${t.actualArrival?fmtDate(t.actualArrival.split('T')[0]):'-'}</td><td>${actionHtml}</td>`;
           return tr;
