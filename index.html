@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 Page Lock Sync</title>
+  <title>集装箱智能监控管理系统 V40.2 Andon Sequence</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -577,6 +577,30 @@
     .attachment-name { font-weight:600; color:#303133; word-break:break-all; }
     @media(max-width:768px){ .attachment-card{display:block;} .attachment-thumb{max-width:100%; width:100%; height:150px; margin-bottom:8px;} .attachment-actions{justify-content:flex-start;} }
 
+
+    /* ==================== V40.2 Andon顺序看板 ==================== */
+    .andon-board { background:#0f172a; color:#e5e7eb; border-radius:16px; padding:18px; overflow-x:auto; }
+    .andon-title { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:14px; color:#fff; }
+    .andon-lane-grid { display:grid; grid-template-columns: repeat(5, minmax(210px, 1fr)); gap:12px; min-width:1080px; }
+    .andon-lane { background:#111827; border:1px solid rgba(255,255,255,.1); border-radius:14px; padding:10px; min-height:360px; }
+    .andon-lane h3 { font-size:15px; color:#fff; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; }
+    .andon-card { background:#1f2937; border:1px solid rgba(255,255,255,.12); border-left:5px solid #64748b; border-radius:12px; padding:10px; margin-bottom:10px; color:#e5e7eb; box-shadow:0 2px 8px rgba(0,0,0,.18); }
+    .andon-card.priority { border-left-color:#a855f7; background:#2e2148; }
+    .andon-card.recommended { border-left-color:#22c55e; background:#163326; }
+    .andon-card.warning { border-left-color:#f59e0b; }
+    .andon-card.unloading { border-left-color:#3b82f6; }
+    .andon-card.done { border-left-color:#10b981; opacity:.78; }
+    .andon-card-title { font-size:16px; font-weight:800; color:#fff; margin-bottom:4px; }
+    .andon-card-meta { font-size:12px; color:#cbd5e1; line-height:1.6; }
+    .andon-tag { display:inline-block; padding:2px 7px; border-radius:999px; font-size:11px; margin:2px 3px 2px 0; background:#334155; color:#e5e7eb; }
+    .andon-tag.priority { background:#7e22ce; }
+    .andon-tag.recommended { background:#16a34a; }
+    .andon-tag.skip { background:#b45309; }
+    .andon-section-title { color:#93c5fd; font-weight:700; margin:14px 0 8px; border-bottom:1px solid rgba(255,255,255,.12); padding-bottom:6px; }
+    .sequence-badge { display:inline-block; min-width:28px; padding:2px 8px; border-radius:999px; background:#e6f0ff; color:#2a5298; font-weight:700; }
+    .priority-row { background:#faf5ff !important; }
+    .recommended-row { background:#f0fdf4 !important; }
+
   </style>
 </head>
 <body>
@@ -584,7 +608,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V39.6 Cloud：当前页面操作中暂停本页自动刷新，其他页面继续同步。
+        V40.2 Cloud：Andon收货看板 + 生产顺序控制 + 门岗车辆信息维护。
       </div>
       <button class="login-btn" onclick="loginWithGoogle()" style="width:100%;margin-bottom:14px;">使用 Google 登录</button>
 
@@ -725,8 +749,8 @@
       compactLargeStorageFields();
       return {
         containers, blList, containerBlMap, transportTasks, locationStock, returnRecords,
-        pickupPlans, productionRecords, nextIds, storageConfig, demurrageConfig, warningConfig,
-        version: 'V40.1 Gate Vehicle Info',
+        pickupPlans, productionRecords, productionPlans, nextIds, storageConfig, demurrageConfig, warningConfig,
+        version: 'V40.2 Andon Sequence',
         updatedAt: new Date().toISOString(),
         updatedBy: cloudUser?.email || currentUser?.email || currentUser?.name || ''
       };
@@ -742,6 +766,7 @@
       returnRecords = Array.isArray(data.returnRecords) ? data.returnRecords : [];
       pickupPlans = Array.isArray(data.pickupPlans) ? data.pickupPlans : [];
       productionRecords = Array.isArray(data.productionRecords) ? data.productionRecords : [];
+      productionPlans = Array.isArray(data.productionPlans) ? data.productionPlans : [];
       nextIds = data.nextIds || {container:1, task:1, plan:1, production:1};
       storageConfig = Array.isArray(data.storageConfig) ? data.storageConfig : [];
       demurrageConfig = Array.isArray(data.demurrageConfig) ? data.demurrageConfig : [];
@@ -1177,6 +1202,8 @@
       { id:'customs', name:'清关维护', icon:'🛃', roles:['订购科','关务'] },
       { id:'pickupPlan', name:'提箱计划', icon:'🚚', roles:['订购科'] },
       { id:'transportTasks', name:'运输任务', icon:'🚛', roles:['运输公司RG','运输公司JSL'] },
+      { id:'productionPlan', name:'生产计划维护', icon:'🗓️', roles:['订购科','工厂管理员'] },
+      { id:'receivingAndon', name:'收货Andon看板', icon:'📺', roles:['订购科','工厂管理员','运输公司RG','运输公司JSL'] },
       { id:'gateMonitoring', name:'门岗监控', icon:'🚪', roles:['订购科','运输公司RG','运输公司JSL','工厂管理员'] },
       { id:'waitingArea', name:'等待区监控', icon:'⏳', roles:['订购科','运输公司RG','运输公司JSL','工厂管理员'] },
       { id:'dockMonitoring', name:'卸货口监控', icon:'🏭', roles:['订购科','工厂管理员','运输公司RG','运输公司JSL'] },
@@ -1197,7 +1224,7 @@
       {id:'dashboard', name:'工作台'}, {id:'containers', name:'基础数据'},
       {id:'blIra', name:'提单/IRA管理'}, {id:'customs', name:'清关维护'},
       {id:'pickupPlan', name:'提箱计划'}, {id:'dynamicPlan', name:'动态运输计划'},
-      {id:'transportTasks', name:'运输任务'}, {id:'gateMonitoring', name:'门岗监控'},
+      {id:'transportTasks', name:'运输任务'}, {id:'productionPlan', name:'生产计划维护'}, {id:'receivingAndon', name:'收货Andon看板'}, {id:'gateMonitoring', name:'门岗监控'},
       {id:'waitingArea', name:'等待区监控'}, {id:'dockMonitoring', name:'卸货口监控'},
       {id:'andonCenter', name:'Andon异常中心'}, {id:'operationDashboard', name:'运营驾驶舱'},
       {id:'returnConfirm', name:'还箱确认'},
@@ -1218,7 +1245,7 @@
     }
 
     // ==================== 全局变量 ====================
-    let containers=[], blList=[], containerBlMap=[], transportTasks=[], locationStock=[], returnRecords=[], pickupPlans=[], productionRecords=[];
+    let containers=[], blList=[], containerBlMap=[], transportTasks=[], locationStock=[], returnRecords=[], pickupPlans=[], productionRecords=[], productionPlans=[];
     let currentUser=null, currentMenu='dashboard';
     // ==================== V39.6 当前页面操作锁 ====================
     // 目的：用户在筛选/确认/编辑当前页面时，不让实时同步重绘当前页面，避免筛选条件和表格状态被清空。
@@ -1638,6 +1665,7 @@ function getContainerLocation(cid){
       localStorage.setItem('cc_returnRecords',JSON.stringify(returnRecords));
       localStorage.setItem('cc_pickupPlans',JSON.stringify(pickupPlans));
       localStorage.setItem('cc_productionRecords',JSON.stringify(productionRecords));
+      localStorage.setItem('cc_productionPlans',JSON.stringify(productionPlans));
       localStorage.setItem('cc_nextIds',JSON.stringify(nextIds));
       localStorage.setItem('cc_storageConfig',JSON.stringify(storageConfig));
       localStorage.setItem('cc_demurrageConfig',JSON.stringify(demurrageConfig));
@@ -1657,6 +1685,7 @@ function getContainerLocation(cid){
         returnRecords = JSON.parse(localStorage.getItem('cc_returnRecords') || '[]');
         pickupPlans = JSON.parse(localStorage.getItem('cc_pickupPlans') || '[]');
         productionRecords = JSON.parse(localStorage.getItem('cc_productionRecords') || '[]');
+        productionPlans = JSON.parse(localStorage.getItem('cc_productionPlans') || '[]');
         nextIds = JSON.parse(localStorage.getItem('cc_nextIds') || '{"container":1,"task":1,"plan":1,"production":1}');
         
         let savedStorage = localStorage.getItem('cc_storageConfig');
@@ -1678,6 +1707,7 @@ function getContainerLocation(cid){
         returnRecords = [];
         pickupPlans = [];
         productionRecords = [];
+        productionPlans = [];
         nextIds = {container: 1, task: 1, plan: 1, production: 1};
         storageConfig = [];
         demurrageConfig = [];
@@ -1792,6 +1822,8 @@ let main=document.getElementById('mainContent');
         case'customs':renderCustoms(main);break;
         case'pickupPlan':renderPickupPlan(main);break;
         case'transportTasks':renderTransportTasks(main);break;
+        case'productionPlan':renderProductionPlan(main);break;
+        case'receivingAndon':renderReceivingAndon(main);break;
         case'gateMonitoring':renderGateMonitoring(main);break;
         case'waitingArea':renderWaitingArea(main);break;
         case'dockMonitoring':renderDockMonitoring(main);break;
@@ -3668,6 +3700,152 @@ let main=document.getElementById('mainContent');
       let rows=getFactoryOperationTasks('').map(t=>({批次:t.batch,集装箱号:t.containerNo,卸货口:t.unloadingDock,计划到达:fmtDateTime(t.estimatedArrival),车牌:t.truckPlate,司机:t.driverName,电话:t.driverPhone,门岗到达:fmtDateTime(t.gateArrivalTime),门岗放行:fmtDateTime(t.gateReleaseTime),等待区:t.waitingAreaTime,卸货开始:t.unloadStartTime,卸货完成:t.unloadFinishTime,状态:getOpStatusText(t)}));
       if(typeof XLSX==='undefined'){alert('XLSX组件未加载');return;} let ws=XLSX.utils.json_to_sheet(rows); let wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Operation'); XLSX.writeFile(wb,`factory_operation_${getTodayStr()}.xlsx`);
     };
+
+
+
+    // ==================== V40.2 Andon顺序控制增强版 ====================
+    function getPlanDateFromTask(t){ return getDatePart(t.estimatedArrival || t.plannedDate || t.gateArrivalTime || t.unloadStartTime || t.unloadFinishTime || ''); }
+    function getProductionPlanForTask(t){
+      let d = getPlanDateFromTask(t);
+      return productionPlans.find(p => String(p.containerNo||'').trim().toUpperCase() === String(t.containerNo||'').trim().toUpperCase() && (!d || !p.date || p.date === d)) || null;
+    }
+    function getTaskPlanSeq(t){
+      let p = getProductionPlanForTask(t);
+      let raw = p ? p.seq : (t.productionSeq || t.containerSeq || '');
+      let n = parseInt(String(raw).replace(/[^0-9]/g,''));
+      return isNaN(n) ? 999999 : n;
+    }
+    function getTaskArea(t){ return (getProductionPlanForTask(t)?.area) || t.productionArea || 'Assembly'; }
+    function getTaskDock(t){ return (getProductionPlanForTask(t)?.dock) || t.unloadingDock || '未定义卸货口'; }
+    function enrichTaskSequence(t){
+      t._plan = getProductionPlanForTask(t);
+      t._seq = getTaskPlanSeq(t);
+      t._area = getTaskArea(t);
+      t._dock = getTaskDock(t);
+      return t;
+    }
+    function getDockTasksByDate(date, dock){
+      return getFactoryOperationTasks(date).map(enrichTaskSequence).filter(t => !dock || getTaskDock(t) === dock);
+    }
+    function getDoneMaxSeq(date, dock){
+      let vals = getDockTasksByDate(date,dock).filter(t=>getOpStatus(t)==='unloaded').map(t=>t._seq).filter(n=>n<999999);
+      return vals.length ? Math.max(...vals) : 0;
+    }
+    function isLateRecoveryTask(t, date){
+      let st=getOpStatus(t); if(st==='not_arrived' || st==='unloaded') return false;
+      let maxDone=getDoneMaxSeq(date || getPlanDateFromTask(t), getTaskDock(t));
+      return t._seq < 999999 && t._seq < maxDone;
+    }
+    function getPriorityOrderedTasks(date, dock, statuses){
+      let arr=getDockTasksByDate(date,dock).filter(t=>!statuses || statuses.includes(getOpStatus(t)));
+      arr.forEach(t=>{ t._lateRecovery = isLateRecoveryTask(t,date); });
+      return arr.sort((a,b)=> (b._lateRecovery?1:0)-(a._lateRecovery?1:0) || a._seq-b._seq || String(a.estimatedArrival||'').localeCompare(String(b.estimatedArrival||'')));
+    }
+    function getRecommendedTaskForDock(date,dock){
+      return getPriorityOrderedTasks(date,dock,['inside_waiting','outside_parking','unloading']).find(t=>getOpStatus(t)==='inside_waiting' || getOpStatus(t)==='outside_parking' || getOpStatus(t)==='unloading') || null;
+    }
+    function canStartUnloadingTask(taskId){
+      let t=transportTasks.find(x=>x.id===taskId); if(!t) return {ok:false,msg:'任务不存在'};
+      enrichTaskSequence(t);
+      let d=getPlanDateFromTask(t)||getTodayStr(), dock=getTaskDock(t);
+      let rec=getRecommendedTaskForDock(d,dock);
+      if(rec && rec.id !== t.id){ return {ok:false,msg:`当前${dock}推荐先处理：${rec._seq<999999?'#'+rec._seq+' ':''}${rec.containerNo}`}; }
+      return {ok:true,msg:''};
+    }
+    function getSkippedPlanItems(date,dock){
+      let tasks=getDockTasksByDate(date,dock);
+      let doneMax=getDoneMaxSeq(date,dock);
+      let existingNos=new Set(tasks.map(t=>String(t.containerNo||'').trim().toUpperCase()));
+      return productionPlans.filter(p => p.date===date && (!dock || p.dock===dock) && parseInt(p.seq||999999)<doneMax && !existingNos.has(String(p.containerNo||'').trim().toUpperCase()));
+    }
+
+    function renderProductionPlan(container){
+      let d=document.getElementById('prodPlanDate')?.value || getTodayStr();
+      let rows=productionPlans.filter(p=>!d || p.date===d).sort((a,b)=>String(a.area||'').localeCompare(String(b.area||'')) || String(a.dock||'').localeCompare(String(b.dock||''),'zh-CN',{numeric:true}) || (parseInt(a.seq||999999)-parseInt(b.seq||999999)));
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🗓️ 生产计划维护 / 收货顺序基准</span></div>
+        <div class="search-bar"><input type="date" id="prodPlanDate" value="${d}" onchange="renderProductionPlan(document.getElementById('mainContent'))"><select id="prodPlanArea"><option>Assembly</option><option>Welding</option></select><input id="prodPlanDock" placeholder="卸货口 120B/132/140C"><input id="prodPlanSeq" placeholder="顺序"><input id="prodPlanBatch" placeholder="批次"><input id="prodPlanContainer" placeholder="集装箱号"><button class="btn btn-success" onclick="addProductionPlanSingle()">新增</button></div>
+        <div class="card" style="background:#f8f9fc;margin-bottom:12px;"><div style="font-size:13px;color:#606266;line-height:1.7;margin-bottom:8px;">可从Excel粘贴生产计划，推荐列顺序：区域、卸货口、顺序、批次、集装箱号。系统会以此作为门岗/卸货口顺序控制基准。</div><textarea id="prodPlanPaste" class="form-control" style="height:90px" placeholder="Assembly\t120B\t1\tBXRC6001\tCSNU1234567"></textarea><button class="btn btn-primary" onclick="importProductionPlanPaste()">批量导入粘贴内容</button><button class="btn btn-warning" onclick="clearProductionPlanByDate()">清空当天计划</button></div>
+        <div id="prodPlanTable"></div></div>`;
+      if(rows.length===0){document.getElementById('prodPlanTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无生产计划</div></div>';return;}
+      renderTable('prodPlanTable',['日期','区域','卸货口','顺序','批次','集装箱号','状态','操作'],rows,(p)=>{let linked=transportTasks.find(t=>String(t.containerNo||'').trim().toUpperCase()===String(p.containerNo||'').trim().toUpperCase() && getPlanDateFromTask(t)===p.date);let tr=document.createElement('tr');tr.innerHTML=`<td>${p.date}</td><td>${p.area}</td><td>${p.dock}</td><td><span class="sequence-badge">${p.seq}</span></td><td>${p.batch||'-'}</td><td>${p.containerNo||'-'}</td><td>${linked?getOpStatusText(enrichTaskSequence(linked)):'未生成运输任务'}</td><td><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan(${p.id})">删除</button></td>`;return tr;});
+    }
+    window.addProductionPlanSingle=function(){
+      let date=document.getElementById('prodPlanDate')?.value||getTodayStr(); let area=document.getElementById('prodPlanArea')?.value||'Assembly'; let dock=(document.getElementById('prodPlanDock')?.value||'').trim(); let seq=(document.getElementById('prodPlanSeq')?.value||'').trim(); let batch=(document.getElementById('prodPlanBatch')?.value||'').trim(); let containerNo=(document.getElementById('prodPlanContainer')?.value||'').trim();
+      if(!dock||!seq||!containerNo){alert('请至少填写卸货口、顺序、集装箱号');return;}
+      productionPlans.push({id:Date.now()+Math.random(),date,area,dock,seq,batch,containerNo,createdAt:new Date().toISOString()}); saveData(); renderContent();
+    };
+    window.importProductionPlanPaste=function(){
+      let date=document.getElementById('prodPlanDate')?.value||getTodayStr(); let text=document.getElementById('prodPlanPaste')?.value||''; if(!text.trim()){alert('请先粘贴计划内容');return;}
+      let count=0;
+      text.split(/\r?\n/).forEach(line=>{let parts=line.split(/\t|,|;/).map(x=>x.trim()); if(parts.length<4) return; if(/container|集装箱|batch|批次|顺序|sequence/i.test(line)) return; let area='Assembly',dock='',seq='',batch='',containerNo=''; if(parts.length>=5){[area,dock,seq,batch,containerNo]=parts;} else {[seq,batch,containerNo,dock]=parts;}
+        if(!area) area='Assembly'; if(dock&&seq&&containerNo){productionPlans.push({id:Date.now()+Math.random()+count,date,area,dock,seq,batch,containerNo,createdAt:new Date().toISOString()}); count++;}
+      });
+      saveData(); renderContent(); alert(`已导入 ${count} 条生产计划`);
+    };
+    window.deleteProductionPlan=function(id){productionPlans=productionPlans.filter(p=>String(p.id)!==String(id));saveData();renderContent();};
+    window.clearProductionPlanByDate=function(){let d=document.getElementById('prodPlanDate')?.value||getTodayStr();if(!confirm(`确认清空 ${d} 的生产计划吗？`))return;productionPlans=productionPlans.filter(p=>p.date!==d);saveData();renderContent();};
+
+    function renderReceivingAndon(container){
+      let d=document.getElementById('andonDate')?.value||getTodayStr();
+      let areaFilter=document.getElementById('andonAreaFilter')?.value||'ALL';
+      let tasks=getFactoryOperationTasks(d).map(enrichTaskSequence);
+      let plans=productionPlans.filter(p=>p.date===d);
+      let areas=[...new Set([...plans.map(p=>p.area||'Assembly'),...tasks.map(t=>getTaskArea(t))])].filter(Boolean); if(areaFilter!=='ALL') areas=areas.filter(a=>a===areaFilter);
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📺 GWM Receiving Andon 收货顺序看板</span></div><div class="search-bar"><input type="date" id="andonDate" value="${d}" onchange="renderReceivingAndon(document.getElementById('mainContent'))"><select id="andonAreaFilter" onchange="renderReceivingAndon(document.getElementById('mainContent'))"><option value="ALL">全部区域</option><option value="Assembly" ${areaFilter==='Assembly'?'selected':''}>Assembly</option><option value="Welding" ${areaFilter==='Welding'?'selected':''}>Welding</option></select><button class="btn btn-primary" onclick="renderReceivingAndon(document.getElementById('mainContent'))">刷新</button><button class="btn btn-success" onclick="currentMenu='productionPlan';renderSidebar();renderContent();">维护生产计划</button></div><div id="andonBoard"></div></div>`;
+      let board=document.getElementById('andonBoard');
+      if(tasks.length===0 && plans.length===0){board.innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无生产计划或运输任务</div></div>';return;}
+      let statusList=[['not_arrived','Pendente / 未到厂'],['outside_parking','Portaria / 厂外停车区'],['inside_waiting','Recuo / 厂内等待'],['unloading','Em Doca / 卸货中'],['unloaded','Finalizado / 已完成卸货']];
+      let html=`<div class="andon-board"><div class="andon-title"><div><b>GWM Receiving Andon</b><div style="font-size:12px;color:#cbd5e1;margin-top:4px;">规则：已到车辆按生产顺序；未到允许跳过；异常到达自动插入第一优先级。</div></div><div>${d}</div></div>`;
+      areas.forEach(area=>{
+        let areaTasks=tasks.filter(t=>getTaskArea(t)===area);
+        html+=`<div class="andon-section-title">${area}</div><div class="andon-lane-grid">`;
+        statusList.forEach(([st,label])=>{
+          let list=areaTasks.filter(t=>getOpStatus(t)===st);
+          let docks=[...new Set(list.map(t=>getTaskDock(t)))]; let ordered=[]; docks.forEach(dk=>ordered.push(...getPriorityOrderedTasks(d,dk,[st]).filter(t=>getTaskArea(t)===area)));
+          if(st==='not_arrived') ordered=list.sort((a,b)=>a._seq-b._seq);
+          html+=`<div class="andon-lane"><h3>${label}<span>${ordered.length}</span></h3>`;
+          ordered.slice(0,80).forEach((t,idx)=>{
+            let late=isLateRecoveryTask(t,d); let rec=getRecommendedTaskForDock(d,getTaskDock(t)); let recommended=rec&&rec.id===t.id&&['outside_parking','inside_waiting','unloading'].includes(st); let cls= late?'priority':recommended?'recommended':st==='unloading'?'unloading':st==='unloaded'?'done':(st==='not_arrived'?'warning':'');
+            html+=`<div class="andon-card ${cls}"><div class="andon-card-title">${t.containerNo||'-'}</div><div class="andon-card-meta"><span class="andon-tag">#${t._seq<999999?t._seq:'-'}</span><span class="andon-tag">${getTaskDock(t)}</span>${late?'<span class="andon-tag priority">异常到达优先</span>':''}${recommended?'<span class="andon-tag recommended">当前推荐</span>':''}<br>批次：${t.batch||'-'}<br>车牌：${t.truckPlate||'-'}　司机：${t.driverName||'-'}<br>计划：${fmtDateTime(t.estimatedArrival)}</div></div>`;
+          });
+          html+='</div>';
+        });
+        html+='</div>';
+      });
+      html+='</div>'; board.innerHTML=html;
+    }
+
+    // 覆盖V40.1页面：加入生产顺序与异常到达优先级
+    function renderGateMonitoring(container){
+      let d = document.getElementById('gateMonitorDate')?.value || getTodayStr();
+      let tasks = getFactoryOperationTasks(d).map(enrichTaskSequence).filter(t => ['not_arrived','outside_parking'].includes(getOpStatus(t)));
+      tasks = tasks.sort((a,b)=>getTaskDock(a).localeCompare(getTaskDock(b),'zh-CN',{numeric:true}) || a._seq-b._seq);
+      container.innerHTML = `<div class="card"><div class="card-header"><span class="card-title">🚪 门岗监控 / 按生产顺序放行</span><button class="btn export-btn" onclick="exportFactoryOperationTasks()">📥 导出</button></div><div class="search-bar"><input type="date" id="gateMonitorDate" value="${d}" onchange="renderGateMonitoring(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderGateMonitoring(document.getElementById('mainContent'))">查询</button><button class="btn btn-success" onclick="currentMenu='receivingAndon';renderSidebar();renderContent();">打开Andon看板</button></div><div style="font-size:13px;color:#606266;margin-bottom:10px;line-height:1.7;">门岗按集装箱号确认车辆到达，并维护车牌/司机/电话。系统按照生产顺序提示放行；已跳过序号后到达，会自动标记为异常到达优先。</div><div id="gateMonitorTable"></div></div>`;
+      if(tasks.length===0){ document.getElementById('gateMonitorTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无门岗/厂外停车区待处理任务</div></div>'; return; }
+      renderTable('gateMonitorTable',['卸货口','顺序','计划到达','批次','集装箱号','车牌','司机','电话','实际到达门岗','状态','操作'],tasks,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);let late=isLateRecoveryTask(t,d);let rec=getRecommendedTaskForDock(d,getTaskDock(t));let recommended=rec&&rec.id===t.id;tr.className=late?'priority-row':recommended?'recommended-row':'';tr.innerHTML=`<td>${getTaskDock(t)}</td><td><span class="sequence-badge">${t._seq<999999?t._seq:'-'}</span>${late?' <span class="andon-tag priority">异常到达</span>':recommended?' <span class="andon-tag recommended">推荐</span>':''}</td><td>${fmtDateTime(t.estimatedArrival)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td><input id="gatePlate_${t.id}" class="form-control" value="${t.truckPlate||''}" placeholder="车牌" style="width:95px"></td><td><input id="gateDriver_${t.id}" class="form-control" value="${t.driverName||''}" placeholder="司机" style="width:90px"></td><td><input id="gatePhone_${t.id}" class="form-control" value="${t.driverPhone||''}" placeholder="电话" style="width:105px"></td><td>${fmtDateTime(t.gateArrivalTime)||'-'}</td><td><span class="status-badge ${st==='outside_parking'?'status-warning':'status-pending'}">${getOpStatusText(t)}</span></td><td>${st==='not_arrived'?`<button class="btn btn-sm btn-success" onclick="confirmGateArrival(${t.id})">确认到达厂外停车区</button>`:`<button class="btn btn-sm btn-primary" onclick="releaseFromGate(${t.id})">放行到厂内等待</button>`}</td>`;return tr;});
+    }
+    window.releaseFromGate=function(taskId){
+      let t=transportTasks.find(x=>x.id===taskId); if(!t) return; enrichTaskSequence(t);
+      let rec=getRecommendedTaskForDock(getPlanDateFromTask(t)||getTodayStr(),getTaskDock(t));
+      if(rec && rec.id!==t.id && !confirm(`当前系统推荐先放行 ${rec.containerNo}（顺序#${rec._seq}）。仍要放行当前集装箱吗？`)) return;
+      t.gateReleaseTime=t.gateReleaseTime || nowLocalInput(); t.waitingAreaTime=t.waitingAreaTime || nowLocalInput(); t.operationStatus='inside_waiting'; saveData(); renderContent();
+    };
+    function renderWaitingArea(container){
+      let d=document.getElementById('waitingAreaDate')?.value||getTodayStr(); let tasks=getFactoryOperationTasks(d).map(enrichTaskSequence).filter(t=>getOpStatus(t)==='inside_waiting');
+      let docks=[...new Set(tasks.map(t=>getTaskDock(t)))]; let ordered=[]; docks.forEach(dk=>ordered.push(...getPriorityOrderedTasks(d,dk,['inside_waiting'])));
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">⏳ 等待区监控 / 当前应进卸货口顺序</span></div><div class="search-bar"><input type="date" id="waitingAreaDate" value="${d}" onchange="renderWaitingArea(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderWaitingArea(document.getElementById('mainContent'))">查询</button></div><div id="waitingAreaTable"></div></div>`;
+      if(ordered.length===0){document.getElementById('waitingAreaTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无厂内等待车辆</div></div>';return;}
+      renderTable('waitingAreaTable',['卸货口','顺序','进入厂内等待','等待分钟','批次','集装箱号','车牌','司机','电话','操作'],ordered,(t)=>{let late=isLateRecoveryTask(t,d);let rec=getRecommendedTaskForDock(d,getTaskDock(t));let recommended=rec&&rec.id===t.id;let tr=document.createElement('tr');tr.className=late?'priority-row':recommended?'recommended-row':'';tr.innerHTML=`<td>${getTaskDock(t)}</td><td><span class="sequence-badge">${t._seq<999999?t._seq:'-'}</span>${late?' <span class="andon-tag priority">异常到达优先</span>':recommended?' <span class="andon-tag recommended">当前推荐</span>':''}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${minutesBetween(t.waitingAreaTime,nowLocalInput())}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td>${t.driverPhone||'-'}</td><td><button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})">进入卸货口/开始卸货</button> <button class="btn btn-sm btn-warning" onclick="openAndonForTask(${t.id})">异常</button></td>`;return tr;});
+    }
+    window.startUnloading=function(taskId){let t=transportTasks.find(x=>x.id===taskId);if(!t)return;let chk=canStartUnloadingTask(taskId);if(!chk.ok&&!confirm(chk.msg+'。仍要开始卸货吗？'))return;t.unloadStartTime=t.unloadStartTime||nowLocalInput();t.operationStatus='unloading';saveData();renderContent();};
+    window.finishUnloading=function(taskId){let t=transportTasks.find(x=>x.id===taskId);if(!t)return;t.unloadFinishTime=t.unloadFinishTime||nowLocalInput();t.operationStatus='unloaded';saveData();renderContent();};
+    function renderDockMonitoring(container){
+      let d=document.getElementById('dockMonitorDate')?.value||getTodayStr(); let tasks=getFactoryOperationTasks(d).map(enrichTaskSequence).filter(t=>['inside_waiting','unloading','unloaded'].includes(getOpStatus(t))); let docks=['120B','132','140B','140C'];tasks.forEach(t=>{let dk=getTaskDock(t);if(dk&&!docks.includes(dk))docks.push(dk);});
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🏭 卸货口监控 / 顺序控制</span></div><div class="search-bar"><input type="date" id="dockMonitorDate" value="${d}" onchange="renderDockMonitoring(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderDockMonitoring(document.getElementById('mainContent'))">查询</button><button class="btn btn-success" onclick="currentMenu='receivingAndon';renderSidebar();renderContent();">打开Andon看板</button></div><div class="stats-grid">${docks.map(dk=>{let list=tasks.filter(t=>getTaskDock(t)===dk);let rec=getRecommendedTaskForDock(d,dk);let doing=list.filter(t=>getOpStatus(t)==='unloading').length;let wait=list.filter(t=>getOpStatus(t)==='inside_waiting').length;return `<div class="stat-card"><div class="stat-number">${doing}/${wait}</div><div class="stat-label">${dk} 卸货中/等待<br>推荐：${rec?rec.containerNo:'-'}</div></div>`}).join('')}</div><div id="dockMonitorTable"></div></div>`;
+      if(tasks.length===0){document.getElementById('dockMonitorTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无卸货口执行数据</div></div>';return;}
+      let ordered=[];docks.forEach(dk=>ordered.push(...getPriorityOrderedTasks(d,dk,['inside_waiting','unloading','unloaded'])));
+      renderTable('dockMonitorTable',['卸货口','顺序','状态','批次','集装箱号','车牌','等待开始','卸货开始','卸货完成','操作'],ordered,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);let late=isLateRecoveryTask(t,d);let rec=getRecommendedTaskForDock(d,getTaskDock(t));let recommended=rec&&rec.id===t.id;tr.className=late?'priority-row':recommended?'recommended-row':'';tr.innerHTML=`<td>${getTaskDock(t)}</td><td><span class="sequence-badge">${t._seq<999999?t._seq:'-'}</span>${late?' <span class="andon-tag priority">异常到达优先</span>':recommended?' <span class="andon-tag recommended">当前推荐</span>':''}</td><td><span class="status-badge ${st==='unloading'?'status-transport':st==='unloaded'?'status-completed':'status-warning'}">${getOpStatusText(t)}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})">开始</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading(${t.id})">完成</button>`:'-'}</td>`;return tr;});
+    }
 
     // 库存看板
     function renderLocationStock(container){
