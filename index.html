@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V39.5 Yard Arrival No Unpack</title>
+  <title>集装箱智能监控管理系统 V39.6 Page Lock Sync</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -584,7 +584,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V39.5 Cloud：RG堆场到货确认后不再进入待掏箱。
+        V39.6 Cloud：当前页面操作中暂停本页自动刷新，其他页面继续同步。
       </div>
       <button class="login-btn" onclick="loginWithGoogle()" style="width:100%;margin-bottom:14px;">使用 Google 登录</button>
 
@@ -1007,6 +1007,54 @@
       return modal.style.display && modal.style.display !== 'none';
     }
 
+    function lockCurrentPageRefresh(reason){
+      if(!currentMenu) return;
+      pageOperationLock = {
+        menu: currentMenu,
+        lockedAt: pageOperationLock.menu === currentMenu && pageOperationLock.lockedAt ? pageOperationLock.lockedAt : Date.now(),
+        lastActivityAt: Date.now(),
+        reason: reason || 'user_operation'
+      };
+      showRealtimeSyncHint('当前页面操作中：本页暂停自动刷新');
+    }
+
+    function unlockCurrentPageRefresh(reason){
+      pageOperationLock = { menu: null, lockedAt: 0, lastActivityAt: 0, reason: reason || '' };
+      if(reason !== 'silent') showRealtimeSyncHint('本页自动刷新已恢复');
+    }
+
+    function isCurrentPageRefreshLocked(){
+      if(!pageOperationLock || pageOperationLock.menu !== currentMenu) return false;
+      if(Date.now() - (pageOperationLock.lastActivityAt || 0) > PAGE_LOCK_TIMEOUT_MS){
+        unlockCurrentPageRefresh('timeout');
+        return false;
+      }
+      return true;
+    }
+
+    function bindCurrentPageOperationLock(){
+      const main = document.getElementById('mainContent');
+      if(!main || main.dataset.pageLockBound === '1') return;
+      main.dataset.pageLockBound = '1';
+
+      main.addEventListener('input', (e) => {
+        const el = e.target;
+        if(el && el.matches && el.matches('input, select, textarea')) lockCurrentPageRefresh('input');
+      }, true);
+
+      main.addEventListener('change', (e) => {
+        const el = e.target;
+        if(el && el.matches && el.matches('input, select, textarea')) lockCurrentPageRefresh('change');
+      }, true);
+
+      main.addEventListener('click', (e) => {
+        const el = e.target && e.target.closest ? e.target.closest('button, .btn, input, select, textarea') : null;
+        if(!el) return;
+        if(el.classList && el.classList.contains('menu-item')) return;
+        lockCurrentPageRefresh('click');
+      }, true);
+    }
+
 
     async function pullCloudStateAndRefresh(reason){
       const sb = initSupabaseClient();
@@ -1029,9 +1077,11 @@
         if(currentUser){
           const uiState = captureCurrentUiState();
 
-          if(isModalOpen() || isUserActivelyEditing()){
+          // V39.6：当前页面被用户操作锁定时，只更新内存数据和左侧菜单，不重绘当前内容。
+          // 这样提单筛选、勾选状态、滚动位置和正在确认的数据不会被实时同步打断。
+          if(isCurrentPageRefreshLocked() || isModalOpen() || isUserActivelyEditing()){
             renderSidebar();
-            showRealtimeSyncHint('已同步最新数据（当前操作未打断）');
+            showRealtimeSyncHint('已同步云端数据（当前页面未刷新）');
           }else{
             renderSidebar();
             renderContent();
@@ -1070,7 +1120,7 @@
             if(realtimePullTimer) clearTimeout(realtimePullTimer);
 
             // 用户正在输入/筛选时，延迟同步，避免打断当前操作
-            const delay = (isModalOpen() || isUserActivelyEditing()) ? 5000 : 500;
+            const delay = (isCurrentPageRefreshLocked() || isModalOpen() || isUserActivelyEditing()) ? 5000 : 500;
             realtimePullTimer = setTimeout(() => pullCloudStateAndRefresh('postgres_changes'), delay);
           }
         )
@@ -1083,7 +1133,7 @@
       // 兜底轮询：如果网络或浏览器阻止 Realtime，最多每30秒检查一次
       if(!window.__cloudFallbackPoller){
         window.__cloudFallbackPoller = setInterval(() => {
-          if(cloudUser && document.visibilityState === 'visible' && !isModalOpen() && !isUserActivelyEditing()){
+          if(cloudUser && document.visibilityState === 'visible' && !isCurrentPageRefreshLocked() && !isModalOpen() && !isUserActivelyEditing()){
             pullCloudStateAndRefresh('fallback_polling');
           }
         }, 60000);
@@ -1162,6 +1212,17 @@
     // ==================== 全局变量 ====================
     let containers=[], blList=[], containerBlMap=[], transportTasks=[], locationStock=[], returnRecords=[], pickupPlans=[], productionRecords=[];
     let currentUser=null, currentMenu='dashboard';
+    // ==================== V39.6 当前页面操作锁 ====================
+    // 目的：用户在筛选/确认/编辑当前页面时，不让实时同步重绘当前页面，避免筛选条件和表格状态被清空。
+    // 云端数据仍会写入内存；切换到其他页面时会看到最新数据。
+    let pageOperationLock = {
+      menu: null,
+      lockedAt: 0,
+      lastActivityAt: 0,
+      reason: ''
+    };
+    const PAGE_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
+
     let nextIds={container:1,task:1,plan:1,production:1};
     
     // 预警配置
@@ -1699,10 +1760,11 @@ function getContainerLocation(cid){
       let menus=allMenus.filter(m => canAccessMenu(m));
       if(!menus.some(m => m.id === currentMenu)){ currentMenu = menus.length ? menus[0].id : ''; }
       document.getElementById('sidebar').innerHTML=menus.map(m=>`<div class="menu-item ${currentMenu===m.id?'active':''}" data-menu="${m.id}"><span>${m.icon}</span> ${t(m.name)}</div>`).join('');
-      document.querySelectorAll('.menu-item').forEach(item=>{item.addEventListener('click',()=>{currentMenu=item.dataset.menu;renderSidebar();renderContent();applyLanguage();});});
+      document.querySelectorAll('.menu-item').forEach(item=>{item.addEventListener('click',()=>{if(currentMenu !== item.dataset.menu) unlockCurrentPageRefresh('silent'); currentMenu=item.dataset.menu;renderSidebar();renderContent();applyLanguage();});});
     }
     
     function renderContent(){
+      bindCurrentPageOperationLock();
       
       if(currentMenu === 'userManagement'){
         renderUserManagement();
@@ -1882,7 +1944,13 @@ let main=document.getElementById('mainContent');
       let waiting=activeContainers.filter(c=>c.customsStatus==='清关中').length;
       let inTransit=transportTasks.filter(t=>t.status==='in_transit' && isOperationalVisibleTask(t)).length;
       let stock={'港口':0,'RG堆场':0,'Rio Claro':0,'IRA库房':0,'工厂':0};
-      activeContainers.forEach(c=>{let loc=getContainerLocation(c.id); stock[loc]=(stock[loc]||0)+1;});
+      let producedCount = containers.filter(c => isProducedCompletedContainerId(c.id)).length;
+      // V39.7：工作台库存分布中，“工厂”只统计当前位置在工厂且尚未生产的集装箱；已生产集装箱单独显示。
+      activeContainers.forEach(c=>{
+        let loc=getContainerLocation(c.id);
+        if(loc === '已生产') return;
+        stock[loc]=(stock[loc]||0)+1;
+      });
       let totalStorage = cachedFeeData.totalStorage || 0;
       let totalAbnormalStorage = cachedFeeData.totalAbnormalStorage || 0;
       let totalDemurrage = cachedFeeData.totalDemurrage || 0;
@@ -1923,7 +1991,7 @@ let main=document.getElementById('mainContent');
             <div class="stat-label">⚠️ ${warningConfig.demurrageWarningDays}天内将产生滞箱费</div>
           </div>
         </div>
-        <div class="card"><div class="card-title">📍 库存分布</div><div class="location-stock-grid">${Object.entries(stock).map(([k,v])=>`<div class="location-stock-item"><div class="location-stock-count">${v}</div><div>${k}</div></div>`).join('')}</div></div>
+        <div class="card"><div class="card-title">📍 库存分布</div><div class="location-stock-grid">${Object.entries(stock).map(([k,v])=>`<div class="location-stock-item" onclick="showLocationStockDetail('${k}')" title="查看${k}集装箱明细"><div class="location-stock-count">${v}</div><div>${k}</div></div>`).join('')}<div class="location-stock-item" onclick="showLocationStockDetail('已生产')" title="查看已生产集装箱明细"><div class="location-stock-count">${producedCount}</div><div>已生产</div></div></div><div style="font-size:12px;color:#909399;margin-top:10px;">说明：工厂库存仅统计当前位置为工厂且尚未生产的集装箱；已生产集装箱单独统计。</div></div>
       `;
     }
     
@@ -1959,7 +2027,7 @@ let main=document.getElementById('mainContent');
       XLSX.writeFile(wb, `${type}_预警列表_${getTodayStr()}.xlsx`);
     };
     
-    function jumpTo(menu){currentMenu=menu;renderSidebar();renderContent();}
+    function jumpTo(menu){if(currentMenu !== menu) unlockCurrentPageRefresh('silent'); currentMenu=menu;renderSidebar();renderContent();}
     
     // ==================== 基础数据 ====================
     function renderContainers(container){
