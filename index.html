@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V40.4 Andon Sequence</title>
+  <title>集装箱智能监控管理系统 V40.2 Andon Sequence</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -3144,9 +3144,55 @@ let main=document.getElementById('mainContent');
 
 
 
+    function getTaskContainerSeq(task){
+      if(!task) return '';
+      if(task.containerSeq !== undefined && task.containerSeq !== null && String(task.containerSeq).trim() !== '') return String(task.containerSeq).trim();
+      let c = containers.find(x => String(x.id) === String(task.containerId));
+      return c && c.containerSeq !== undefined && c.containerSeq !== null ? String(c.containerSeq).trim() : '';
+    }
+
+    function sortTasksByContainerSeq(list){
+      return [...list].sort((a,b)=>{
+        const sa = getTaskContainerSeq(a);
+        const sb = getTaskContainerSeq(b);
+        const na = parseInt(sa || '999999', 10);
+        const nb = parseInt(sb || '999999', 10);
+        if(!isNaN(na) || !isNaN(nb)){
+          if((isNaN(na)?999999:na) !== (isNaN(nb)?999999:nb)) return (isNaN(na)?999999:na) - (isNaN(nb)?999999:nb);
+        }
+        return String(sa).localeCompare(String(sb),'zh-CN',{numeric:true}) || String(a.batch||'').localeCompare(String(b.batch||''),'zh-CN',{numeric:true}) || String(a.containerNo||'').localeCompare(String(b.containerNo||''));
+      });
+    }
+
+    function getArrivalConfirmFilters(){
+      return {
+        batch: (document.getElementById('arrivalSearchBatch')?.value || '').toLowerCase().trim(),
+        containerNo: (document.getElementById('arrivalSearchContainer')?.value || '').toLowerCase().trim(),
+        seq: (document.getElementById('arrivalSearchSeq')?.value || '').toLowerCase().trim()
+      };
+    }
+
+    function filterArrivalConfirmTasks(list){
+      const f = getArrivalConfirmFilters();
+      return sortTasksByContainerSeq(list).filter(t=>{
+        const seq = getTaskContainerSeq(t).toLowerCase();
+        const batch = String(t.batch || '').toLowerCase();
+        const no = String(t.containerNo || '').toLowerCase();
+        return (!f.batch || batch.includes(f.batch)) && (!f.containerNo || no.includes(f.containerNo)) && (!f.seq || seq.includes(f.seq));
+      });
+    }
+
+    window.refreshLocationConfirmSearch = function(){ renderLocationConfirm(document.getElementById('mainContent')); };
+    window.clearLocationConfirmSearch = function(){
+      ['arrivalSearchBatch','arrivalSearchContainer','arrivalSearchSeq'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
+      renderLocationConfirm(document.getElementById('mainContent'));
+    };
+
     function renderLocationConfirm(container){
-      let arriving=transportTasks.filter(t=>t.status==='in_transit'&&isTaskVisibleForArrivalConfirm(t)&&isOperationalVisibleTask(t));
-      let arrived=transportTasks.filter(t=>t.status==='arrived'&&isTaskVisibleForArrivalConfirm(t)&&isOperationalVisibleTask(t));
+      let arrivingRaw=transportTasks.filter(t=>t.status==='in_transit'&&isTaskVisibleForArrivalConfirm(t)&&isOperationalVisibleTask(t));
+      let arrivedRaw=transportTasks.filter(t=>t.status==='arrived'&&isTaskVisibleForArrivalConfirm(t)&&isOperationalVisibleTask(t));
+      let arriving=filterArrivalConfirmTasks(arrivingRaw);
+      let arrived=filterArrivalConfirmTasks(arrivedRaw);
       let pendingUnpack=[];
       let completedUnpack=[];
       arrived.forEach(t=>{
@@ -3156,7 +3202,16 @@ let main=document.getElementById('mainContent');
         else if(needUnpack) pendingUnpack.push(t);
         // RG堆场等不需要掏箱的地点：在“在途运输-到货确认”点击确认到达后即完成，不再进入“待确认掏箱”
       });
-      let html='<div class="card"><div class="card-header"><span class="card-title">✅ 在途运输 - 到货确认</span></div>';
+      let f = getArrivalConfirmFilters();
+      let html=`<div class="card"><div class="card-header"><span class="card-title">✅ 在途运输 - 到货确认</span></div>
+        <div class="search-bar">
+          <input type="text" id="arrivalSearchBatch" placeholder="批次号" value="${f.batch || ''}" oninput="refreshLocationConfirmSearch()">
+          <input type="text" id="arrivalSearchContainer" placeholder="集装箱号" value="${f.containerNo || ''}" oninput="refreshLocationConfirmSearch()">
+          <input type="text" id="arrivalSearchSeq" placeholder="集装箱序号" value="${f.seq || ''}" oninput="refreshLocationConfirmSearch()">
+          <button class="btn btn-primary" onclick="refreshLocationConfirmSearch()">查询</button>
+          <button class="btn" onclick="clearLocationConfirmSearch()">重置</button>
+          <span style="font-size:12px;color:#909399;">按序号升序显示，支持批次号/集装箱号查询</span>
+        </div>`;
       if(arriving.length===0)html+='<div style="padding:20px;text-align:center">暂无在途运输</div>';
       else html+='<div id="arrivingTable"></div>';
       html+=`</div><div class="card"><div class="card-header"><span class="card-title">📦 待确认掏箱 - ${isAdminUser()?'全部掏箱地点':currentUser.location}（${pendingUnpack.length}）</span></div>`;
@@ -3168,29 +3223,29 @@ let main=document.getElementById('mainContent');
       html+='</div></div>';
       container.innerHTML=html;
       if(arriving.length>0){
-        renderTable('arrivingTable',['批次','集装箱号','出发地','目的地','预计到达','操作'],arriving,(t)=>{
+        renderTable('arrivingTable',['序号','批次','集装箱号','出发地','目的地','预计到达','操作'],arriving,(t)=>{
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${t.batch}</td><td>${t.containerNo}</td><td>${t.from}</td><td>${t.to}</td><td>${t.estimatedArrival?fmtDate(t.estimatedArrival.split('T')[0]):'-'}</td><td><button class="btn btn-sm btn-success" onclick="doArrival(${t.id})">确认到达</button></td>`;
+          tr.innerHTML=`<td><span class="sequence-badge">${getTaskContainerSeq(t)||'-'}</span></td><td>${t.batch}</td><td>${t.containerNo}</td><td>${t.from}</td><td>${t.to}</td><td>${t.estimatedArrival?fmtDateTime(t.estimatedArrival):'-'}</td><td><button class="btn btn-sm btn-success" onclick="doArrival(${t.id})">确认到达</button></td>`;
           return tr;
         });
       }
       if(pendingUnpack.length>0){
-        renderTable('pendingUnpackTable',['批次','集装箱号','目的地','到达时间','操作'],pendingUnpack,(t)=>{
+        renderTable('pendingUnpackTable',['序号','批次','集装箱号','目的地','到达时间','操作'],sortTasksByContainerSeq(pendingUnpack),(t)=>{
           let needUnpack=(t.to==='Rio Claro'||t.to==='IRA库房'||t.to==='工厂');
           let actionHtml=!needUnpack?`<span class="status-badge status-ready">已到达，无需掏箱</span>`:`<button class="btn btn-sm btn-warning" onclick="doUnpack(${t.id})">确认掏箱</button>`;
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${t.batch}</td><td>${t.containerNo}</td><td>${t.to || '-'}</td><td>${t.actualArrival?fmtDate(t.actualArrival.split('T')[0]):'-'}</td><td>${actionHtml}</td>`;
+          tr.innerHTML=`<td><span class="sequence-badge">${getTaskContainerSeq(t)||'-'}</span></td><td>${t.batch}</td><td>${t.containerNo}</td><td>${t.to || '-'}</td><td>${t.actualArrival?fmtDateTime(t.actualArrival):'-'}</td><td>${actionHtml}</td>`;
           return tr;
         });
       }
       if(completedUnpack.length>0){
-        renderTable('completedUnpackTable',['批次','集装箱号','目的地','到达时间','掏箱/还箱状态'],completedUnpack,(t)=>{
+        renderTable('completedUnpackTable',['序号','批次','集装箱号','目的地','到达时间','掏箱/还箱状态'],sortTasksByContainerSeq(completedUnpack),(t)=>{
           let existingRecord=returnRecords.find(r=>r.containerId===t.containerId&&r.location===t.to);
           let status='已完成';
           let cls='status-ready';
           if(existingRecord&&existingRecord.type==='return_needed'&&!existingRecord.isReturnConfirmed){status='待还箱';cls='status-return-pending';}
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${t.batch}</td><td>${t.containerNo}</td><td>${t.to || '-'}</td><td>${t.actualArrival?fmtDate(t.actualArrival.split('T')[0]):'-'}</td><td><span class="status-badge ${cls}">${status}</span></td>`;
+          tr.innerHTML=`<td><span class="sequence-badge">${getTaskContainerSeq(t)||'-'}</span></td><td>${t.batch}</td><td>${t.containerNo}</td><td>${t.to || '-'}</td><td>${t.actualArrival?fmtDateTime(t.actualArrival):'-'}</td><td><span class="status-badge ${cls}">${status}</span></td>`;
           return tr;
         });
       }
