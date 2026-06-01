@@ -726,7 +726,7 @@
       return {
         containers, blList, containerBlMap, transportTasks, locationStock, returnRecords,
         pickupPlans, productionRecords, nextIds, storageConfig, demurrageConfig, warningConfig,
-        version: 'V38 Cloud',
+        version: 'V40.1 Gate Vehicle Info',
         updatedAt: new Date().toISOString(),
         updatedBy: cloudUser?.email || currentUser?.email || currentUser?.name || ''
       };
@@ -3562,23 +3562,36 @@ let main=document.getElementById('mainContent');
     };
 
 
-    // ==================== V40 Operation Control Tower：门岗 / 等待区 / 卸货口 / Andon ====================
+    // ==================== V40.1 Operation Control Tower：集装箱计划 + 门岗车辆信息 + 五状态执行流 ====================
     function getFactoryOperationTasks(date){
       let tasks = transportTasks.filter(t => t && t.to === '工厂' && isOperationalVisibleTask(t) && t.status !== 'completed');
       if(date) tasks = tasks.filter(t => getDatePart(t.estimatedArrival || t.plannedDate || '') === date || getDatePart(t.gateArrivalTime || '') === date || getDatePart(t.unloadStartTime || '') === date);
       return tasks.sort((a,b)=>String(a.estimatedArrival||'').localeCompare(String(b.estimatedArrival||'')) || String(a.unloadingDock||'').localeCompare(String(b.unloadingDock||''),'zh-CN',{numeric:true}) || compareProductionSequence(a,b));
     }
+    function normalizeOpStatus(status){
+      const map = {
+        planned:'not_arrived', gate:'outside_parking', released:'inside_waiting', waiting:'inside_waiting',
+        not_arrived:'not_arrived', outside_parking:'outside_parking', inside_waiting:'inside_waiting',
+        unloading:'unloading', unloaded:'unloaded'
+      };
+      return map[status] || status || 'not_arrived';
+    }
     function getOpStatus(t){
-      if(t.operationStatus) return t.operationStatus;
+      if(t.operationStatus) return normalizeOpStatus(t.operationStatus);
       if(t.unloadFinishTime) return 'unloaded';
       if(t.unloadStartTime) return 'unloading';
-      if(t.waitingAreaTime) return 'waiting';
-      if(t.gateReleaseTime) return 'released';
-      if(t.gateArrivalTime) return 'gate';
-      return 'planned';
+      if(t.waitingAreaTime || t.gateReleaseTime) return 'inside_waiting';
+      if(t.gateArrivalTime) return 'outside_parking';
+      return 'not_arrived';
     }
     function getOpStatusText(t){
-      return {planned:'未到达',gate:'已到门岗',released:'门岗已放行',waiting:'等待区',unloading:'卸货中',unloaded:'卸货完成'}[getOpStatus(t)] || '未到达';
+      return {
+        not_arrived:'车辆未到达工厂',
+        outside_parking:'车辆在工厂外停车区',
+        inside_waiting:'车辆在工厂内等待',
+        unloading:'车辆在卸货口卸货',
+        unloaded:'集装箱已完成卸货'
+      }[getOpStatus(t)] || '车辆未到达工厂';
     }
     function minutesBetween(a,b){
       if(!a || !b) return '-';
@@ -3590,19 +3603,20 @@ let main=document.getElementById('mainContent');
     }
     function renderGateMonitoring(container){
       let d = document.getElementById('gateMonitorDate')?.value || getTodayStr();
-      let tasks = getFactoryOperationTasks(d).filter(t => ['planned','gate'].includes(getOpStatus(t)));
-      container.innerHTML = `<div class="card"><div class="card-header"><span class="card-title">🚪 门岗监控</span><button class="btn export-btn" onclick="exportFactoryOperationTasks()">📥 导出</button></div>
+      let tasks = getFactoryOperationTasks(d).filter(t => ['not_arrived','outside_parking'].includes(getOpStatus(t)));
+      container.innerHTML = `<div class="card"><div class="card-header"><span class="card-title">🚪 门岗监控 / 厂外停车区</span><button class="btn export-btn" onclick="exportFactoryOperationTasks()">📥 导出</button></div>
         <div class="search-bar"><input type="date" id="gateMonitorDate" value="${d}" onchange="renderGateMonitoring(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderGateMonitoring(document.getElementById('mainContent'))">查询</button></div>
-        <div style="font-size:13px;color:#606266;margin-bottom:10px;">用于记录车辆到达门岗、司机、电话、车牌和门岗放行时间。数据来源：目的地为工厂的动态运输计划/一车一口计划。</div><div id="gateMonitorTable"></div></div>`;
-      if(tasks.length===0){ document.getElementById('gateMonitorTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无门岗待处理车辆</div></div>'; return; }
-      renderTable('gateMonitorTable',['计划到达','批次','集装箱号','卸货口','车牌','司机','电话','门岗到达','状态','操作'],tasks,(t)=>{
+        <div style="font-size:13px;color:#606266;margin-bottom:10px;line-height:1.7;">计划仍按集装箱发布；车辆到达门岗后，由门卫根据集装箱号找到任务，并维护车牌、司机、电话。确认后状态进入“工厂外停车区”，放行后进入“工厂内等待”。</div><div id="gateMonitorTable"></div></div>`;
+      if(tasks.length===0){ document.getElementById('gateMonitorTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无门岗/厂外停车区待处理任务</div></div>'; return; }
+      renderTable('gateMonitorTable',['计划到达','批次','集装箱号','卸货口','车牌','司机','电话','实际到达门岗','状态','操作'],tasks,(t)=>{
         let tr=document.createElement('tr');
+        const st=getOpStatus(t);
         tr.innerHTML=`<td>${fmtDateTime(t.estimatedArrival)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td>
-          <td><input id="gatePlate_${t.id}" class="form-control" value="${t.truckPlate||''}" style="width:95px"></td>
-          <td><input id="gateDriver_${t.id}" class="form-control" value="${t.driverName||''}" style="width:90px"></td>
-          <td><input id="gatePhone_${t.id}" class="form-control" value="${t.driverPhone||''}" style="width:105px"></td>
-          <td>${fmtDateTime(t.gateArrivalTime)||'-'}</td><td><span class="status-badge ${getOpStatus(t)==='gate'?'status-warning':'status-pending'}">${getOpStatusText(t)}</span></td>
-          <td>${getOpStatus(t)==='planned'?`<button class="btn btn-sm btn-success" onclick="confirmGateArrival(${t.id})">确认到门岗</button>`:`<button class="btn btn-sm btn-primary" onclick="releaseFromGate(${t.id})">放行到等待区</button>`}</td>`;
+          <td><input id="gatePlate_${t.id}" class="form-control" value="${t.truckPlate||''}" placeholder="车牌" style="width:95px"></td>
+          <td><input id="gateDriver_${t.id}" class="form-control" value="${t.driverName||''}" placeholder="司机" style="width:90px"></td>
+          <td><input id="gatePhone_${t.id}" class="form-control" value="${t.driverPhone||''}" placeholder="电话" style="width:105px"></td>
+          <td>${fmtDateTime(t.gateArrivalTime)||'-'}</td><td><span class="status-badge ${st==='outside_parking'?'status-warning':'status-pending'}">${getOpStatusText(t)}</span></td>
+          <td>${st==='not_arrived'?`<button class="btn btn-sm btn-success" onclick="confirmGateArrival(${t.id})">确认到达厂外停车区</button>`:`<button class="btn btn-sm btn-primary" onclick="releaseFromGate(${t.id})">放行到厂内等待</button>`}</td>`;
         return tr;
       });
     }
@@ -3611,28 +3625,28 @@ let main=document.getElementById('mainContent');
       t.truckPlate=document.getElementById(`gatePlate_${taskId}`)?.value.trim()||t.truckPlate||'';
       t.driverName=document.getElementById(`gateDriver_${taskId}`)?.value.trim()||t.driverName||'';
       t.driverPhone=document.getElementById(`gatePhone_${taskId}`)?.value.trim()||t.driverPhone||'';
-      t.gateArrivalTime=t.gateArrivalTime || nowLocalInput(); t.operationStatus='gate'; saveData(); renderContent();
+      t.gateArrivalTime=t.gateArrivalTime || nowLocalInput(); t.operationStatus='outside_parking'; saveData(); renderContent();
     };
     window.releaseFromGate=function(taskId){
       let t=transportTasks.find(x=>x.id===taskId); if(!t) return;
-      t.gateReleaseTime=t.gateReleaseTime || nowLocalInput(); t.waitingAreaTime=t.waitingAreaTime || nowLocalInput(); t.operationStatus='waiting'; saveData(); renderContent();
+      t.gateReleaseTime=t.gateReleaseTime || nowLocalInput(); t.waitingAreaTime=t.waitingAreaTime || nowLocalInput(); t.operationStatus='inside_waiting'; saveData(); renderContent();
     };
     function renderWaitingArea(container){
       let d=document.getElementById('waitingAreaDate')?.value||getTodayStr();
-      let tasks=getFactoryOperationTasks(d).filter(t=>getOpStatus(t)==='waiting');
+      let tasks=getFactoryOperationTasks(d).filter(t=>getOpStatus(t)==='inside_waiting');
       container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">⏳ 等待区监控</span></div><div class="search-bar"><input type="date" id="waitingAreaDate" value="${d}" onchange="renderWaitingArea(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderWaitingArea(document.getElementById('mainContent'))">查询</button></div><div id="waitingAreaTable"></div></div>`;
-      if(tasks.length===0){document.getElementById('waitingAreaTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无等待区车辆</div></div>';return;}
-      renderTable('waitingAreaTable',['等待开始','等待分钟','批次','集装箱号','卸货口','车牌','司机','操作'],tasks,(t)=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${fmtDateTime(t.waitingAreaTime)}</td><td>${minutesBetween(t.waitingAreaTime,nowLocalInput())}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td><button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})">开始卸货</button> <button class="btn btn-sm btn-warning" onclick="openAndonForTask(${t.id})">异常</button></td>`;return tr;});
+      if(tasks.length===0){document.getElementById('waitingAreaTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无厂内等待车辆</div></div>';return;}
+      renderTable('waitingAreaTable',['进入厂内等待','等待分钟','批次','集装箱号','卸货口','车牌','司机','电话','操作'],tasks,(t)=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${fmtDateTime(t.waitingAreaTime)}</td><td>${minutesBetween(t.waitingAreaTime,nowLocalInput())}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td>${t.driverPhone||'-'}</td><td><button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})">进入卸货口/开始卸货</button> <button class="btn btn-sm btn-warning" onclick="openAndonForTask(${t.id})">异常</button></td>`;return tr;});
     }
     window.startUnloading=function(taskId){let t=transportTasks.find(x=>x.id===taskId);if(!t)return;t.unloadStartTime=t.unloadStartTime||nowLocalInput();t.operationStatus='unloading';saveData();renderContent();};
     window.finishUnloading=function(taskId){let t=transportTasks.find(x=>x.id===taskId);if(!t)return;t.unloadFinishTime=t.unloadFinishTime||nowLocalInput();t.operationStatus='unloaded';saveData();renderContent();};
     function renderDockMonitoring(container){
       let d=document.getElementById('dockMonitorDate')?.value||getTodayStr();
-      let tasks=getFactoryOperationTasks(d).filter(t=>['waiting','unloading','unloaded'].includes(getOpStatus(t)));
+      let tasks=getFactoryOperationTasks(d).filter(t=>['inside_waiting','unloading','unloaded'].includes(getOpStatus(t))); 
       let docks=['120B','132','140B','140C']; tasks.forEach(t=>{if(t.unloadingDock && !docks.includes(t.unloadingDock)) docks.push(t.unloadingDock);});
-      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🏭 卸货口监控</span></div><div class="search-bar"><input type="date" id="dockMonitorDate" value="${d}" onchange="renderDockMonitoring(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderDockMonitoring(document.getElementById('mainContent'))">查询</button></div><div class="stats-grid">${docks.map(dk=>{let list=tasks.filter(t=>(t.unloadingDock||'')===dk);let doing=list.filter(t=>getOpStatus(t)==='unloading').length;let wait=list.filter(t=>getOpStatus(t)==='waiting').length;return `<div class="stat-card" onclick="showDockDetail('${dk}')"><div class="stat-number">${doing}/${wait}</div><div class="stat-label">${dk} 卸货中/等待</div></div>`}).join('')}</div><div id="dockMonitorTable"></div></div>`;
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🏭 卸货口监控</span></div><div class="search-bar"><input type="date" id="dockMonitorDate" value="${d}" onchange="renderDockMonitoring(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderDockMonitoring(document.getElementById('mainContent'))">查询</button></div><div class="stats-grid">${docks.map(dk=>{let list=tasks.filter(t=>(t.unloadingDock||'')===dk);let doing=list.filter(t=>getOpStatus(t)==='unloading').length;let wait=list.filter(t=>getOpStatus(t)==='inside_waiting').length;return `<div class="stat-card" onclick="showDockDetail('${dk}')"><div class="stat-number">${doing}/${wait}</div><div class="stat-label">${dk} 卸货中/厂内等待</div></div>`}).join('')}</div><div id="dockMonitorTable"></div></div>`;
       if(tasks.length===0){document.getElementById('dockMonitorTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无卸货口执行数据</div></div>';return;}
-      renderTable('dockMonitorTable',['卸货口','状态','批次','集装箱号','车牌','等待开始','卸货开始','卸货完成','操作'],tasks,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);tr.innerHTML=`<td>${t.unloadingDock||'-'}</td><td><span class="status-badge ${st==='unloading'?'status-transport':st==='unloaded'?'status-completed':'status-warning'}">${getOpStatusText(t)}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})">开始</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading(${t.id})">完成</button>`:'-'}</td>`;return tr;});
+      renderTable('dockMonitorTable',['卸货口','状态','批次','集装箱号','车牌','等待开始','卸货开始','卸货完成','操作'],tasks,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);tr.innerHTML=`<td>${t.unloadingDock||'-'}</td><td><span class="status-badge ${st==='unloading'?'status-transport':st==='unloaded'?'status-completed':'status-warning'}">${getOpStatusText(t)}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})">开始</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading(${t.id})">完成</button>`:'-'}</td>`;return tr;});
     }
     window.showDockDetail=function(dock){ currentMenu='dockMonitoring'; renderSidebar(); renderContent(); };
     function renderAndonCenter(container){
@@ -3646,9 +3660,9 @@ let main=document.getElementById('mainContent');
     window.resolveAndon=function(taskId){let t=transportTasks.find(x=>x.id===taskId);if(!t||!t.andon)return;t.andon.resolvedAt=nowLocalInput();t.andon.resolvedBy=currentUser?.name||'';saveData();renderContent();};
     function renderOperationDashboard(container){
       let d=document.getElementById('operationDashDate')?.value||getTodayStr();
-      let tasks=getFactoryOperationTasks(d); let planned=tasks.length, gate=tasks.filter(t=>t.gateArrivalTime).length, waiting=tasks.filter(t=>getOpStatus(t)==='waiting').length, unloading=tasks.filter(t=>getOpStatus(t)==='unloading').length, unloaded=tasks.filter(t=>getOpStatus(t)==='unloaded').length, andon=tasks.filter(t=>t.andon&&!t.andon.resolvedAt).length;
-      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📈 运营驾驶舱</span></div><div class="search-bar"><input type="date" id="operationDashDate" value="${d}" onchange="renderOperationDashboard(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderOperationDashboard(document.getElementById('mainContent'))">查询</button></div><div class="stats-grid"><div class="stat-card"><div class="stat-number">${planned}</div><div class="stat-label">计划到厂</div></div><div class="stat-card"><div class="stat-number">${gate}</div><div class="stat-label">已到门岗</div></div><div class="stat-card"><div class="stat-number">${waiting}</div><div class="stat-label">等待区</div></div><div class="stat-card"><div class="stat-number">${unloading}</div><div class="stat-label">卸货中</div></div><div class="stat-card"><div class="stat-number">${unloaded}</div><div class="stat-label">卸货完成</div></div><div class="stat-card danger-card"><div class="stat-number danger-number">${andon}</div><div class="stat-label">未关闭异常</div></div></div><div id="operationDashTable"></div></div>`;
-      renderTable('operationDashTable',['计划到达','批次','集装箱号','卸货口','车牌','状态','门岗等待分钟','等待区分钟','卸货分钟'],tasks,(t)=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${fmtDateTime(t.estimatedArrival)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td><td>${t.truckPlate||'-'}</td><td>${getOpStatusText(t)}</td><td>${minutesBetween(t.gateArrivalTime,t.gateReleaseTime)}</td><td>${minutesBetween(t.waitingAreaTime,t.unloadStartTime)}</td><td>${minutesBetween(t.unloadStartTime,t.unloadFinishTime)}</td>`;return tr;});
+      let tasks=getFactoryOperationTasks(d); let planned=tasks.filter(t=>getOpStatus(t)==='not_arrived').length, outside=tasks.filter(t=>getOpStatus(t)==='outside_parking').length, waiting=tasks.filter(t=>getOpStatus(t)==='inside_waiting').length, unloading=tasks.filter(t=>getOpStatus(t)==='unloading').length, unloaded=tasks.filter(t=>getOpStatus(t)==='unloaded').length, andon=tasks.filter(t=>t.andon&&!t.andon.resolvedAt).length;
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📈 运营驾驶舱</span></div><div class="search-bar"><input type="date" id="operationDashDate" value="${d}" onchange="renderOperationDashboard(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderOperationDashboard(document.getElementById('mainContent'))">查询</button></div><div class="stats-grid"><div class="stat-card"><div class="stat-number">${planned}</div><div class="stat-label">车辆未到达工厂</div></div><div class="stat-card"><div class="stat-number">${outside}</div><div class="stat-label">工厂外停车区</div></div><div class="stat-card"><div class="stat-number">${waiting}</div><div class="stat-label">工厂内等待</div></div><div class="stat-card"><div class="stat-number">${unloading}</div><div class="stat-label">卸货中</div></div><div class="stat-card"><div class="stat-number">${unloaded}</div><div class="stat-label">卸货完成</div></div><div class="stat-card danger-card"><div class="stat-number danger-number">${andon}</div><div class="stat-label">未关闭异常</div></div></div><div id="operationDashTable"></div></div>`;
+      renderTable('operationDashTable',['计划到达','批次','集装箱号','卸货口','车牌','司机','电话','状态','厂外等待分钟','厂内等待分钟','卸货分钟'],tasks,(t)=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${fmtDateTime(t.estimatedArrival)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td>${t.driverPhone||'-'}</td><td>${getOpStatusText(t)}</td><td>${minutesBetween(t.gateArrivalTime,t.gateReleaseTime)}</td><td>${minutesBetween(t.waitingAreaTime,t.unloadStartTime)}</td><td>${minutesBetween(t.unloadStartTime,t.unloadFinishTime)}</td>`;return tr;});
     }
     window.exportFactoryOperationTasks=function(){
       let rows=getFactoryOperationTasks('').map(t=>({批次:t.batch,集装箱号:t.containerNo,卸货口:t.unloadingDock,计划到达:fmtDateTime(t.estimatedArrival),车牌:t.truckPlate,司机:t.driverName,电话:t.driverPhone,门岗到达:fmtDateTime(t.gateArrivalTime),门岗放行:fmtDateTime(t.gateReleaseTime),等待区:t.waitingAreaTime,卸货开始:t.unloadStartTime,卸货完成:t.unloadFinishTime,状态:getOpStatusText(t)}));
