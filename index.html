@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V39.6 Page Lock Sync</title>
+  <title>集装箱智能监控管理系统 Page Lock Sync</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -1177,6 +1177,11 @@
       { id:'customs', name:'清关维护', icon:'🛃', roles:['订购科','关务'] },
       { id:'pickupPlan', name:'提箱计划', icon:'🚚', roles:['订购科'] },
       { id:'transportTasks', name:'运输任务', icon:'🚛', roles:['运输公司RG','运输公司JSL'] },
+      { id:'gateMonitoring', name:'门岗监控', icon:'🚪', roles:['订购科','运输公司RG','运输公司JSL','工厂管理员'] },
+      { id:'waitingArea', name:'等待区监控', icon:'⏳', roles:['订购科','运输公司RG','运输公司JSL','工厂管理员'] },
+      { id:'dockMonitoring', name:'卸货口监控', icon:'🏭', roles:['订购科','工厂管理员','运输公司RG','运输公司JSL'] },
+      { id:'andonCenter', name:'Andon异常中心', icon:'🚨', roles:['订购科','工厂管理员','运输公司RG','运输公司JSL'] },
+      { id:'operationDashboard', name:'运营驾驶舱', icon:'📈', roles:['订购科','工厂管理员'] },
       { id:'locationConfirm', name:'到货确认', icon:'✅', roles:['RG堆场管理员','Rio Claro管理员','IRA库房管理员','工厂管理员'] },
       { id:'returnConfirm', name:'还箱确认', icon:'🔄', roles:['运输公司RG','运输公司JSL'] },
       { id:'dynamicPlan', name:'动态运输计划', icon:'🎯', roles:['订购科'] },
@@ -1192,7 +1197,10 @@
       {id:'dashboard', name:'工作台'}, {id:'containers', name:'基础数据'},
       {id:'blIra', name:'提单/IRA管理'}, {id:'customs', name:'清关维护'},
       {id:'pickupPlan', name:'提箱计划'}, {id:'dynamicPlan', name:'动态运输计划'},
-      {id:'transportTasks', name:'运输任务'}, {id:'returnConfirm', name:'还箱确认'},
+      {id:'transportTasks', name:'运输任务'}, {id:'gateMonitoring', name:'门岗监控'},
+      {id:'waitingArea', name:'等待区监控'}, {id:'dockMonitoring', name:'卸货口监控'},
+      {id:'andonCenter', name:'Andon异常中心'}, {id:'operationDashboard', name:'运营驾驶舱'},
+      {id:'returnConfirm', name:'还箱确认'},
       {id:'locationConfirm', name:'到货确认'}, {id:'locationStock', name:'库存看板'},
       {id:'productionConfirm', name:'生产完成确认'}, {id:'rateConfig', name:'费率配置'},
       {id:'feeReport', name:'费用报表'}, {id:'userManagement', name:'账号权限管理'}, {id:'attachmentsCenter', name:'附件中心'}
@@ -1441,6 +1449,12 @@ function getContainerLocation(cid){
 
     function isOperationalVisibleTask(t){
       return t && !isProducedCompletedContainerId(t.containerId);
+    }
+
+    // V39.9：一车一口复核中计划不直接开放给运输公司，只有正式发布后才进入运输任务。
+    function isTransportCompanyVisibleTask(t){
+      if(!isOperationalVisibleTask(t)) return false;
+      return t.oneDockReviewStatus !== 'draft';
     }
 
     function getIraList(containerId) {
@@ -1778,6 +1792,11 @@ let main=document.getElementById('mainContent');
         case'customs':renderCustoms(main);break;
         case'pickupPlan':renderPickupPlan(main);break;
         case'transportTasks':renderTransportTasks(main);break;
+        case'gateMonitoring':renderGateMonitoring(main);break;
+        case'waitingArea':renderWaitingArea(main);break;
+        case'dockMonitoring':renderDockMonitoring(main);break;
+        case'andonCenter':renderAndonCenter(main);break;
+        case'operationDashboard':renderOperationDashboard(main);break;
         case'locationConfirm':renderLocationConfirm(main);break;
         case'returnConfirm':renderReturnConfirm(main);break;
         case'dynamicPlan':renderDynamicPlan(main);break;
@@ -2858,7 +2877,7 @@ let main=document.getElementById('mainContent');
     // 运输任务（带日期筛选）
     function renderTransportTasks(container){
       let myPickupTasks = pickupPlans.filter(p => canViewCarrier(p.carrier) && p.status !== 'confirmed' && p.status !== 'cancelled' && !isProducedCompletedContainerId(p.containerId));
-      let myTransitTasks = transportTasks.filter(t => canViewCarrier(t.carrier) && t.status === 'in_transit' && isOperationalVisibleTask(t));
+      let myTransitTasks = transportTasks.filter(t => canViewCarrier(t.carrier) && t.status === 'in_transit' && isTransportCompanyVisibleTask(t));
       myPickupTasks.sort((a,b)=>String(a.arrivalDate||'').localeCompare(String(b.arrivalDate||'')));
       myTransitTasks.sort((a,b)=>String(a.estimatedArrival||'').localeCompare(String(b.estimatedArrival||'')));
       let dateGroups = new Map();
@@ -2898,7 +2917,7 @@ let main=document.getElementById('mainContent');
         renderTable('inTransitTable',['批次','集装箱号','计划到货时间','目的地','卸货口','状态'],filteredTransit,(item)=>{
           let destClass=getDestClass(item.to);
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.estimatedArrival)}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge status-transport">${t.oneDockPlan?'一车一口':'运输中'}</span></td><td><button class="btn btn-sm btn-warning" onclick="editDynamicTask(${t.id})">编辑</button></td>`;
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.estimatedArrival)}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge status-transport">${item.oneDockPlan?'一车一口':'运输中'}</span></td><td><button class="btn btn-sm btn-warning" onclick="editDynamicTask(${item.id})">编辑</button></td>`;
           return tr;
         });
       }
@@ -2906,7 +2925,7 @@ let main=document.getElementById('mainContent');
     
     function renderTransportTasksWithDate(container, selectedDate){
       let myPickupTasks = pickupPlans.filter(p => canViewCarrier(p.carrier) && p.status !== 'confirmed' && p.status !== 'cancelled' && !isProducedCompletedContainerId(p.containerId));
-      let myTransitTasks = transportTasks.filter(t => canViewCarrier(t.carrier) && t.status === 'in_transit' && isOperationalVisibleTask(t));
+      let myTransitTasks = transportTasks.filter(t => canViewCarrier(t.carrier) && t.status === 'in_transit' && isTransportCompanyVisibleTask(t));
       let filteredPickup = myPickupTasks.filter(p => getDatePart(p.arrivalDate) === selectedDate);
       let filteredTransit = myTransitTasks.filter(t => {let td = t.estimatedArrival ? t.estimatedArrival.split('T')[0] : null; return td === selectedDate;});
       let dateGroups = new Map();
@@ -2943,7 +2962,7 @@ let main=document.getElementById('mainContent');
         renderTable('inTransitTable',['批次','集装箱号','计划到货时间','目的地','卸货口','状态'],filteredTransit,(item)=>{
           let destClass=getDestClass(item.to);
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.estimatedArrival)}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge status-transport">运输中</span></td>`;
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.estimatedArrival)}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge ${t.oneDockReviewStatus==='draft'?'status-warning':'status-transport'}">${t.oneDockReviewStatus==='draft'?'一车一口待复核':'运输中'}</span></td>`;
           return tr;
         });
       }
@@ -2986,7 +3005,7 @@ let main=document.getElementById('mainContent');
     
     window.exportTransportTasks = function(){
       let myPickupTasks = pickupPlans.filter(p => canViewCarrier(p.carrier) && p.status !== 'confirmed' && p.status !== 'cancelled' && !isProducedCompletedContainerId(p.containerId));
-      let myTransitTasks = transportTasks.filter(t => canViewCarrier(t.carrier) && t.status === 'in_transit' && isOperationalVisibleTask(t));
+      let myTransitTasks = transportTasks.filter(t => canViewCarrier(t.carrier) && t.status === 'in_transit' && isTransportCompanyVisibleTask(t));
       let wsData = [['类型','批次','集装箱号','计划到箱时间','目的地','状态']];
       myPickupTasks.forEach(item=>{wsData.push(['待确认提箱',item.batch,item.containerNo,fmtDateTime(item.arrivalDate),item.destination||'-','待确认']);});
       myTransitTasks.forEach(item=>{wsData.push(['运输中',item.batch,item.containerNo,fmtDateTime(item.estimatedArrival),item.to||'-','运输中']);});
@@ -3253,7 +3272,7 @@ let main=document.getElementById('mainContent');
         <div class="card dynamic-card">
           <div class="card-header">
             <span class="card-title">🎯 动态运输计划</span>
-            <div><button class="btn btn-success" onclick="batchPublishDynamic()">批量发布</button><button class="btn btn-primary" onclick="generateOneDockPlan()">生成一车一口计划</button><button class="btn" onclick="selectAllDynamic()">全选</button></div>
+            <div><button class="btn btn-success" onclick="batchPublishDynamic()">批量发布动态计划</button><button class="btn btn-primary" onclick="generateOneDockPlanFromPublished()">生成/刷新一车一口复核计划</button><button class="btn" onclick="selectAllDynamic()">全选</button></div>
           </div>
           <div class="search-bar dynamic-search">
             <input type="text" id="dynamicSearchBatch" placeholder="批次">
@@ -3268,10 +3287,15 @@ let main=document.getElementById('mainContent');
             <input type="date" id="oneDockPlanDate" title="计划日期">
             <input type="time" id="oneDockStartTime" value="07:00" title="每个卸货口开始时间">
             <input type="number" id="oneDockInterval" value="40" min="5" step="5" placeholder="间隔分钟" title="同一卸货口车辆间隔分钟">
-            <button class="btn btn-primary" onclick="generateOneDockPlan()">按卸货口+生产顺序自动排布并发布</button>
+            <button class="btn btn-primary" onclick="generateOneDockPlanFromPublished()">按已发布动态计划生成复核计划</button>
           </div>
-          <div style="font-size:12px;color:#909399;margin-bottom:8px;text-align:center;">动态运输计划默认运输公司为 RG，默认到货地点为工厂；选择多个集装箱后，可按“卸货口 + 批次/序号生产顺序 + 时间间隔”自动生成一车一口计划。</div>
+          <div style="font-size:12px;color:#909399;margin-bottom:8px;text-align:center;">动态运输计划默认运输公司为 RG，默认到货地点为工厂；动态计划发布后，系统会先生成“一车一口复核计划”，复核无误后再正式发布给运输公司。</div>
           <div id="dynamicTable"></div>
+        </div>
+        <div class="card dynamic-card">
+          <div class="card-header"><span class="card-title">🚚 一车一口复核计划</span><div><button class="btn btn-success" onclick="publishOneDockFormal()">复核无误，正式发布给运输公司</button><button class="btn" onclick="saveOneDockReviewEdits()">保存复核修改</button></div></div>
+          <div style="font-size:12px;color:#909399;margin-bottom:8px;text-align:center;">这里显示已发布动态计划自动生成的排布结果。可调整卸货口和计划到达时间，确认后才会出现在运输公司任务中。</div>
+          <div id="oneDockReviewTable"></div>
         </div>
         <div class="card dynamic-card">
           <div class="card-header"><span class="card-title">📋 已发布的运输计划</span><button class="btn btn-sm" id="btnPublishedDynamic" onclick="toggleHistorySection('publishedDynamicBody','btnPublishedDynamic')">展开查看</button></div>
@@ -3283,6 +3307,7 @@ let main=document.getElementById('mainContent');
       let planDateEl = document.getElementById('oneDockPlanDate');
       if(planDateEl && !planDateEl.value){ let d=new Date(); d.setDate(d.getDate()+1); planDateEl.value=`${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
       renderPublishedDynamic(published);
+      renderOneDockReview();
     }
 
     function getDynamicAvailableContainers(){
@@ -3392,9 +3417,11 @@ let main=document.getElementById('mainContent');
     }
 
     window.generateOneDockPlan = function(){
-      let selected = Array.from(document.querySelectorAll('.dynamic-checkbox:checked'));
-      if(selected.length===0){ alert('请先选择需要生成一车一口计划的集装箱'); return; }
+      // 兼容旧按钮：V39.9开始改为从“已发布动态计划”生成复核计划
+      generateOneDockPlanFromPublished();
+    };
 
+    function getOneDockPlanParams(){
       let date = document.getElementById('oneDockPlanDate')?.value || '';
       let startTime = document.getElementById('oneDockStartTime')?.value || '07:00';
       let interval = parseInt(document.getElementById('oneDockInterval')?.value || '40', 10);
@@ -3403,59 +3430,100 @@ let main=document.getElementById('mainContent');
         date = `${tomorrow.getFullYear()}-${pad2(tomorrow.getMonth()+1)}-${pad2(tomorrow.getDate())}`;
       }
       if(!interval || interval < 1) interval = 40;
+      return {date,startTime,interval};
+    }
 
-      let items = [];
-      for(let cb of selected){
-        let id = parseInt(cb.dataset.id);
-        let fromLoc = cb.dataset.loc;
-        let dest = document.getElementById(`dynDest_${id}`)?.value || '工厂';
-        let dock = (document.getElementById(`dynDock_${id}`)?.value || '').trim();
-        let cont = containers.find(c=>c.id===id);
-        if(!cont) continue;
-        if(dest !== '工厂'){ alert('一车一口计划仅用于发往工厂的集装箱，请将所选集装箱目的地调整为工厂。'); return; }
-        if(!dock){ alert(`集装箱 ${cont.containerNo} 未填写卸货口，无法生成一车一口计划。`); return; }
-        items.push({id, fromLoc, dest, dock, cont});
+    function getOneDockCandidateTasks(date){
+      return transportTasks.filter(t => {
+        if(t.status !== 'in_transit') return false;
+        if(t.to !== '工厂') return false;
+        if(!t.unloadingDock) return false;
+        if(!isOperationalVisibleTask(t)) return false;
+        // 从已发布动态计划或已生成的复核计划中生成/刷新，不再依赖左侧未发布列表
+        if(!(t.source === 'dynamic' || t.source === 'oneDockPlan' || t.oneDockPlan)) return false;
+        let td = t.plannedDate || (t.estimatedArrival ? String(t.estimatedArrival).split('T')[0] : '');
+        return !date || td === date;
+      });
+    }
+
+    window.generateOneDockPlanFromPublished = function(options){
+      options = options || {};
+      let {date,startTime,interval} = getOneDockPlanParams();
+      let items = getOneDockCandidateTasks(date);
+      if(items.length === 0){
+        if(!options.silent) alert('未找到该日期已发布且目的地为工厂、已填写卸货口的动态运输计划。请先发布动态运输计划，再生成一车一口复核计划。');
+        renderOneDockReview();
+        return;
       }
-      if(items.length===0){ alert('未找到可发布的数据'); return; }
-
-      items.sort((a,b)=> String(a.dock||'').localeCompare(String(b.dock||''), 'zh-CN', {numeric:true}) || compareProductionSequence(a.cont,b.cont));
+      items.sort((a,b)=> String(a.unloadingDock||'').localeCompare(String(b.unloadingDock||''), 'zh-CN', {numeric:true}) || compareProductionSequence(a,b));
       let dockCounters = {};
-      let created = 0;
       let preview = [];
-
-      for(let item of items){
-        let idx = dockCounters[item.dock] || 0;
+      for(let t of items){
+        let dock = t.unloadingDock || '未维护';
+        let idx = dockCounters[dock] || 0;
         let eta = addMinutesToDateTime(date, startTime, idx * interval);
-        dockCounters[item.dock] = idx + 1;
-        if(transportTasks.some(t=>String(t.containerId)===String(item.id) && t.status==='in_transit')) continue;
-        transportTasks.push({
-          id: nextIds.task++,
-          containerId: item.id,
-          containerNo: item.cont.containerNo,
-          containerSeq: item.cont.containerSeq || '',
-          batch: item.cont.batch,
-          from: item.fromLoc,
-          to: '工厂',
-          carrier: 'RG',
-          status: 'in_transit',
-          estimatedArrival: eta,
-          unloadingDock: item.dock,
-          source: 'oneDockPlan',
-          oneDockPlan: true,
-          oneDockOrder: idx + 1,
-          plannedDate: date
-        });
-        preview.push(`${item.dock} ${eta.replace('T',' ')} ${item.cont.batch || ''} ${item.cont.containerNo}`);
-        created++;
+        dockCounters[dock] = idx + 1;
+        t.estimatedArrival = eta;
+        t.plannedDate = date;
+        t.oneDockPlan = true;
+        t.oneDockOrder = idx + 1;
+        t.oneDockReviewStatus = 'draft';
+        t.source = 'oneDockPlan';
+        preview.push(`${dock} ${eta.replace('T',' ')} ${t.batch || ''} ${t.containerNo}`);
       }
+      saveData();
+      renderContent();
+      if(!options.silent){
+        alert(`已生成/刷新 ${items.length} 条一车一口复核计划，当前不会直接开放给运输公司。\n\n复核无误后，请点击“正式发布给运输公司”。\n\n${preview.slice(0,12).join('\n')}${preview.length>12?'\n...':''}`);
+      }
+    };
 
-      if(created>0){
-        saveData();
-        renderContent();
-        alert(`已生成并发布 ${created} 条一车一口计划。\n\n排布规则：同一卸货口从 ${startTime} 开始，每 ${interval} 分钟一车；按批次/序号顺序排序。\n\n${preview.slice(0,12).join('\n')}${preview.length>12?'\n...':''}`);
-      }else{
-        alert('所选集装箱已存在运输中任务，未重复生成。');
-      }
+    function renderOneDockReview(){
+      let el = document.getElementById('oneDockReviewTable');
+      if(!el) return;
+      let date = document.getElementById('oneDockPlanDate')?.value || '';
+      let drafts = transportTasks.filter(t => t.oneDockPlan && t.oneDockReviewStatus === 'draft' && (!date || (t.plannedDate || (t.estimatedArrival||'').split('T')[0]) === date) && isOperationalVisibleTask(t));
+      drafts.sort((a,b)=>String(a.unloadingDock||'').localeCompare(String(b.unloadingDock||''),'zh-CN',{numeric:true}) || String(a.estimatedArrival||'').localeCompare(String(b.estimatedArrival||'')) || compareProductionSequence(a,b));
+      if(drafts.length===0){ el.innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">暂无待复核的一车一口计划。请先发布动态运输计划，再点击生成复核计划。</div></div>'; return; }
+      renderTable('oneDockReviewTable',['批次','序号','集装箱号','提单号','出发地','卸货口','计划到达','顺序','状态'],drafts,(t)=>{
+        let cont=containers.find(c=>c.id===t.containerId) || {};
+        let blText=getContainerBlTextById(t.containerId) || '-';
+        let tr=document.createElement('tr');
+        tr.innerHTML=`<td>${t.batch||'-'}</td><td>${cont.containerSeq||t.containerSeq||'-'}</td><td>${t.containerNo||'-'}</td><td title="${blText}">${blText}</td><td>${t.from||'-'}</td><td><input id="oneDockDock_${t.id}" class="form-control" value="${t.unloadingDock||''}" style="width:90px;"></td><td><input id="oneDockEta_${t.id}" type="datetime-local" class="form-control" value="${t.estimatedArrival||''}" style="width:150px;"></td><td>${t.oneDockOrder||'-'}</td><td><span class="status-badge status-warning">待复核</span></td>`;
+        return tr;
+      });
+    }
+
+    window.saveOneDockReviewEdits = function(){
+      let date = document.getElementById('oneDockPlanDate')?.value || '';
+      let drafts = transportTasks.filter(t => t.oneDockPlan && t.oneDockReviewStatus === 'draft' && (!date || (t.plannedDate || (t.estimatedArrival||'').split('T')[0]) === date));
+      if(drafts.length===0){ alert('暂无可保存的复核计划'); return; }
+      drafts.forEach(t=>{
+        let dock=document.getElementById(`oneDockDock_${t.id}`)?.value.trim();
+        let eta=document.getElementById(`oneDockEta_${t.id}`)?.value;
+        if(dock) t.unloadingDock=dock;
+        if(eta) t.estimatedArrival=eta;
+      });
+      saveData();
+      renderContent();
+      alert('一车一口复核修改已保存');
+    };
+
+    window.publishOneDockFormal = function(){
+      saveOneDockReviewEdits();
+      let date = document.getElementById('oneDockPlanDate')?.value || '';
+      let drafts = transportTasks.filter(t => t.oneDockPlan && t.oneDockReviewStatus === 'draft' && (!date || (t.plannedDate || (t.estimatedArrival||'').split('T')[0]) === date));
+      if(drafts.length===0){ alert('暂无待正式发布的一车一口计划'); return; }
+      if(!confirm(`确认将 ${drafts.length} 条一车一口计划正式发布给运输公司吗？`)) return;
+      drafts.forEach(t=>{
+        t.oneDockReviewStatus = 'published';
+        t.formalPublishedAt = new Date().toISOString();
+        t.source = 'oneDockPlan';
+        t.status = 'in_transit';
+      });
+      saveData();
+      renderContent();
+      alert(`已正式发布 ${drafts.length} 条一车一口计划给运输公司。`);
     };
 
     window.publishDynamicSingle = function(containerId,fromLoc){
@@ -3465,10 +3533,11 @@ let main=document.getElementById('mainContent');
       let dock=(document.getElementById(`dynDock_${containerId}`)?.value||'').trim();
       if(dest==='工厂' && !dock){alert('目的地为工厂时，卸货口必填');return;}
       let cont=containers.find(c=>c.id===containerId);
-      transportTasks.push({id:nextIds.task++,containerId,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,from:fromLoc,to:dest,carrier,status:'in_transit',estimatedArrival:eta,unloadingDock:dock,source:'dynamic'});
+      transportTasks.push({id:nextIds.task++,containerId,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,from:fromLoc,to:dest,carrier,status:'in_transit',estimatedArrival:eta,unloadingDock:dock,source:'dynamic',oneDockReviewStatus:(dest==='工厂'?'draft':undefined)});
       saveData();
-      renderContent();
-      alert(`运输任务已发布给RG，目的地：${dest}`);
+      if(dest==='工厂') generateOneDockPlanFromPublished({silent:true});
+      else renderContent();
+      alert(`动态运输计划已发布，目的地：${dest}${dest==='工厂'?'，系统已生成一车一口复核计划':''}`);
     };
 
     window.batchPublishDynamic = function(){
@@ -3484,12 +3553,106 @@ let main=document.getElementById('mainContent');
         if(dest==='工厂' && !dock){alert('所选集装箱中存在目的地为工厂但未填写卸货口的数据，请补充后再批量发布');return;}
         let cont=containers.find(c=>c.id===id);
         if(cont){
-          transportTasks.push({id:nextIds.task++,containerId:id,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,from:fromLoc,to:dest,carrier:'RG',status:'in_transit',estimatedArrival:eta,unloadingDock:dock,source:'dynamic'});
+          transportTasks.push({id:nextIds.task++,containerId:id,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,from:fromLoc,to:dest,carrier:'RG',status:'in_transit',estimatedArrival:eta,unloadingDock:dock,source:'dynamic',oneDockReviewStatus:(dest==='工厂'?'draft':undefined)});
           count++;
         }
       }
-      if(count>0){saveData();renderContent();alert(`成功发布 ${count} 个RG动态运输任务`);}
+      if(count>0){saveData();generateOneDockPlanFromPublished({silent:true});alert(`成功发布 ${count} 个RG动态运输计划；发往工厂的任务已自动生成一车一口复核计划。`);}
       else alert('请填写完整信息');
+    };
+
+
+    // ==================== V40 Operation Control Tower：门岗 / 等待区 / 卸货口 / Andon ====================
+    function getFactoryOperationTasks(date){
+      let tasks = transportTasks.filter(t => t && t.to === '工厂' && isOperationalVisibleTask(t) && t.status !== 'completed');
+      if(date) tasks = tasks.filter(t => getDatePart(t.estimatedArrival || t.plannedDate || '') === date || getDatePart(t.gateArrivalTime || '') === date || getDatePart(t.unloadStartTime || '') === date);
+      return tasks.sort((a,b)=>String(a.estimatedArrival||'').localeCompare(String(b.estimatedArrival||'')) || String(a.unloadingDock||'').localeCompare(String(b.unloadingDock||''),'zh-CN',{numeric:true}) || compareProductionSequence(a,b));
+    }
+    function getOpStatus(t){
+      if(t.operationStatus) return t.operationStatus;
+      if(t.unloadFinishTime) return 'unloaded';
+      if(t.unloadStartTime) return 'unloading';
+      if(t.waitingAreaTime) return 'waiting';
+      if(t.gateReleaseTime) return 'released';
+      if(t.gateArrivalTime) return 'gate';
+      return 'planned';
+    }
+    function getOpStatusText(t){
+      return {planned:'未到达',gate:'已到门岗',released:'门岗已放行',waiting:'等待区',unloading:'卸货中',unloaded:'卸货完成'}[getOpStatus(t)] || '未到达';
+    }
+    function minutesBetween(a,b){
+      if(!a || !b) return '-';
+      let x=new Date(a), y=new Date(b); if(isNaN(x)||isNaN(y)) return '-';
+      return Math.max(0, Math.round((y-x)/60000));
+    }
+    function nowLocalInput(){
+      let d=new Date(); return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    }
+    function renderGateMonitoring(container){
+      let d = document.getElementById('gateMonitorDate')?.value || getTodayStr();
+      let tasks = getFactoryOperationTasks(d).filter(t => ['planned','gate'].includes(getOpStatus(t)));
+      container.innerHTML = `<div class="card"><div class="card-header"><span class="card-title">🚪 门岗监控</span><button class="btn export-btn" onclick="exportFactoryOperationTasks()">📥 导出</button></div>
+        <div class="search-bar"><input type="date" id="gateMonitorDate" value="${d}" onchange="renderGateMonitoring(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderGateMonitoring(document.getElementById('mainContent'))">查询</button></div>
+        <div style="font-size:13px;color:#606266;margin-bottom:10px;">用于记录车辆到达门岗、司机、电话、车牌和门岗放行时间。数据来源：目的地为工厂的动态运输计划/一车一口计划。</div><div id="gateMonitorTable"></div></div>`;
+      if(tasks.length===0){ document.getElementById('gateMonitorTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无门岗待处理车辆</div></div>'; return; }
+      renderTable('gateMonitorTable',['计划到达','批次','集装箱号','卸货口','车牌','司机','电话','门岗到达','状态','操作'],tasks,(t)=>{
+        let tr=document.createElement('tr');
+        tr.innerHTML=`<td>${fmtDateTime(t.estimatedArrival)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td>
+          <td><input id="gatePlate_${t.id}" class="form-control" value="${t.truckPlate||''}" style="width:95px"></td>
+          <td><input id="gateDriver_${t.id}" class="form-control" value="${t.driverName||''}" style="width:90px"></td>
+          <td><input id="gatePhone_${t.id}" class="form-control" value="${t.driverPhone||''}" style="width:105px"></td>
+          <td>${fmtDateTime(t.gateArrivalTime)||'-'}</td><td><span class="status-badge ${getOpStatus(t)==='gate'?'status-warning':'status-pending'}">${getOpStatusText(t)}</span></td>
+          <td>${getOpStatus(t)==='planned'?`<button class="btn btn-sm btn-success" onclick="confirmGateArrival(${t.id})">确认到门岗</button>`:`<button class="btn btn-sm btn-primary" onclick="releaseFromGate(${t.id})">放行到等待区</button>`}</td>`;
+        return tr;
+      });
+    }
+    window.confirmGateArrival=function(taskId){
+      let t=transportTasks.find(x=>x.id===taskId); if(!t) return;
+      t.truckPlate=document.getElementById(`gatePlate_${taskId}`)?.value.trim()||t.truckPlate||'';
+      t.driverName=document.getElementById(`gateDriver_${taskId}`)?.value.trim()||t.driverName||'';
+      t.driverPhone=document.getElementById(`gatePhone_${taskId}`)?.value.trim()||t.driverPhone||'';
+      t.gateArrivalTime=t.gateArrivalTime || nowLocalInput(); t.operationStatus='gate'; saveData(); renderContent();
+    };
+    window.releaseFromGate=function(taskId){
+      let t=transportTasks.find(x=>x.id===taskId); if(!t) return;
+      t.gateReleaseTime=t.gateReleaseTime || nowLocalInput(); t.waitingAreaTime=t.waitingAreaTime || nowLocalInput(); t.operationStatus='waiting'; saveData(); renderContent();
+    };
+    function renderWaitingArea(container){
+      let d=document.getElementById('waitingAreaDate')?.value||getTodayStr();
+      let tasks=getFactoryOperationTasks(d).filter(t=>getOpStatus(t)==='waiting');
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">⏳ 等待区监控</span></div><div class="search-bar"><input type="date" id="waitingAreaDate" value="${d}" onchange="renderWaitingArea(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderWaitingArea(document.getElementById('mainContent'))">查询</button></div><div id="waitingAreaTable"></div></div>`;
+      if(tasks.length===0){document.getElementById('waitingAreaTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无等待区车辆</div></div>';return;}
+      renderTable('waitingAreaTable',['等待开始','等待分钟','批次','集装箱号','卸货口','车牌','司机','操作'],tasks,(t)=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${fmtDateTime(t.waitingAreaTime)}</td><td>${minutesBetween(t.waitingAreaTime,nowLocalInput())}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td><button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})">开始卸货</button> <button class="btn btn-sm btn-warning" onclick="openAndonForTask(${t.id})">异常</button></td>`;return tr;});
+    }
+    window.startUnloading=function(taskId){let t=transportTasks.find(x=>x.id===taskId);if(!t)return;t.unloadStartTime=t.unloadStartTime||nowLocalInput();t.operationStatus='unloading';saveData();renderContent();};
+    window.finishUnloading=function(taskId){let t=transportTasks.find(x=>x.id===taskId);if(!t)return;t.unloadFinishTime=t.unloadFinishTime||nowLocalInput();t.operationStatus='unloaded';saveData();renderContent();};
+    function renderDockMonitoring(container){
+      let d=document.getElementById('dockMonitorDate')?.value||getTodayStr();
+      let tasks=getFactoryOperationTasks(d).filter(t=>['waiting','unloading','unloaded'].includes(getOpStatus(t)));
+      let docks=['120B','132','140B','140C']; tasks.forEach(t=>{if(t.unloadingDock && !docks.includes(t.unloadingDock)) docks.push(t.unloadingDock);});
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🏭 卸货口监控</span></div><div class="search-bar"><input type="date" id="dockMonitorDate" value="${d}" onchange="renderDockMonitoring(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderDockMonitoring(document.getElementById('mainContent'))">查询</button></div><div class="stats-grid">${docks.map(dk=>{let list=tasks.filter(t=>(t.unloadingDock||'')===dk);let doing=list.filter(t=>getOpStatus(t)==='unloading').length;let wait=list.filter(t=>getOpStatus(t)==='waiting').length;return `<div class="stat-card" onclick="showDockDetail('${dk}')"><div class="stat-number">${doing}/${wait}</div><div class="stat-label">${dk} 卸货中/等待</div></div>`}).join('')}</div><div id="dockMonitorTable"></div></div>`;
+      if(tasks.length===0){document.getElementById('dockMonitorTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无卸货口执行数据</div></div>';return;}
+      renderTable('dockMonitorTable',['卸货口','状态','批次','集装箱号','车牌','等待开始','卸货开始','卸货完成','操作'],tasks,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);tr.innerHTML=`<td>${t.unloadingDock||'-'}</td><td><span class="status-badge ${st==='unloading'?'status-transport':st==='unloaded'?'status-completed':'status-warning'}">${getOpStatusText(t)}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})">开始</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading(${t.id})">完成</button>`:'-'}</td>`;return tr;});
+    }
+    window.showDockDetail=function(dock){ currentMenu='dockMonitoring'; renderSidebar(); renderContent(); };
+    function renderAndonCenter(container){
+      let active=transportTasks.filter(t=>t.andon && !t.andon.resolvedAt && isOperationalVisibleTask(t));
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🚨 Andon异常中心</span><button class="btn btn-warning" onclick="createManualAndon()">新增异常</button></div><div id="andonTable"></div></div>`;
+      if(active.length===0){document.getElementById('andonTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">当前暂无未关闭异常</div></div>';return;}
+      renderTable('andonTable',['时间','类型','批次','集装箱号','卸货口','车牌','描述','操作'],active,(t)=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${fmtDateTime(t.andon.createdAt)}</td><td><span class="status-badge status-warning">${t.andon.type||'异常'}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.andon.desc||'-'}</td><td><button class="btn btn-sm btn-success" onclick="resolveAndon(${t.id})">关闭</button></td>`;return tr;});
+    }
+    window.openAndonForTask=function(taskId){let type=prompt('异常类型：车辆晚到/门岗拥堵/卸货超时/顺序异常/其他','卸货超时');if(!type)return;let desc=prompt('异常描述','')||'';let t=transportTasks.find(x=>x.id===taskId);if(!t)return;t.andon={type,desc,createdAt:nowLocalInput(),createdBy:currentUser?.name||''};saveData();renderContent();};
+    window.createManualAndon=function(){let keyword=prompt('请输入集装箱号或批次号，用于关联异常','');if(!keyword)return;let t=transportTasks.find(x=>String(x.containerNo||'').includes(keyword)||String(x.batch||'').includes(keyword));if(!t){alert('未找到对应运输任务');return;}openAndonForTask(t.id);};
+    window.resolveAndon=function(taskId){let t=transportTasks.find(x=>x.id===taskId);if(!t||!t.andon)return;t.andon.resolvedAt=nowLocalInput();t.andon.resolvedBy=currentUser?.name||'';saveData();renderContent();};
+    function renderOperationDashboard(container){
+      let d=document.getElementById('operationDashDate')?.value||getTodayStr();
+      let tasks=getFactoryOperationTasks(d); let planned=tasks.length, gate=tasks.filter(t=>t.gateArrivalTime).length, waiting=tasks.filter(t=>getOpStatus(t)==='waiting').length, unloading=tasks.filter(t=>getOpStatus(t)==='unloading').length, unloaded=tasks.filter(t=>getOpStatus(t)==='unloaded').length, andon=tasks.filter(t=>t.andon&&!t.andon.resolvedAt).length;
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📈 运营驾驶舱</span></div><div class="search-bar"><input type="date" id="operationDashDate" value="${d}" onchange="renderOperationDashboard(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderOperationDashboard(document.getElementById('mainContent'))">查询</button></div><div class="stats-grid"><div class="stat-card"><div class="stat-number">${planned}</div><div class="stat-label">计划到厂</div></div><div class="stat-card"><div class="stat-number">${gate}</div><div class="stat-label">已到门岗</div></div><div class="stat-card"><div class="stat-number">${waiting}</div><div class="stat-label">等待区</div></div><div class="stat-card"><div class="stat-number">${unloading}</div><div class="stat-label">卸货中</div></div><div class="stat-card"><div class="stat-number">${unloaded}</div><div class="stat-label">卸货完成</div></div><div class="stat-card danger-card"><div class="stat-number danger-number">${andon}</div><div class="stat-label">未关闭异常</div></div></div><div id="operationDashTable"></div></div>`;
+      renderTable('operationDashTable',['计划到达','批次','集装箱号','卸货口','车牌','状态','门岗等待分钟','等待区分钟','卸货分钟'],tasks,(t)=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${fmtDateTime(t.estimatedArrival)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td><td>${t.truckPlate||'-'}</td><td>${getOpStatusText(t)}</td><td>${minutesBetween(t.gateArrivalTime,t.gateReleaseTime)}</td><td>${minutesBetween(t.waitingAreaTime,t.unloadStartTime)}</td><td>${minutesBetween(t.unloadStartTime,t.unloadFinishTime)}</td>`;return tr;});
+    }
+    window.exportFactoryOperationTasks=function(){
+      let rows=getFactoryOperationTasks('').map(t=>({批次:t.batch,集装箱号:t.containerNo,卸货口:t.unloadingDock,计划到达:fmtDateTime(t.estimatedArrival),车牌:t.truckPlate,司机:t.driverName,电话:t.driverPhone,门岗到达:fmtDateTime(t.gateArrivalTime),门岗放行:fmtDateTime(t.gateReleaseTime),等待区:t.waitingAreaTime,卸货开始:t.unloadStartTime,卸货完成:t.unloadFinishTime,状态:getOpStatusText(t)}));
+      if(typeof XLSX==='undefined'){alert('XLSX组件未加载');return;} let ws=XLSX.utils.json_to_sheet(rows); let wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Operation'); XLSX.writeFile(wb,`factory_operation_${getTodayStr()}.xlsx`);
     };
 
     // 库存看板
