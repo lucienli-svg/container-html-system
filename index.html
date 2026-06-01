@@ -3165,10 +3165,14 @@ let main=document.getElementById('mainContent');
     }
 
     function getArrivalConfirmFilters(){
+      const rawBatch = (document.getElementById('arrivalSearchBatch')?.value || '').trim();
+      const rawContainerNo = (document.getElementById('arrivalSearchContainer')?.value || '').trim();
+      const rawSeq = (document.getElementById('arrivalSearchSeq')?.value || '').trim();
       return {
-        batch: (document.getElementById('arrivalSearchBatch')?.value || '').toLowerCase().trim(),
-        containerNo: (document.getElementById('arrivalSearchContainer')?.value || '').toLowerCase().trim(),
-        seq: (document.getElementById('arrivalSearchSeq')?.value || '').toLowerCase().trim()
+        batch: rawBatch.toLowerCase(),
+        containerNo: rawContainerNo.toLowerCase(),
+        seq: rawSeq.toLowerCase(),
+        rawBatch, rawContainerNo, rawSeq
       };
     }
 
@@ -3182,8 +3186,30 @@ let main=document.getElementById('mainContent');
       });
     }
 
-    window.refreshLocationConfirmSearch = function(){ renderLocationConfirm(document.getElementById('mainContent')); };
+    let arrivalConfirmSearchTimer = null;
+    function focusArrivalSearchInput(activeId){
+      if(!activeId) return;
+      const el = document.getElementById(activeId);
+      if(el && typeof el.focus === 'function'){
+        try{
+          el.focus();
+          const len = String(el.value || '').length;
+          if(typeof el.setSelectionRange === 'function') el.setSelectionRange(len, len);
+        }catch(e){}
+      }
+    }
+
+    window.refreshLocationConfirmSearch = function(){
+      const activeId = document.activeElement && document.activeElement.id ? document.activeElement.id : '';
+      if(arrivalConfirmSearchTimer) clearTimeout(arrivalConfirmSearchTimer);
+      // V40.6：输入时不立即重绘整个页面，避免每输入一个字母后输入框失焦。
+      arrivalConfirmSearchTimer = setTimeout(()=>{
+        renderLocationConfirm(document.getElementById('mainContent'));
+        focusArrivalSearchInput(activeId);
+      }, 250);
+    };
     window.clearLocationConfirmSearch = function(){
+      if(arrivalConfirmSearchTimer) clearTimeout(arrivalConfirmSearchTimer);
       ['arrivalSearchBatch','arrivalSearchContainer','arrivalSearchSeq'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
       renderLocationConfirm(document.getElementById('mainContent'));
     };
@@ -3205,9 +3231,9 @@ let main=document.getElementById('mainContent');
       let f = getArrivalConfirmFilters();
       let html=`<div class="card"><div class="card-header"><span class="card-title">✅ 在途运输 - 到货确认</span></div>
         <div class="search-bar">
-          <input type="text" id="arrivalSearchBatch" placeholder="批次号" value="${f.batch || ''}" oninput="refreshLocationConfirmSearch()">
-          <input type="text" id="arrivalSearchContainer" placeholder="集装箱号" value="${f.containerNo || ''}" oninput="refreshLocationConfirmSearch()">
-          <input type="text" id="arrivalSearchSeq" placeholder="集装箱序号" value="${f.seq || ''}" oninput="refreshLocationConfirmSearch()">
+          <input type="text" id="arrivalSearchBatch" placeholder="批次号" value="${f.rawBatch || ''}" oninput="refreshLocationConfirmSearch()">
+          <input type="text" id="arrivalSearchContainer" placeholder="集装箱号" value="${f.rawContainerNo || ''}" oninput="refreshLocationConfirmSearch()">
+          <input type="text" id="arrivalSearchSeq" placeholder="集装箱序号" value="${f.rawSeq || ''}" oninput="refreshLocationConfirmSearch()">
           <button class="btn btn-primary" onclick="refreshLocationConfirmSearch()">查询</button>
           <button class="btn" onclick="clearLocationConfirmSearch()">重置</button>
           <span style="font-size:12px;color:#909399;">按序号升序显示，支持批次号/集装箱号查询</span>
