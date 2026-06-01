@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V40.3 Andon Sequence</title>
+  <title>集装箱智能监控管理系统 V40.4 Andon Sequence</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -578,7 +578,7 @@
     @media(max-width:768px){ .attachment-card{display:block;} .attachment-thumb{max-width:100%; width:100%; height:150px; margin-bottom:8px;} .attachment-actions{justify-content:flex-start;} }
 
 
-    /* ==================== V40.3 Andon顺序看板 ==================== */
+    /* ==================== V40.2 Andon顺序看板 ==================== */
     .andon-board { background:#0f172a; color:#e5e7eb; border-radius:16px; padding:18px; overflow-x:auto; }
     .andon-title { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:14px; color:#fff; }
     .andon-lane-grid { display:grid; grid-template-columns: repeat(5, minmax(210px, 1fr)); gap:12px; min-width:1080px; }
@@ -608,7 +608,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V40.3 Cloud：Andon收货看板 + 生产顺序控制 + 门岗车辆信息维护。
+        V40.2 Cloud：Andon收货看板 + 生产顺序控制 + 门岗车辆信息维护。
       </div>
       <button class="login-btn" onclick="loginWithGoogle()" style="width:100%;margin-bottom:14px;">使用 Google 登录</button>
 
@@ -1272,7 +1272,7 @@
     let cachedFeeData = { date: null, fees: {}, totalStorage: 0, totalNormalStorage: 0, totalAbnormalStorage: 0, totalDemurrage: 0, storageWarningList: [], demurrageWarningList: [] };
     // 正常收费时长由堆存费配置中的 fixedDays 字段维护，不再固定为 15 天。
 
-    // ==================== V40.3：取消一车一口计划，兼容旧数据 ====================
+    // ==================== V40.4：取消一车一口计划，兼容旧数据 ====================
     function normalizeDynamicPlansAfterCancelOneDock(){
       if(!Array.isArray(transportTasks)) return;
       transportTasks.forEach(t => {
@@ -1491,7 +1491,7 @@ function getContainerLocation(cid){
       return t && !isProducedCompletedContainerId(t.containerId);
     }
 
-    // V40.3：已取消一车一口复核流程，所有已发布的动态运输任务均对运输公司可见。
+    // V40.4：已取消一车一口复核流程，所有已发布的动态运输任务均对运输公司可见。
     function isTransportCompanyVisibleTask(t){
       return isOperationalVisibleTask(t);
     }
@@ -2382,7 +2382,8 @@ let main=document.getElementById('mainContent');
     window.editDynamicTask = function(taskId){
       let task = transportTasks.find(t => t.id === taskId);
       if(!task){ alert('未找到运输任务'); return; }
-      let newEta = prompt('修改预计到达时间（格式：YYYY-MM-DDTHH:mm 或 YYYY/MM/DD HH:mm）', task.estimatedArrival || '');
+      if(task.status === 'cancelled' || task.cancelled){ alert('已撤回计划不可编辑，可使用复制功能重新生成计划'); return; }
+      let newEta = prompt('修改预计到达时间（必填，格式：YYYY-MM-DDTHH:mm 或 YYYY/MM/DD HH:mm）', task.estimatedArrival || '');
       if(newEta === null) return;
       let newDest = prompt('修改目的地（RG堆场/Rio Claro/IRA库房/工厂）', task.to || '工厂');
       if(newDest === null) return;
@@ -2392,15 +2393,17 @@ let main=document.getElementById('mainContent');
       }
       let newDock = prompt('修改卸货口（目的地为工厂时必填）', task.unloadingDock || '');
       if(newDock === null) return;
-      if(newDest === '工厂' && !newDock.trim()){
-        alert('目的地为工厂时，卸货口必填');
-        return;
-      }
-      task.estimatedArrival = newEta;
+      let newCarrier = prompt('修改运输公司（RG/JSL）', task.carrier || 'RG');
+      if(newCarrier === null) return;
+      let err = validateDynamicPlanFields(newDest, newEta, newDock);
+      if(err){ alert(err); return; }
+      task.estimatedArrival = newEta.trim();
       task.to = newDest;
-      task.unloadingDock = newDock.trim();
-      task.carrier = task.carrier || 'RG';
-      // V40.3：取消一车一口计划后，旧数据中的复核标记不再参与逻辑。
+      task.unloadingDock = newDest === '工厂' ? newDock.trim() : newDock.trim();
+      task.carrier = (newCarrier || 'RG').trim() || 'RG';
+      task.lastEditedAt = new Date().toISOString();
+      task.lastEditedBy = currentUser?.name || currentUser?.email || '';
+      // V40.4：取消一车一口计划后，旧数据中的复核标记不再参与逻辑。
       delete task.oneDockReviewStatus;
       delete task.oneDockOrder;
       delete task.oneDockPlan;
@@ -2408,6 +2411,71 @@ let main=document.getElementById('mainContent');
       saveData();
       renderContent();
       alert('已发布运输计划已更新');
+    };
+
+    window.withdrawDynamicTask = function(taskId){
+      let task = transportTasks.find(t => t.id === taskId);
+      if(!task){ alert('未找到运输任务'); return; }
+      if(task.status === 'cancelled' || task.cancelled){ alert('该计划已撤回'); return; }
+      if(task.gateArrivalTime || task.arrivalTime || task.unloadStartTime || task.unloadFinishTime || task.operationStatus === 'outside_parking' || task.operationStatus === 'inside_waiting' || task.operationStatus === 'unloading' || task.operationStatus === 'unloaded'){
+        alert('该集装箱已进入到厂/卸货执行环节，不允许撤回计划');
+        return;
+      }
+      const reasons = ['工厂计划变更','清关异常','运输异常','库存调整','供应商原因','其他'];
+      let reason = prompt('请输入撤回原因：\n' + reasons.join(' / '), '工厂计划变更');
+      if(reason === null) return;
+      reason = reason.trim();
+      if(!reason){ alert('撤回原因不能为空'); return; }
+      if(!confirm(`确认撤回 ${task.containerNo || ''} 的动态运输计划吗？`)) return;
+      task.status = 'cancelled';
+      task.cancelled = true;
+      task.cancelReason = reason;
+      task.cancelTime = new Date().toISOString();
+      task.cancelUser = currentUser?.name || currentUser?.email || '';
+      task.operationStatus = 'cancelled';
+      saveData();
+      renderContent();
+      alert('计划已撤回。该集装箱会重新回到动态运输计划待发布列表，可重新发布。');
+    };
+
+    window.copyDynamicTask = function(taskId){
+      let task = transportTasks.find(t => t.id === taskId);
+      if(!task){ alert('未找到运输任务'); return; }
+      let newEta = prompt('复制计划：请输入新的预计到达时间（必填，格式：YYYY-MM-DDTHH:mm）', task.estimatedArrival || '');
+      if(newEta === null) return;
+      let err = validateDynamicPlanFields(task.to || '工厂', newEta, task.unloadingDock || '');
+      if(err){ alert(err); return; }
+      let cont = containers.find(c=>c.id===task.containerId) || {};
+      let newTask = {
+        ...task,
+        id: nextIds.task++,
+        containerId: task.containerId,
+        containerNo: task.containerNo || cont.containerNo,
+        containerSeq: task.containerSeq || cont.containerSeq || '',
+        batch: task.batch || cont.batch || '',
+        status: 'in_transit',
+        operationStatus: 'not_arrived',
+        estimatedArrival: newEta.trim(),
+        source: 'dynamic',
+        copiedFromTaskId: task.id,
+        createdAt: new Date().toISOString(),
+        publishedAt: new Date().toISOString(),
+        cancelled: false,
+        cancelReason: '',
+        cancelTime: '',
+        cancelUser: ''
+      };
+      delete newTask.gateArrivalTime;
+      delete newTask.releaseToWaitingTime;
+      delete newTask.unloadStartTime;
+      delete newTask.unloadFinishTime;
+      delete newTask.oneDockReviewStatus;
+      delete newTask.oneDockOrder;
+      delete newTask.oneDockPlan;
+      transportTasks.push(newTask);
+      saveData();
+      renderContent();
+      alert('已复制生成新的动态运输计划');
     };
 
     // ==================== 提单/IRA管理（新增批次搜索和批次显示） ====================
@@ -3312,11 +3380,9 @@ let main=document.getElementById('mainContent');
     // 动态运输计划
     function renderDynamicPlan(container){
       let available = getDynamicAvailableContainers();
-      let published = transportTasks.filter(t => t.status === 'in_transit' && (t.source === 'dynamic' || t.source === 'oneDockPlan' || t.oneDockPlan) && isOperationalVisibleTask(t));
+      let published = getPublishedDynamicTasks();
       // 兼容旧数据：历史动态运输任务没有 source 字段时，也纳入已发布动态计划
-      if(published.length === 0){
-        published = transportTasks.filter(t => t.status === 'in_transit' && t.from !== '港口' && isOperationalVisibleTask(t));
-      }
+      
       container.innerHTML=`
         <div class="card dynamic-card">
           <div class="card-header">
@@ -3347,7 +3413,7 @@ let main=document.getElementById('mainContent');
     function getDynamicAvailableContainers(){
       return containers.filter(c => {
         if (!c.actualPickupTime) return false;
-        let hasInTransit = transportTasks.some(t => t.containerId === c.id && t.status === 'in_transit');
+        let hasInTransit = transportTasks.some(t => t.containerId === c.id && t.status === 'in_transit' && !t.cancelled);
         if (hasInTransit) return false;
         let factoryDone = returnRecords.some(r => r.containerId === c.id && r.location === '工厂');
         if (factoryDone) return false;
@@ -3384,14 +3450,38 @@ let main=document.getElementById('mainContent');
       if(selectAll) selectAll.onclick=()=>document.querySelectorAll('.dynamic-checkbox').forEach(cb=>cb.checked=selectAll.checked);
     }
 
+    function isDynamicTask(t){
+      return !!t && (t.source === 'dynamic' || t.source === 'oneDockPlan' || t.oneDockPlan || (t.from && t.from !== '港口' && t.source !== 'pickup'));
+    }
+
+    function getPublishedDynamicTasks(){
+      return transportTasks.filter(t => isDynamicTask(t) && isOperationalVisibleTask(t) && t.status !== 'completed')
+        .sort((a,b)=>String(b.createdAt||b.publishedAt||b.estimatedArrival||'').localeCompare(String(a.createdAt||a.publishedAt||a.estimatedArrival||'')));
+    }
+
+    function getDynamicTaskStatusLabel(t){
+      if(t.status === 'cancelled' || t.cancelled) return '<span class="status-badge channel-red">已撤回</span>';
+      if(t.status === 'in_transit') return '<span class="status-badge status-transport">运输中</span>';
+      if(t.status === 'pending_pickup') return '<span class="status-badge status-pending">待提箱</span>';
+      return `<span class="status-badge status-pending">${t.status || '-'}</span>`;
+    }
+
+    function validateDynamicPlanFields(dest, eta, dock){
+      if(!dest) return '目的地不能为空';
+      if(!eta || !String(eta).trim()) return '预计到货时间不能为空，请维护后再发布计划';
+      if(dest === '工厂' && !String(dock || '').trim()) return '工厂到货计划必须维护卸货口';
+      return '';
+    }
+
     function renderPublishedDynamic(tasks){
       if(tasks.length===0){document.getElementById('publishedDynamic').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">暂无已发布的运输计划</div></div>';return;}
-      renderTable('publishedDynamic',['批次','序号','集装箱号','提单号','IRA号','出发地','目的地','卸货口','运输公司','预计到达','状态','操作'],tasks,(t)=>{
+      renderTable('publishedDynamic',['批次','序号','集装箱号','提单号','IRA号','出发地','目的地','卸货口','运输公司','预计到达','状态','撤回原因','操作'],tasks,(t)=>{
         let cont=containers.find(c=>c.id===t.containerId) || {};
         let blText=getContainerBlTextById(t.containerId) || '-';
         let iraList=getIraList(t.containerId) || '-';
+        let disabled = (t.status === 'cancelled' || t.cancelled) ? 'disabled' : '';
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td title="${t.batch||''}">${t.batch||'-'}</td><td title="${cont.containerSeq||t.containerSeq||''}">${cont.containerSeq||t.containerSeq||'-'}</td><td title="${t.containerNo||''}">${t.containerNo}</td><td title="${blText}">${blText}</td><td title="${iraList}">${iraList}</td><td>${t.from||'-'}</td><td><span class="status-badge ${getDestClass(t.to||'工厂')}">${t.to||'工厂'}</span></td><td>${t.unloadingDock||'-'}</td><td>${t.carrier||'RG'}</td><td>${fmtDateTime(t.estimatedArrival)}</td><td><span class="status-badge status-transport">运输中</span></td><td><button class="btn btn-sm btn-warning" onclick="editDynamicTask(${t.id})">重新编辑</button></td>`;
+        tr.innerHTML=`<td title="${t.batch||''}">${t.batch||'-'}</td><td title="${cont.containerSeq||t.containerSeq||''}">${cont.containerSeq||t.containerSeq||'-'}</td><td title="${t.containerNo||''}">${t.containerNo}</td><td title="${blText}">${blText}</td><td title="${iraList}">${iraList}</td><td>${t.from||'-'}</td><td><span class="status-badge ${getDestClass(t.to||'工厂')}">${t.to||'工厂'}</span></td><td>${t.unloadingDock||'-'}</td><td>${t.carrier||'RG'}</td><td>${fmtDateTime(t.estimatedArrival)}</td><td>${getDynamicTaskStatusLabel(t)}</td><td title="${t.cancelReason||''}">${t.cancelReason||'-'}</td><td><button class="btn btn-sm btn-warning" onclick="editDynamicTask(${t.id})" ${disabled}>编辑</button><button class="btn btn-sm btn-danger" onclick="withdrawDynamicTask(${t.id})" ${disabled}>撤回</button><button class="btn btn-sm" onclick="copyDynamicTask(${t.id})">复制</button></td>`;
         return tr;
       });
     }
@@ -3420,7 +3510,7 @@ let main=document.getElementById('mainContent');
 
     function filterDynamicList(){
       renderDynamicTable(getDynamicAvailableContainers());
-      let published = transportTasks.filter(t => t.status === 'in_transit' && (t.source === 'dynamic' || t.source === 'oneDockPlan' || t.oneDockPlan || t.from !== '港口') && isOperationalVisibleTask(t));
+      let published = getPublishedDynamicTasks();
       renderPublishedDynamic(filterDynamicTasks(published));
     }
 
@@ -3563,11 +3653,12 @@ let main=document.getElementById('mainContent');
     window.publishDynamicSingle = function(containerId,fromLoc){
       let dest=document.getElementById(`dynDest_${containerId}`)?.value || '工厂';
       let carrier='RG';
-      let eta=document.getElementById(`dynEta_${containerId}`).value;
+      let eta=document.getElementById(`dynEta_${containerId}`)?.value || '';
       let dock=(document.getElementById(`dynDock_${containerId}`)?.value||'').trim();
-      if(dest==='工厂' && !dock){alert('目的地为工厂时，卸货口必填');return;}
+      let err = validateDynamicPlanFields(dest, eta, dock);
+      if(err){ alert(err); return; }
       let cont=containers.find(c=>c.id===containerId);
-      transportTasks.push({id:nextIds.task++,containerId,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,from:fromLoc,to:dest,carrier,status:'in_transit',estimatedArrival:eta,unloadingDock:dock,source:'dynamic'});
+      transportTasks.push({id:nextIds.task++,containerId,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,from:fromLoc,to:dest,carrier,status:'in_transit',operationStatus:'not_arrived',estimatedArrival:eta,unloadingDock:dock,source:'dynamic',createdAt:new Date().toISOString(),publishedAt:new Date().toISOString()});
       saveData();
       renderContent();
       alert(`动态运输计划已发布，目的地：${dest}`);
@@ -3580,13 +3671,14 @@ let main=document.getElementById('mainContent');
       for(let cb of selected){
         let id=parseInt(cb.dataset.id);
         let fromLoc=cb.dataset.loc;
-        let eta=document.getElementById(`dynEta_${id}`)?.value;
+        let eta=document.getElementById(`dynEta_${id}`)?.value || '';
         let dest=document.getElementById(`dynDest_${id}`)?.value || '工厂';
         let dock=(document.getElementById(`dynDock_${id}`)?.value||'').trim();
-        if(dest==='工厂' && !dock){alert('所选集装箱中存在目的地为工厂但未填写卸货口的数据，请补充后再批量发布');return;}
         let cont=containers.find(c=>c.id===id);
+        let err = validateDynamicPlanFields(dest, eta, dock);
+        if(err){ alert(`${cont?.containerNo || id}：${err}`); return; }
         if(cont){
-          transportTasks.push({id:nextIds.task++,containerId:id,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,from:fromLoc,to:dest,carrier:'RG',status:'in_transit',estimatedArrival:eta,unloadingDock:dock,source:'dynamic'});
+          transportTasks.push({id:nextIds.task++,containerId:id,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,from:fromLoc,to:dest,carrier:'RG',status:'in_transit',operationStatus:'not_arrived',estimatedArrival:eta,unloadingDock:dock,source:'dynamic',createdAt:new Date().toISOString(),publishedAt:new Date().toISOString()});
           count++;
         }
       }
@@ -3595,7 +3687,7 @@ let main=document.getElementById('mainContent');
     };
 
 
-    // ==================== V40.3 Operation Control Tower：集装箱计划 + 门岗车辆信息 + 五状态执行流 ====================
+    // ==================== V40.1 Operation Control Tower：集装箱计划 + 门岗车辆信息 + 五状态执行流 ====================
     function getFactoryOperationTasks(date){
       let tasks = transportTasks.filter(t => t && t.to === '工厂' && isOperationalVisibleTask(t) && t.status !== 'completed');
       if(date) tasks = tasks.filter(t => getDatePart(t.estimatedArrival || t.plannedDate || '') === date || getDatePart(t.gateArrivalTime || '') === date || getDatePart(t.unloadStartTime || '') === date);
@@ -3704,7 +3796,7 @@ let main=document.getElementById('mainContent');
 
 
 
-    // ==================== V40.3 Andon顺序控制增强版 ====================
+    // ==================== V40.2 Andon顺序控制增强版 ====================
     function getPlanDateFromTask(t){ return getDatePart(t.estimatedArrival || t.plannedDate || t.gateArrivalTime || t.unloadStartTime || t.unloadFinishTime || ''); }
     function getProductionPlanForTask(t){
       let d = getPlanDateFromTask(t);
@@ -3816,7 +3908,7 @@ let main=document.getElementById('mainContent');
       html+='</div>'; board.innerHTML=html;
     }
 
-    // 覆盖V40.3页面：加入生产顺序与异常到达优先级
+    // 覆盖V40.1页面：加入生产顺序与异常到达优先级
     function renderGateMonitoring(container){
       let d = document.getElementById('gateMonitorDate')?.value || getTodayStr();
       let tasks = getFactoryOperationTasks(d).map(enrichTaskSequence).filter(t => ['not_arrived','outside_parking'].includes(getOpStatus(t)));
