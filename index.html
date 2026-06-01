@@ -2898,7 +2898,7 @@ let main=document.getElementById('mainContent');
         renderTable('inTransitTable',['批次','集装箱号','计划到货时间','目的地','卸货口','状态'],filteredTransit,(item)=>{
           let destClass=getDestClass(item.to);
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.estimatedArrival)}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge status-transport">运输中</span></td><td><button class="btn btn-sm btn-warning" onclick="editDynamicTask(${t.id})">编辑</button></td>`;
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.estimatedArrival)}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge status-transport">${t.oneDockPlan?'一车一口':'运输中'}</span></td><td><button class="btn btn-sm btn-warning" onclick="editDynamicTask(${t.id})">编辑</button></td>`;
           return tr;
         });
       }
@@ -3068,6 +3068,9 @@ let main=document.getElementById('mainContent');
     function buildReturnRows(onlyConfirmed){
       let rows = [];
       returnRecords.forEach(r => {
+        // V39.8 修复：还箱确认板块只展示真正需要还空箱的记录。
+        // Rio Claro / IRA库房 -> 工厂 属于二次配送，工厂掏箱只生成 type='unpack'，不能进入还箱确认。
+        if(!(r.type === 'return_needed' || r.type === 'return')) return;
         if(isProducedCompletedContainerId(r.containerId)) return;
         let isConfirmed = !!r.isReturnConfirmed || r.type === 'return';
         if(onlyConfirmed !== isConfirmed) return;
@@ -3250,7 +3253,7 @@ let main=document.getElementById('mainContent');
         <div class="card dynamic-card">
           <div class="card-header">
             <span class="card-title">🎯 动态运输计划</span>
-            <div><button class="btn btn-success" onclick="batchPublishDynamic()">批量发布</button><button class="btn" onclick="selectAllDynamic()">全选</button></div>
+            <div><button class="btn btn-success" onclick="batchPublishDynamic()">批量发布</button><button class="btn btn-primary" onclick="generateOneDockPlan()">生成一车一口计划</button><button class="btn" onclick="selectAllDynamic()">全选</button></div>
           </div>
           <div class="search-bar dynamic-search">
             <input type="text" id="dynamicSearchBatch" placeholder="批次">
@@ -3260,7 +3263,14 @@ let main=document.getElementById('mainContent');
             <button class="btn btn-primary" onclick="filterDynamicList()">查询</button>
             <button class="btn" onclick="resetDynamicFilter()">重置</button>
           </div>
-          <div style="font-size:12px;color:#909399;margin-bottom:8px;text-align:center;">动态运输计划默认运输公司为 RG，默认到货地点为工厂；也可选择 RG堆场 / Rio Claro / IRA库房；目的地为工厂时卸货口必填。</div>
+          <div class="search-bar" style="background:#eef5ff;border:1px solid #d9ecff;">
+            <span style="font-size:13px;font-weight:700;color:#2a5298;">一车一口参数</span>
+            <input type="date" id="oneDockPlanDate" title="计划日期">
+            <input type="time" id="oneDockStartTime" value="07:00" title="每个卸货口开始时间">
+            <input type="number" id="oneDockInterval" value="40" min="5" step="5" placeholder="间隔分钟" title="同一卸货口车辆间隔分钟">
+            <button class="btn btn-primary" onclick="generateOneDockPlan()">按卸货口+生产顺序自动排布并发布</button>
+          </div>
+          <div style="font-size:12px;color:#909399;margin-bottom:8px;text-align:center;">动态运输计划默认运输公司为 RG，默认到货地点为工厂；选择多个集装箱后，可按“卸货口 + 批次/序号生产顺序 + 时间间隔”自动生成一车一口计划。</div>
           <div id="dynamicTable"></div>
         </div>
         <div class="card dynamic-card">
@@ -3270,6 +3280,8 @@ let main=document.getElementById('mainContent');
           </div>
         </div>`;
       renderDynamicTable(available);
+      let planDateEl = document.getElementById('oneDockPlanDate');
+      if(planDateEl && !planDateEl.value){ let d=new Date(); d.setDate(d.getDate()+1); planDateEl.value=`${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
       renderPublishedDynamic(published);
     }
 
@@ -3361,6 +3373,90 @@ let main=document.getElementById('mainContent');
       filterDynamicList();
     }
     function selectAllDynamic(){document.querySelectorAll('.dynamic-checkbox').forEach(cb=>cb.checked=true);}
+
+    function pad2(n){ return String(n).padStart(2,'0'); }
+
+    function addMinutesToDateTime(dateStr, timeStr, minutes){
+      let base = new Date(`${dateStr}T${timeStr || '07:00'}:00`);
+      if(isNaN(base.getTime())) base = new Date();
+      base.setMinutes(base.getMinutes() + Number(minutes || 0));
+      return `${base.getFullYear()}-${pad2(base.getMonth()+1)}-${pad2(base.getDate())}T${pad2(base.getHours())}:${pad2(base.getMinutes())}`;
+    }
+
+    function compareProductionSequence(a,b){
+      let ca = containers.find(c=>String(c.id)===String(a.id)) || a;
+      let cb = containers.find(c=>String(c.id)===String(b.id)) || b;
+      return String(ca.batch||'').localeCompare(String(cb.batch||''), 'zh-CN', {numeric:true}) ||
+             String(ca.containerSeq||'').localeCompare(String(cb.containerSeq||''), 'zh-CN', {numeric:true}) ||
+             String(ca.containerNo||'').localeCompare(String(cb.containerNo||''), 'zh-CN', {numeric:true});
+    }
+
+    window.generateOneDockPlan = function(){
+      let selected = Array.from(document.querySelectorAll('.dynamic-checkbox:checked'));
+      if(selected.length===0){ alert('请先选择需要生成一车一口计划的集装箱'); return; }
+
+      let date = document.getElementById('oneDockPlanDate')?.value || '';
+      let startTime = document.getElementById('oneDockStartTime')?.value || '07:00';
+      let interval = parseInt(document.getElementById('oneDockInterval')?.value || '40', 10);
+      if(!date){
+        let tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate()+1);
+        date = `${tomorrow.getFullYear()}-${pad2(tomorrow.getMonth()+1)}-${pad2(tomorrow.getDate())}`;
+      }
+      if(!interval || interval < 1) interval = 40;
+
+      let items = [];
+      for(let cb of selected){
+        let id = parseInt(cb.dataset.id);
+        let fromLoc = cb.dataset.loc;
+        let dest = document.getElementById(`dynDest_${id}`)?.value || '工厂';
+        let dock = (document.getElementById(`dynDock_${id}`)?.value || '').trim();
+        let cont = containers.find(c=>c.id===id);
+        if(!cont) continue;
+        if(dest !== '工厂'){ alert('一车一口计划仅用于发往工厂的集装箱，请将所选集装箱目的地调整为工厂。'); return; }
+        if(!dock){ alert(`集装箱 ${cont.containerNo} 未填写卸货口，无法生成一车一口计划。`); return; }
+        items.push({id, fromLoc, dest, dock, cont});
+      }
+      if(items.length===0){ alert('未找到可发布的数据'); return; }
+
+      items.sort((a,b)=> String(a.dock||'').localeCompare(String(b.dock||''), 'zh-CN', {numeric:true}) || compareProductionSequence(a.cont,b.cont));
+      let dockCounters = {};
+      let created = 0;
+      let preview = [];
+
+      for(let item of items){
+        let idx = dockCounters[item.dock] || 0;
+        let eta = addMinutesToDateTime(date, startTime, idx * interval);
+        dockCounters[item.dock] = idx + 1;
+        if(transportTasks.some(t=>String(t.containerId)===String(item.id) && t.status==='in_transit')) continue;
+        transportTasks.push({
+          id: nextIds.task++,
+          containerId: item.id,
+          containerNo: item.cont.containerNo,
+          containerSeq: item.cont.containerSeq || '',
+          batch: item.cont.batch,
+          from: item.fromLoc,
+          to: '工厂',
+          carrier: 'RG',
+          status: 'in_transit',
+          estimatedArrival: eta,
+          unloadingDock: item.dock,
+          source: 'oneDockPlan',
+          oneDockPlan: true,
+          oneDockOrder: idx + 1,
+          plannedDate: date
+        });
+        preview.push(`${item.dock} ${eta.replace('T',' ')} ${item.cont.batch || ''} ${item.cont.containerNo}`);
+        created++;
+      }
+
+      if(created>0){
+        saveData();
+        renderContent();
+        alert(`已生成并发布 ${created} 条一车一口计划。\n\n排布规则：同一卸货口从 ${startTime} 开始，每 ${interval} 分钟一车；按批次/序号顺序排序。\n\n${preview.slice(0,12).join('\n')}${preview.length>12?'\n...':''}`);
+      }else{
+        alert('所选集装箱已存在运输中任务，未重复生成。');
+      }
+    };
 
     window.publishDynamicSingle = function(containerId,fromLoc){
       let dest=document.getElementById(`dynDest_${containerId}`)?.value || '工厂';
