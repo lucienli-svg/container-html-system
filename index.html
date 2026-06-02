@@ -3,9 +3,259 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V42 Production Supply Cockpit</title>
-  <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <title>集装箱智能监控管理系统 V42.1 Production Plan</title>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
+
+    /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
+    function v42SeqNum(v){ const n=parseInt(String(v||'').replace(/[^0-9]/g,''),10); return isNaN(n)?null:n; }
+    function v42IsSupplementBatch(batch){ return String(batch||'').trim().toUpperCase().startsWith('BX'); }
+    function v42BatchRule(batch){
+      const b=String(batch||'').trim().toUpperCase();
+      if(!b) return {model:'未知',series:'OTHER',total:0,welding:[],assembly:[]};
+      if(b.startsWith('BHC')) return {model:'B01-PHEV四驱',series:'B',total:22,welding:[1,2,3,4,5,6,7,8],assembly:[8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]};
+      if(b.startsWith('BHE')) return {model:'B01-PHEV两驱',series:'B',total:22,welding:[1,2,3,4,5,6,7,8],assembly:[8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]};
+      if(b.startsWith('BHF')) return {model:'B03-PHEV四驱',series:'B',total:23,welding:[1,2,3,4,5,6,7,8,9,10],assembly:[8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]};
+      if(b.startsWith('BF')) return {model:'P11',series:'P',total:15,welding:[1,2,3,4,5,6],assembly:[5,6,7,8,9,10,11,12,13,14,15]};
+      if(b.startsWith('BP') || b.startsWith('BHP')) return {model:'P3012',series:'P',total:13,welding:[1,2,3,4,5],assembly:[5,6,7,8,9,10,11,12,13]};
+      return {model:'未配置',series:'OTHER',total:0,welding:[],assembly:[]};
+    }
+    function v42RecommendedDock(batch, seq){
+      const b=String(batch||'').toUpperCase(); const n=v42SeqNum(seq); if(!n) return '';
+      if(b.startsWith('BHC') || b.startsWith('BHE')){ if(n>=1&&n<=7) return '120B'; if(n===8) return '120B→140B'; if(n>=9&&n<=22) return '140B'; }
+      if(b.startsWith('BHF')){ if(n>=1&&n<=7) return '120B'; if(n>=8&&n<=10) return '120B→140B'; if(n>=11&&n<=23) return '140B'; }
+      if(b.startsWith('BF')){ if(n>=1&&n<=4) return '120B'; if(n>=5&&n<=6) return '120B→132'; if(n>=13&&n<=14) return '140C'; if((n>=7&&n<=12)||n===15) return '132'; }
+      if(b.startsWith('BP') || b.startsWith('BHP')){ if(n>=1&&n<=4) return '120B'; if(n===5) return '120B→132'; if(n>=11&&n<=12) return '140C'; if((n>=6&&n<=10)||n===13) return '132'; }
+      return '';
+    }
+    function v42VehicleTypeFromOrigin(origin){ const o=String(origin||'').toUpperCase(); return (o.includes('RIO') || o.includes('IRA')) ? 'SIDER' : 'CONTAINER'; }
+    function v42TaskFor(batch, seq){ const s=String(seq||'').trim(); return transportTasks.find(t=>String(t.batch||'').toUpperCase()===String(batch||'').toUpperCase() && String(t.containerSeq||'').trim()===s && t.to==='工厂' && !t.cancelled); }
+    function v42ChipState(task){
+      if(!task) return 'none';
+      const st=getOpStatus(task);
+      if(st==='unloaded' || task.status==='completed') return 'done';
+      if(st==='unloading') return 'unload';
+      if(st==='inside_waiting') return 'wait';
+      if(st==='outside_parking') return 'gate';
+      if(task.status==='in_transit') return 'transit';
+      return 'none';
+    }
+    function v42StatusText(state){ return {done:'已完成',wait:'工厂内等待',gate:'已到门口',unload:'卸货中',transit:'运输中',none:'未发运',borrow:'异常借料'}[state]||state; }
+    function v42GetBoardDates(){ const t=getTodayStr(); const d=new Date(t+'T00:00:00'); d.setDate(d.getDate()+1); return [t, `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`]; }
+    function v42DateLabel(d,i){ return `${fmtDate(d)} ${i===0?'今日':'明日'}`; }
+    function v42BuildBatchGroups(area, date){
+      const areaKey=area==='Welding'?'welding':'assembly';
+      const groups={};
+      productionPlans.filter(p=>p.date===date && ((String(p.area||'').toLowerCase()===area.toLowerCase()) || (p.planMode==='schedule' && productionPlanAreaFromWorkshop(p.workshop)===area))).forEach(p=>{
+        const batch=String(p.batch||'').trim().toUpperCase(); if(!batch || v42IsSupplementBatch(batch)) return;
+        groups[batch]=groups[batch]||new Set();
+        if(p.seq) groups[batch].add(v42SeqNum(p.seq));
+        if(p.planMode==='schedule'){ const rule=v42BatchRule(batch); (rule[area==='Welding'?'welding':'assembly']||[]).forEach(n=>groups[batch].add(n)); }
+      });
+      transportTasks.filter(t=>t.to==='工厂' && !t.cancelled && (getDatePart(t.estimatedArrival||'')===date || getDatePart(t.gateArrivalTime||'')===date || getDatePart(t.waitingAreaTime||'')===date || getDatePart(t.unloadStartTime||'')===date || getDatePart(t.unloadFinishTime||'')===date)).forEach(t=>{
+        const batch=String(t.batch||'').trim().toUpperCase(); const seq=v42SeqNum(t.containerSeq); if(!batch || !seq || v42IsSupplementBatch(batch)) return;
+        const rule=v42BatchRule(batch); const seqs=rule[areaKey]||[]; if(seqs.includes(seq)){ groups[batch]=groups[batch]||new Set(); groups[batch].add(seq); }
+      });
+      Object.keys(groups).forEach(batch=>{ const rule=v42BatchRule(batch); const arr=rule[areaKey]||[]; if(arr.length){ groups[batch]=new Set(arr); } });
+      return Object.entries(groups).sort((a,b)=>a[0].localeCompare(b[0],'zh-CN',{numeric:true})).map(([batch,set])=>({batch,seqs:[...set].filter(Boolean).sort((x,y)=>x-y)}));
+    }
+    function v42RenderBatchRow(group){
+      let done=0, total=group.seqs.length||1;
+      const sider=[], cont=[];
+      group.seqs.forEach(seq=>{
+        const task=v42TaskFor(group.batch,seq); const state=v42ChipState(task); if(state==='done') done++;
+        const type=task?v42VehicleTypeFromOrigin(task.from):'CONTAINER';
+        const title=`${group.batch} #${seq}\n${v42StatusText(state)}\n出发地：${task?.from||'-'}\n推荐卸货口：${v42RecommendedDock(group.batch,seq)}`;
+        const chip=`<span class="v42-chip ${state}" title="${title}">${seq}</span>`;
+        if(type==='SIDER') sider.push(chip); else cont.push(chip);
+      });
+      const pct=Math.round(done/total*100);
+      return `<tr><td><span class="v42-batch-name">${group.batch}</span><div style="font-size:10px;color:#cbd5e1;margin-top:3px;">${v42BatchRule(group.batch).model}</div></td><td><div class="v42-chip-wrap">${sider.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div class="v42-chip-wrap">${cont.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div style="font-weight:900;">${done}/${total}</div><div class="v42-progress"><span style="width:${pct}%"></span></div></td></tr>`;
+    }
+    function v42PanelKpis(area){
+      const dates=v42GetBoardDates(); let rows=[]; dates.forEach(d=>v42BuildBatchGroups(area,d).forEach(g=>g.seqs.forEach(seq=>rows.push(v42TaskFor(g.batch,seq)))));
+      const c={none:0,gate:0,wait:0,unload:0,done:0,transit:0}; rows.forEach(t=>{const s=v42ChipState(t); c[s] = (c[s]||0)+1;});
+      return `<div class="v42-panel-kpis"><div class="v42-status-card v42-status-pending"><div class="num">${c.none||0}</div><div class="lab">未发运</div></div><div class="v42-status-card v42-status-gate"><div class="num">${c.gate||0}</div><div class="lab">门口</div></div><div class="v42-status-card v42-status-wait"><div class="num">${c.wait||0}</div><div class="lab">厂内等待</div></div><div class="v42-status-card v42-status-unload"><div class="num">${c.unload||0}</div><div class="lab">卸货中</div></div><div class="v42-status-card v42-status-done"><div class="num">${c.done||0}</div><div class="lab">已完成</div></div></div>`;
+    }
+    function v42RenderProductionPanel(area){
+      const dates=v42GetBoardDates(); const cls=area==='Welding'?'welding':'assembly'; const icon=area==='Welding'?'🔧':'🚚';
+      return `<div class="v42-panel ${cls}"><div class="v42-panel-head"><div class="v42-panel-name">${icon} ${area.toUpperCase()}</div><div style="font-size:12px;opacity:.75;">生产保供进度</div></div>${v42PanelKpis(area)}${dates.map((d,i)=>{const groups=v42BuildBatchGroups(area,d);return `<div class="v42-date-block"><div class="v42-date-title">📅 ${v42DateLabel(d,i)} <span style="margin-left:auto;font-size:11px;opacity:.7;">${groups.length} batches</span></div>${groups.length?`<table class="v42-batch-table"><thead><tr><th>BATCH</th><th>SIDER</th><th>CONTAINER</th><th>完成率</th></tr></thead><tbody>${groups.map(v42RenderBatchRow).join('')}</tbody></table>`:`<div style="padding:14px;opacity:.65;">暂无生产计划/到箱计划</div>`}</div>`}).join('')}<div class="v42-legend"><span><i class="v42-dot" style="background:#16a34a"></i>已完成</span><span><i class="v42-dot" style="background:#2563eb"></i>厂内等待</span><span><i class="v42-dot" style="background:#eab308"></i>门口</span><span><i class="v42-dot" style="background:#0ea5e9"></i>卸货中</span><span><i class="v42-dot" style="background:#f97316"></i>运输中</span><span><i class="v42-dot" style="background:#dc2626"></i>未发运</span></div></div>`;
+    }
+    function v42RenderProductionBoard(){ return `<div class="v42-section-title"><h3>🏭 生产保供看板</h3><span class="v42-mini-note">按 Welding / Assembly 展示今日与明日批次到货进度，区分 SIDER 与 CONTAINER</span></div><div class="v42-board">${v42RenderProductionPanel('Welding')}${v42RenderProductionPanel('Assembly')}</div>`; }
+    const v42OriginalRenderDashboard = renderDashboard;
+    renderDashboard = function(container){
+      let activeContainers=containers.filter(isOperationalVisibleContainer);
+      let total=activeContainers.length;
+      let inTransit=transportTasks.filter(t=>t.status==='in_transit' && isOperationalVisibleTask(t)).length;
+      let stock={'港口':0,'RG堆场':0,'Rio Claro':0,'IRA库房':0,'工厂':0};
+      let producedCount = containers.filter(c => isProducedCompletedContainerId(c.id)).length;
+      activeContainers.forEach(c=>{ let loc=getContainerLocation(c.id); if(loc==='已生产') return; stock[loc]=(stock[loc]||0)+1; });
+      let dailyReport = getDailyOperationReport(getTodayStr());
+      let totalAbnormalStorage = cachedFeeData.totalAbnormalStorage || 0;
+      let totalDemurrage = cachedFeeData.totalDemurrage || 0;
+      let storageWarningCount = cachedFeeData.storageWarningList.length;
+      let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
+      container.innerHTML = `
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
+        <div class="v42-kpi-grid">
+          <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
+          <div class="v42-kpi danger" onclick="showDailyReportDetail('todayDemurrage')"><div class="v42-kpi-num">$ ${dailyReport.todayDemurrage.toFixed(2)}</div><div class="v42-kpi-label">今日新增滞箱费</div></div>
+          <div class="v42-kpi" onclick="showDailyReportDetail('clearanceCompleted')"><div class="v42-kpi-num">${dailyReport.clearanceCompleted}</div><div class="v42-kpi-label">今日清关完成</div></div>
+          <div class="v42-kpi" onclick="showDailyReportDetail('plannedPickup')"><div class="v42-kpi-num">${dailyReport.plannedPickup}</div><div class="v42-kpi-label">今日计划提箱</div></div>
+          <div class="v42-kpi green" onclick="showDailyReportDetail('actualPickup')"><div class="v42-kpi-num">${dailyReport.actualPickup}</div><div class="v42-kpi-label">今日实际提箱</div></div>
+          <div class="v42-kpi" onclick="showDailyReportDetail('clearedPendingPickup')"><div class="v42-kpi-num">${dailyReport.clearedPendingPickup}</div><div class="v42-kpi-label">已清关待提箱</div></div>
+          <div class="v42-kpi warn" onclick="showDailyReportDetail('clearedPendingPickupAbnormal')"><div class="v42-kpi-num">${dailyReport.clearedPendingPickupAbnormal}</div><div class="v42-kpi-label">异常费待提箱</div></div>
+          <div class="v42-kpi" onclick="jumpTo('transportTasks')"><div class="v42-kpi-num">${inTransit}</div><div class="v42-kpi-label">运输中集装箱</div></div>
+          <div class="v42-kpi warn"><div class="v42-kpi-num">R$ ${totalAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">累计异常堆存费</div></div>
+          <div class="v42-kpi danger"><div class="v42-kpi-num">$ ${totalDemurrage.toFixed(2)}</div><div class="v42-kpi-label">累计滞箱费</div></div>
+          <div class="v42-kpi warn" onclick="showWarningDetail('storage')"><div class="v42-kpi-num">${storageWarningCount}</div><div class="v42-kpi-label">异常堆存费预警</div></div>
+          <div class="v42-kpi danger" onclick="showWarningDetail('demurrage')"><div class="v42-kpi-num">${demurrageWarningCount}</div><div class="v42-kpi-label">滞箱费预警</div></div>
+        </div>
+        <div class="card"><div class="card-title">📍 库存分布</div><div class="v42-stock-strip">${Object.entries(stock).map(([k,v])=>`<div class="v42-stock" onclick="showLocationStockDetail('${k}')"><div class="n">${v}</div><div class="l">${k}</div></div>`).join('')}<div class="v42-stock" onclick="showLocationStockDetail('已生产')"><div class="n">${producedCount}</div><div class="l">已生产</div></div></div></div>
+        ${v42RenderProductionBoard()}
+      `;
+    };
+    const v42OriginalPublishDynamicSingle = window.publishDynamicSingle;
+    window.publishDynamicSingle = function(id, fromLoc){
+      try{
+        const cont=containers.find(c=>c.id===id);
+        const dest=document.getElementById(`dynDest_${id}`)?.value;
+        const dockEl=document.getElementById(`dynDock_${id}`);
+        if(dest==='工厂' && dockEl && !String(dockEl.value||'').trim() && cont){
+          const rec=v42RecommendedDock(cont.batch, cont.containerSeq);
+          if(rec) dockEl.value=rec;
+        }
+      }catch(e){ console.warn('V42 auto dock skipped', e); }
+      return v42OriginalPublishDynamicSingle ? v42OriginalPublishDynamicSingle(id, fromLoc) : undefined;
+    };
+
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">
+
+    /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
+    function v42SeqNum(v){ const n=parseInt(String(v||'').replace(/[^0-9]/g,''),10); return isNaN(n)?null:n; }
+    function v42IsSupplementBatch(batch){ return String(batch||'').trim().toUpperCase().startsWith('BX'); }
+    function v42BatchRule(batch){
+      const b=String(batch||'').trim().toUpperCase();
+      if(!b) return {model:'未知',series:'OTHER',total:0,welding:[],assembly:[]};
+      if(b.startsWith('BHC')) return {model:'B01-PHEV四驱',series:'B',total:22,welding:[1,2,3,4,5,6,7,8],assembly:[8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]};
+      if(b.startsWith('BHE')) return {model:'B01-PHEV两驱',series:'B',total:22,welding:[1,2,3,4,5,6,7,8],assembly:[8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]};
+      if(b.startsWith('BHF')) return {model:'B03-PHEV四驱',series:'B',total:23,welding:[1,2,3,4,5,6,7,8,9,10],assembly:[8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]};
+      if(b.startsWith('BF')) return {model:'P11',series:'P',total:15,welding:[1,2,3,4,5,6],assembly:[5,6,7,8,9,10,11,12,13,14,15]};
+      if(b.startsWith('BP') || b.startsWith('BHP')) return {model:'P3012',series:'P',total:13,welding:[1,2,3,4,5],assembly:[5,6,7,8,9,10,11,12,13]};
+      return {model:'未配置',series:'OTHER',total:0,welding:[],assembly:[]};
+    }
+    function v42RecommendedDock(batch, seq){
+      const b=String(batch||'').toUpperCase(); const n=v42SeqNum(seq); if(!n) return '';
+      if(b.startsWith('BHC') || b.startsWith('BHE')){ if(n>=1&&n<=7) return '120B'; if(n===8) return '120B→140B'; if(n>=9&&n<=22) return '140B'; }
+      if(b.startsWith('BHF')){ if(n>=1&&n<=7) return '120B'; if(n>=8&&n<=10) return '120B→140B'; if(n>=11&&n<=23) return '140B'; }
+      if(b.startsWith('BF')){ if(n>=1&&n<=4) return '120B'; if(n>=5&&n<=6) return '120B→132'; if(n>=13&&n<=14) return '140C'; if((n>=7&&n<=12)||n===15) return '132'; }
+      if(b.startsWith('BP') || b.startsWith('BHP')){ if(n>=1&&n<=4) return '120B'; if(n===5) return '120B→132'; if(n>=11&&n<=12) return '140C'; if((n>=6&&n<=10)||n===13) return '132'; }
+      return '';
+    }
+    function v42VehicleTypeFromOrigin(origin){ const o=String(origin||'').toUpperCase(); return (o.includes('RIO') || o.includes('IRA')) ? 'SIDER' : 'CONTAINER'; }
+    function v42TaskFor(batch, seq){ const s=String(seq||'').trim(); return transportTasks.find(t=>String(t.batch||'').toUpperCase()===String(batch||'').toUpperCase() && String(t.containerSeq||'').trim()===s && t.to==='工厂' && !t.cancelled); }
+    function v42ChipState(task){
+      if(!task) return 'none';
+      const st=getOpStatus(task);
+      if(st==='unloaded' || task.status==='completed') return 'done';
+      if(st==='unloading') return 'unload';
+      if(st==='inside_waiting') return 'wait';
+      if(st==='outside_parking') return 'gate';
+      if(task.status==='in_transit') return 'transit';
+      return 'none';
+    }
+    function v42StatusText(state){ return {done:'已完成',wait:'工厂内等待',gate:'已到门口',unload:'卸货中',transit:'运输中',none:'未发运',borrow:'异常借料'}[state]||state; }
+    function v42GetBoardDates(){ const t=getTodayStr(); const d=new Date(t+'T00:00:00'); d.setDate(d.getDate()+1); return [t, `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`]; }
+    function v42DateLabel(d,i){ return `${fmtDate(d)} ${i===0?'今日':'明日'}`; }
+    function v42BuildBatchGroups(area, date){
+      const areaKey=area==='Welding'?'welding':'assembly';
+      const groups={};
+      productionPlans.filter(p=>p.date===date && ((String(p.area||'').toLowerCase()===area.toLowerCase()) || (p.planMode==='schedule' && productionPlanAreaFromWorkshop(p.workshop)===area))).forEach(p=>{
+        const batch=String(p.batch||'').trim().toUpperCase(); if(!batch || v42IsSupplementBatch(batch)) return;
+        groups[batch]=groups[batch]||new Set();
+        if(p.seq) groups[batch].add(v42SeqNum(p.seq));
+        if(p.planMode==='schedule'){ const rule=v42BatchRule(batch); (rule[area==='Welding'?'welding':'assembly']||[]).forEach(n=>groups[batch].add(n)); }
+      });
+      transportTasks.filter(t=>t.to==='工厂' && !t.cancelled && (getDatePart(t.estimatedArrival||'')===date || getDatePart(t.gateArrivalTime||'')===date || getDatePart(t.waitingAreaTime||'')===date || getDatePart(t.unloadStartTime||'')===date || getDatePart(t.unloadFinishTime||'')===date)).forEach(t=>{
+        const batch=String(t.batch||'').trim().toUpperCase(); const seq=v42SeqNum(t.containerSeq); if(!batch || !seq || v42IsSupplementBatch(batch)) return;
+        const rule=v42BatchRule(batch); const seqs=rule[areaKey]||[]; if(seqs.includes(seq)){ groups[batch]=groups[batch]||new Set(); groups[batch].add(seq); }
+      });
+      Object.keys(groups).forEach(batch=>{ const rule=v42BatchRule(batch); const arr=rule[areaKey]||[]; if(arr.length){ groups[batch]=new Set(arr); } });
+      return Object.entries(groups).sort((a,b)=>a[0].localeCompare(b[0],'zh-CN',{numeric:true})).map(([batch,set])=>({batch,seqs:[...set].filter(Boolean).sort((x,y)=>x-y)}));
+    }
+    function v42RenderBatchRow(group){
+      let done=0, total=group.seqs.length||1;
+      const sider=[], cont=[];
+      group.seqs.forEach(seq=>{
+        const task=v42TaskFor(group.batch,seq); const state=v42ChipState(task); if(state==='done') done++;
+        const type=task?v42VehicleTypeFromOrigin(task.from):'CONTAINER';
+        const title=`${group.batch} #${seq}\n${v42StatusText(state)}\n出发地：${task?.from||'-'}\n推荐卸货口：${v42RecommendedDock(group.batch,seq)}`;
+        const chip=`<span class="v42-chip ${state}" title="${title}">${seq}</span>`;
+        if(type==='SIDER') sider.push(chip); else cont.push(chip);
+      });
+      const pct=Math.round(done/total*100);
+      return `<tr><td><span class="v42-batch-name">${group.batch}</span><div style="font-size:10px;color:#cbd5e1;margin-top:3px;">${v42BatchRule(group.batch).model}</div></td><td><div class="v42-chip-wrap">${sider.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div class="v42-chip-wrap">${cont.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div style="font-weight:900;">${done}/${total}</div><div class="v42-progress"><span style="width:${pct}%"></span></div></td></tr>`;
+    }
+    function v42PanelKpis(area){
+      const dates=v42GetBoardDates(); let rows=[]; dates.forEach(d=>v42BuildBatchGroups(area,d).forEach(g=>g.seqs.forEach(seq=>rows.push(v42TaskFor(g.batch,seq)))));
+      const c={none:0,gate:0,wait:0,unload:0,done:0,transit:0}; rows.forEach(t=>{const s=v42ChipState(t); c[s] = (c[s]||0)+1;});
+      return `<div class="v42-panel-kpis"><div class="v42-status-card v42-status-pending"><div class="num">${c.none||0}</div><div class="lab">未发运</div></div><div class="v42-status-card v42-status-gate"><div class="num">${c.gate||0}</div><div class="lab">门口</div></div><div class="v42-status-card v42-status-wait"><div class="num">${c.wait||0}</div><div class="lab">厂内等待</div></div><div class="v42-status-card v42-status-unload"><div class="num">${c.unload||0}</div><div class="lab">卸货中</div></div><div class="v42-status-card v42-status-done"><div class="num">${c.done||0}</div><div class="lab">已完成</div></div></div>`;
+    }
+    function v42RenderProductionPanel(area){
+      const dates=v42GetBoardDates(); const cls=area==='Welding'?'welding':'assembly'; const icon=area==='Welding'?'🔧':'🚚';
+      return `<div class="v42-panel ${cls}"><div class="v42-panel-head"><div class="v42-panel-name">${icon} ${area.toUpperCase()}</div><div style="font-size:12px;opacity:.75;">生产保供进度</div></div>${v42PanelKpis(area)}${dates.map((d,i)=>{const groups=v42BuildBatchGroups(area,d);return `<div class="v42-date-block"><div class="v42-date-title">📅 ${v42DateLabel(d,i)} <span style="margin-left:auto;font-size:11px;opacity:.7;">${groups.length} batches</span></div>${groups.length?`<table class="v42-batch-table"><thead><tr><th>BATCH</th><th>SIDER</th><th>CONTAINER</th><th>完成率</th></tr></thead><tbody>${groups.map(v42RenderBatchRow).join('')}</tbody></table>`:`<div style="padding:14px;opacity:.65;">暂无生产计划/到箱计划</div>`}</div>`}).join('')}<div class="v42-legend"><span><i class="v42-dot" style="background:#16a34a"></i>已完成</span><span><i class="v42-dot" style="background:#2563eb"></i>厂内等待</span><span><i class="v42-dot" style="background:#eab308"></i>门口</span><span><i class="v42-dot" style="background:#0ea5e9"></i>卸货中</span><span><i class="v42-dot" style="background:#f97316"></i>运输中</span><span><i class="v42-dot" style="background:#dc2626"></i>未发运</span></div></div>`;
+    }
+    function v42RenderProductionBoard(){ return `<div class="v42-section-title"><h3>🏭 生产保供看板</h3><span class="v42-mini-note">按 Welding / Assembly 展示今日与明日批次到货进度，区分 SIDER 与 CONTAINER</span></div><div class="v42-board">${v42RenderProductionPanel('Welding')}${v42RenderProductionPanel('Assembly')}</div>`; }
+    const v42OriginalRenderDashboard = renderDashboard;
+    renderDashboard = function(container){
+      let activeContainers=containers.filter(isOperationalVisibleContainer);
+      let total=activeContainers.length;
+      let inTransit=transportTasks.filter(t=>t.status==='in_transit' && isOperationalVisibleTask(t)).length;
+      let stock={'港口':0,'RG堆场':0,'Rio Claro':0,'IRA库房':0,'工厂':0};
+      let producedCount = containers.filter(c => isProducedCompletedContainerId(c.id)).length;
+      activeContainers.forEach(c=>{ let loc=getContainerLocation(c.id); if(loc==='已生产') return; stock[loc]=(stock[loc]||0)+1; });
+      let dailyReport = getDailyOperationReport(getTodayStr());
+      let totalAbnormalStorage = cachedFeeData.totalAbnormalStorage || 0;
+      let totalDemurrage = cachedFeeData.totalDemurrage || 0;
+      let storageWarningCount = cachedFeeData.storageWarningList.length;
+      let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
+      container.innerHTML = `
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
+        <div class="v42-kpi-grid">
+          <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
+          <div class="v42-kpi danger" onclick="showDailyReportDetail('todayDemurrage')"><div class="v42-kpi-num">$ ${dailyReport.todayDemurrage.toFixed(2)}</div><div class="v42-kpi-label">今日新增滞箱费</div></div>
+          <div class="v42-kpi" onclick="showDailyReportDetail('clearanceCompleted')"><div class="v42-kpi-num">${dailyReport.clearanceCompleted}</div><div class="v42-kpi-label">今日清关完成</div></div>
+          <div class="v42-kpi" onclick="showDailyReportDetail('plannedPickup')"><div class="v42-kpi-num">${dailyReport.plannedPickup}</div><div class="v42-kpi-label">今日计划提箱</div></div>
+          <div class="v42-kpi green" onclick="showDailyReportDetail('actualPickup')"><div class="v42-kpi-num">${dailyReport.actualPickup}</div><div class="v42-kpi-label">今日实际提箱</div></div>
+          <div class="v42-kpi" onclick="showDailyReportDetail('clearedPendingPickup')"><div class="v42-kpi-num">${dailyReport.clearedPendingPickup}</div><div class="v42-kpi-label">已清关待提箱</div></div>
+          <div class="v42-kpi warn" onclick="showDailyReportDetail('clearedPendingPickupAbnormal')"><div class="v42-kpi-num">${dailyReport.clearedPendingPickupAbnormal}</div><div class="v42-kpi-label">异常费待提箱</div></div>
+          <div class="v42-kpi" onclick="jumpTo('transportTasks')"><div class="v42-kpi-num">${inTransit}</div><div class="v42-kpi-label">运输中集装箱</div></div>
+          <div class="v42-kpi warn"><div class="v42-kpi-num">R$ ${totalAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">累计异常堆存费</div></div>
+          <div class="v42-kpi danger"><div class="v42-kpi-num">$ ${totalDemurrage.toFixed(2)}</div><div class="v42-kpi-label">累计滞箱费</div></div>
+          <div class="v42-kpi warn" onclick="showWarningDetail('storage')"><div class="v42-kpi-num">${storageWarningCount}</div><div class="v42-kpi-label">异常堆存费预警</div></div>
+          <div class="v42-kpi danger" onclick="showWarningDetail('demurrage')"><div class="v42-kpi-num">${demurrageWarningCount}</div><div class="v42-kpi-label">滞箱费预警</div></div>
+        </div>
+        <div class="card"><div class="card-title">📍 库存分布</div><div class="v42-stock-strip">${Object.entries(stock).map(([k,v])=>`<div class="v42-stock" onclick="showLocationStockDetail('${k}')"><div class="n">${v}</div><div class="l">${k}</div></div>`).join('')}<div class="v42-stock" onclick="showLocationStockDetail('已生产')"><div class="n">${producedCount}</div><div class="l">已生产</div></div></div></div>
+        ${v42RenderProductionBoard()}
+      `;
+    };
+    const v42OriginalPublishDynamicSingle = window.publishDynamicSingle;
+    window.publishDynamicSingle = function(id, fromLoc){
+      try{
+        const cont=containers.find(c=>c.id===id);
+        const dest=document.getElementById(`dynDest_${id}`)?.value;
+        const dockEl=document.getElementById(`dynDock_${id}`);
+        if(dest==='工厂' && dockEl && !String(dockEl.value||'').trim() && cont){
+          const rec=v42RecommendedDock(cont.batch, cont.containerSeq);
+          if(rec) dockEl.value=rec;
+        }
+      }catch(e){ console.warn('V42 auto dock skipped', e); }
+      return v42OriginalPublishDynamicSingle ? v42OriginalPublishDynamicSingle(id, fromLoc) : undefined;
+    };
+
+  </script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; }
@@ -671,7 +921,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V42：物流运营 + 生产保供驾驶舱，美化首页并支持批次进度看板。
+        V40.2 Cloud：Andon收货看板 + 生产顺序控制 + 门岗车辆信息维护。
       </div>
       <button class="login-btn" onclick="loginWithGoogle()" style="width:100%;margin-bottom:14px;">使用 Google 登录</button>
 
@@ -815,7 +1065,7 @@
       return {
         containers, blList, containerBlMap, transportTasks, locationStock, returnRecords,
         pickupPlans, productionRecords, productionPlans, nextIds, storageConfig, demurrageConfig, warningConfig,
-        version: 'V42 Production Supply Cockpit',
+        version: 'V40.2 Andon Sequence',
         updatedAt: new Date().toISOString(),
         updatedBy: cloudUser?.email || currentUser?.email || currentUser?.name || ''
       };
@@ -1263,6 +1513,7 @@
     // ==================== 菜单配置 ====================
     const allMenus = [
       { id:'dashboard', name:'工作台', icon:'📊', roles:['订购科'] },
+      { id:'productionPlan', name:'生产计划维护', icon:'🗓️', roles:['订购科','工厂管理员'] },
       { id:'containers', name:'基础数据', icon:'📦', roles:['订购科'] },
       { id:'blIra', name:'提单/IRA管理', icon:'📋', roles:['订购科','关务'] },
       { id:'customs', name:'清关维护', icon:'🛃', roles:['订购科','关务'] },
@@ -1271,7 +1522,6 @@
       { id:'factoryReceiving', name:'工厂到货监控', icon:'🏭', roles:['订购科','工厂管理员','门卫','卸货员','运输公司RG','运输公司JSL'] },
       { id:'gateMonitoring', name:'门岗登记', icon:'🚪', roles:['订购科','工厂管理员','门卫'] },
       { id:'dockMonitoring', name:'卸货口收货', icon:'📦', roles:['订购科','工厂管理员','卸货员'] },
-      { id:'operationDashboard', name:'运营驾驶舱', icon:'📈', roles:['订购科','工厂管理员'] },
       { id:'locationConfirm', name:'到货确认', icon:'✅', roles:['RG堆场管理员','Rio Claro管理员','IRA库房管理员','工厂管理员'] },
       { id:'returnConfirm', name:'还箱确认', icon:'🔄', roles:['运输公司RG','运输公司JSL'] },
       { id:'dynamicPlan', name:'动态运输计划', icon:'🎯', roles:['订购科'] },
@@ -1284,12 +1534,11 @@
     ];
 
     const permissionModules = [
-      {id:'dashboard', name:'工作台'}, {id:'containers', name:'基础数据'},
+      {id:'dashboard', name:'工作台'}, {id:'productionPlan', name:'生产计划维护'}, {id:'containers', name:'基础数据'},
       {id:'blIra', name:'提单/IRA管理'}, {id:'customs', name:'清关维护'},
       {id:'pickupPlan', name:'提箱计划'}, {id:'dynamicPlan', name:'动态运输计划'},
       {id:'transportTasks', name:'运输任务'}, {id:'factoryReceiving', name:'工厂到货监控'},
       {id:'gateMonitoring', name:'门岗登记'}, {id:'dockMonitoring', name:'卸货口收货'},
-      {id:'operationDashboard', name:'运营驾驶舱'},
       {id:'returnConfirm', name:'还箱确认'},
       {id:'locationConfirm', name:'到货确认'}, {id:'locationStock', name:'库存看板'},
       {id:'productionConfirm', name:'生产完成确认'}, {id:'rateConfig', name:'费率配置'},
@@ -1891,6 +2140,7 @@ function getContainerLocation(cid){
 let main=document.getElementById('mainContent');
       switch(currentMenu){
         case'dashboard':renderDashboard(main);break;
+        case'productionPlan':renderProductionPlan(main);break;
         case'containers':renderContainers(main);break;
         case'blIra':renderBlIra(main);break;
         case'customs':renderCustoms(main);break;
@@ -1901,7 +2151,6 @@ let main=document.getElementById('mainContent');
         case'waitingArea':renderFactoryReceiving(main);break;
         case'dockMonitoring':renderFactoryDockOnly(main);break;
         case'andonCenter':renderAndonCenter(main);break;
-        case'operationDashboard':renderOperationDashboard(main);break;
         case'locationConfirm':renderLocationConfirm(main);break;
         case'returnConfirm':renderReturnConfirm(main);break;
         case'dynamicPlan':renderDynamicPlan(main);break;
@@ -4090,31 +4339,111 @@ let main=document.getElementById('mainContent');
       return productionPlans.filter(p => p.date===date && (!dock || p.dock===dock) && parseInt(p.seq||999999)<doneMax && !existingNos.has(String(p.containerNo||'').trim().toUpperCase()));
     }
 
+    function productionPlanAreaFromWorkshop(workshop){
+      const w=String(workshop||'').toLowerCase();
+      if(w.includes('weld') || w.includes('焊')) return 'Welding';
+      return 'Assembly';
+    }
+    function productionPlanWorkshopLabel(workshop){
+      const w=String(workshop||'').trim();
+      const map={welding:'焊装',assembly_b:'总装B线',assembly_p:'总装P线'};
+      return map[w] || w || '-';
+    }
+    function getScheduleProductionPlans(date){
+      return productionPlans.filter(p=>p.planMode==='schedule' && (!date || p.date===date));
+    }
     function renderProductionPlan(container){
       let d=document.getElementById('prodPlanDate')?.value || getTodayStr();
-      let rows=productionPlans.filter(p=>!d || p.date===d).sort((a,b)=>String(a.area||'').localeCompare(String(b.area||'')) || String(a.dock||'').localeCompare(String(b.dock||''),'zh-CN',{numeric:true}) || (parseInt(a.seq||999999)-parseInt(b.seq||999999)));
-      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🗓️ 生产计划维护 / 收货顺序基准</span></div>
-        <div class="search-bar"><input type="date" id="prodPlanDate" value="${d}" onchange="renderProductionPlan(document.getElementById('mainContent'))"><select id="prodPlanArea"><option>Assembly</option><option>Welding</option></select><input id="prodPlanDock" placeholder="卸货口 120B/132/140C"><input id="prodPlanSeq" placeholder="顺序"><input id="prodPlanBatch" placeholder="批次"><input id="prodPlanContainer" placeholder="集装箱号"><button class="btn btn-success" onclick="addProductionPlanSingle()">新增</button></div>
-        <div class="card" style="background:#f8f9fc;margin-bottom:12px;"><div style="font-size:13px;color:#606266;line-height:1.7;margin-bottom:8px;">可从Excel粘贴生产计划，推荐列顺序：区域、卸货口、顺序、批次、集装箱号。系统会以此作为门岗/卸货口顺序控制基准。</div><textarea id="prodPlanPaste" class="form-control" style="height:90px" placeholder="Assembly\t120B\t1\tBXRC6001\tCSNU1234567"></textarea><button class="btn btn-primary" onclick="importProductionPlanPaste()">批量导入粘贴内容</button><button class="btn btn-warning" onclick="clearProductionPlanByDate()">清空当天计划</button></div>
-        <div id="prodPlanTable"></div></div>`;
-      if(rows.length===0){document.getElementById('prodPlanTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无生产计划</div></div>';return;}
-      renderTable('prodPlanTable',['日期','区域','卸货口','顺序','批次','集装箱号','状态','操作'],rows,(p)=>{let linked=transportTasks.find(t=>String(t.containerNo||'').trim().toUpperCase()===String(p.containerNo||'').trim().toUpperCase() && getPlanDateFromTask(t)===p.date);let tr=document.createElement('tr');tr.innerHTML=`<td>${p.date}</td><td>${p.area}</td><td>${p.dock}</td><td><span class="sequence-badge">${p.seq}</span></td><td>${p.batch||'-'}</td><td>${p.containerNo||'-'}</td><td>${linked?getOpStatusText(enrichTaskSequence(linked)):'未生成运输任务'}</td><td><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan(${p.id})">删除</button></td>`;return tr;});
+      let rows=getScheduleProductionPlans(d).sort((a,b)=>String(a.workshop||'').localeCompare(String(b.workshop||''),'zh-CN',{numeric:true}) || String(a.batch||'').localeCompare(String(b.batch||''),'zh-CN',{numeric:true}));
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🗓️ 生产计划维护</span><button class="btn btn-primary" onclick="currentMenu='dashboard';renderSidebar();renderContent();">返回工作台</button></div>
+        <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:14px;">本模块分为两部分：① 预排产：维护今天、明天、后天计划；② 生产计划确认：维护实际完成数量。后续系统将根据实际完成情况滚动判断批次剩余生产量和到箱需求。</div>
+        <div class="search-bar"><input type="date" id="prodPlanDate" value="${d}" onchange="renderProductionPlan(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderProductionPlan(document.getElementById('mainContent'))">查询</button><button class="btn btn-success" onclick="prefillProductionPlanDates()">显示今日/明日/后日</button></div>
+      </div>
+      <div class="card"><div class="card-header"><span class="card-title">① 预排产</span></div>
+        <div class="search-bar">
+          <input type="date" id="prePlanDate" value="${d}">
+          <select id="prePlanWorkshop"><option value="welding">焊装</option><option value="assembly_b">总装B线</option><option value="assembly_p">总装P线</option></select>
+          <input id="prePlanBatch" placeholder="批次号，如 BHC7016">
+          <input id="prePlanQty" type="number" min="0" placeholder="计划台数">
+          <input id="prePlanRemark" placeholder="备注，可选">
+          <button class="btn btn-success" onclick="addPreProductionPlan()">新增预排产</button>
+        </div>
+        <div style="background:#f8f9fc;border-radius:10px;padding:12px;margin-bottom:12px;">
+          <div style="font-size:13px;color:#606266;margin-bottom:8px;">支持从Excel粘贴，推荐列顺序：日期、车间、批次、计划台数、备注。车间可写：焊装、总装B线、总装P线。</div>
+          <textarea id="prePlanPaste" class="form-control" style="height:80px" placeholder="2026-06-03\t焊装\tBHC7016\t60\n2026-06-03\t总装B线\tBHC7010\t60"></textarea>
+          <button class="btn btn-primary" onclick="importPreProductionPlanPaste()">批量导入预排产</button>
+        </div>
+        <div id="prePlanTable"></div>
+      </div>
+      <div class="card"><div class="card-header"><span class="card-title">② 生产计划确认 / 实际完成数量</span></div>
+        <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:12px;">在这里确认当天每个批次实际完成数量。未完成数量会作为后续滚动计划和到箱需求分析的基础。</div>
+        <div id="prodConfirmPlanTable"></div>
+      </div>`;
+      renderPrePlanTable(rows);
+      renderProductionActualConfirmTable(rows);
     }
-    window.addProductionPlanSingle=function(){
-      let date=document.getElementById('prodPlanDate')?.value||getTodayStr(); let area=document.getElementById('prodPlanArea')?.value||'Assembly'; let dock=(document.getElementById('prodPlanDock')?.value||'').trim(); let seq=(document.getElementById('prodPlanSeq')?.value||'').trim(); let batch=(document.getElementById('prodPlanBatch')?.value||'').trim(); let containerNo=(document.getElementById('prodPlanContainer')?.value||'').trim();
-      if(!dock||!seq||!containerNo){alert('请至少填写卸货口、顺序、集装箱号');return;}
-      productionPlans.push({id:Date.now()+Math.random(),date,area,dock,seq,batch,containerNo,createdAt:new Date().toISOString()}); saveAndRenderContentKeepState();
-    };
-    window.importProductionPlanPaste=function(){
-      let date=document.getElementById('prodPlanDate')?.value||getTodayStr(); let text=document.getElementById('prodPlanPaste')?.value||''; if(!text.trim()){alert('请先粘贴计划内容');return;}
-      let count=0;
-      text.split(/\r?\n/).forEach(line=>{let parts=line.split(/\t|,|;/).map(x=>x.trim()); if(parts.length<4) return; if(/container|集装箱|batch|批次|顺序|sequence/i.test(line)) return; let area='Assembly',dock='',seq='',batch='',containerNo=''; if(parts.length>=5){[area,dock,seq,batch,containerNo]=parts;} else {[seq,batch,containerNo,dock]=parts;}
-        if(!area) area='Assembly'; if(dock&&seq&&containerNo){productionPlans.push({id:Date.now()+Math.random()+count,date,area,dock,seq,batch,containerNo,createdAt:new Date().toISOString()}); count++;}
+    function renderPrePlanTable(rows){
+      if(rows.length===0){document.getElementById('prePlanTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无预排产计划</div></div>';return;}
+      renderTable('prePlanTable',['日期','车间','批次','车型/系列','计划台数','实际完成','剩余','备注','操作'],rows,(p)=>{
+        const planned=Number(p.plannedQty||0), actual=Number(p.actualQty||0), remain=Math.max(planned-actual,0);
+        let tr=document.createElement('tr');tr.innerHTML=`<td>${p.date}</td><td>${productionPlanWorkshopLabel(p.workshop)}</td><td><b>${p.batch||'-'}</b></td><td>${v42BatchRule(p.batch).model}</td><td>${planned}</td><td>${actual}</td><td>${remain}</td><td>${p.remark||'-'}</td><td><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan('${p.id}')">删除</button></td>`;return tr;
       });
-      saveAndRenderContentKeepState(); alert(`已导入 ${count} 条生产计划`);
+    }
+    function renderProductionActualConfirmTable(rows){
+      if(rows.length===0){document.getElementById('prodConfirmPlanTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无可确认的生产计划</div></div>';return;}
+      renderTable('prodConfirmPlanTable',['日期','车间','批次','计划台数','实际完成数量','完成率','确认状态','操作'],rows,(p)=>{
+        const planned=Number(p.plannedQty||0), actual=Number(p.actualQty||0), pct=planned?Math.min(Math.round(actual/planned*100),100):0;
+        let status=actual>0?(actual>=planned?'已完成':'部分完成'):'未确认';
+        let tr=document.createElement('tr');tr.innerHTML=`<td>${p.date}</td><td>${productionPlanWorkshopLabel(p.workshop)}</td><td><b>${p.batch||'-'}</b></td><td>${planned}</td><td><input id="actual_${p.id}" type="number" min="0" value="${actual}" style="width:90px"></td><td>${pct}%</td><td>${status}</td><td><button class="btn btn-sm btn-success" onclick="saveProductionActual('${p.id}')">保存实际完成</button></td>`;return tr;
+      });
+    }
+    function normalizeWorkshopText(v){
+      const s=String(v||'').trim().toLowerCase();
+      if(s.includes('焊') || s.includes('weld')) return 'welding';
+      if(s.includes('p') || s.includes('非承载')) return 'assembly_p';
+      return 'assembly_b';
+    }
+    window.addPreProductionPlan=function(){
+      const date=document.getElementById('prePlanDate')?.value||getTodayStr();
+      const workshop=document.getElementById('prePlanWorkshop')?.value||'welding';
+      const batch=(document.getElementById('prePlanBatch')?.value||'').trim().toUpperCase();
+      const plannedQty=Number(document.getElementById('prePlanQty')?.value||0);
+      const remark=(document.getElementById('prePlanRemark')?.value||'').trim();
+      if(!date || !batch || plannedQty<=0){alert('请填写日期、批次号和计划台数');return;}
+      productionPlans.push({id:String(Date.now()+Math.random()),planMode:'schedule',date,area:productionPlanAreaFromWorkshop(workshop),workshop,batch,plannedQty,actualQty:0,remark,createdAt:new Date().toISOString()});
+      saveAndRenderContentKeepState();
     };
-    window.deleteProductionPlan=function(id){productionPlans=productionPlans.filter(p=>String(p.id)!==String(id));saveAndRenderContentKeepState();};
-    window.clearProductionPlanByDate=function(){let d=document.getElementById('prodPlanDate')?.value||getTodayStr();if(!confirm(`确认清空 ${d} 的生产计划吗？`))return;productionPlans=productionPlans.filter(p=>p.date!==d);saveAndRenderContentKeepState();};
+    window.importPreProductionPlanPaste=function(){
+      const text=document.getElementById('prePlanPaste')?.value||''; if(!text.trim()){alert('请先粘贴预排产内容');return;}
+      let count=0;
+      text.split(/\r?\n/).forEach((line,i)=>{let parts=line.split(/\t|,|;/).map(x=>x.trim()); if(parts.length<3) return; if(i===0 && /日期|date|批次|batch|车间/i.test(line)) return;
+        let date,workshop,batch,plannedQty,remark='';
+        if(/^\d{4}-\d{1,2}-\d{1,2}/.test(parts[0])){[date,workshop,batch,plannedQty,remark]=parts;} else {date=document.getElementById('prodPlanDate')?.value||getTodayStr(); [workshop,batch,plannedQty,remark]=parts;}
+        if(date && workshop && batch && Number(plannedQty)>0){const ws=normalizeWorkshopText(workshop); productionPlans.push({id:String(Date.now()+Math.random()+count),planMode:'schedule',date,area:productionPlanAreaFromWorkshop(ws),workshop:ws,batch:String(batch).toUpperCase(),plannedQty:Number(plannedQty),actualQty:0,remark:remark||'',createdAt:new Date().toISOString()}); count++;}
+      });
+      saveAndRenderContentKeepState(); alert(`已导入 ${count} 条预排产计划`);
+    };
+    window.saveProductionActual=function(id){
+      const p=productionPlans.find(x=>String(x.id)===String(id)); if(!p)return;
+      const v=Number(document.getElementById('actual_'+id)?.value||0); if(v<0){alert('实际完成数量不能小于0');return;}
+      p.actualQty=v; p.confirmedAt=new Date().toISOString(); p.confirmedBy=currentUser?.name||currentUser?.email||'';
+      saveAndRenderContentKeepState();
+    };
+    window.editPreProductionPlan=function(id){
+      const p=productionPlans.find(x=>String(x.id)===String(id)); if(!p)return;
+      document.getElementById('modalTitle').innerText='编辑预排产';
+      document.getElementById('modalBody').innerHTML=`<div class="form-group"><label>日期</label><input id="editPreDate" class="form-control" type="date" value="${p.date||getTodayStr()}"></div><div class="form-group"><label>车间</label><select id="editPreWorkshop" class="form-control"><option value="welding" ${p.workshop==='welding'?'selected':''}>焊装</option><option value="assembly_b" ${p.workshop==='assembly_b'?'selected':''}>总装B线</option><option value="assembly_p" ${p.workshop==='assembly_p'?'selected':''}>总装P线</option></select></div><div class="form-group"><label>批次</label><input id="editPreBatch" class="form-control" value="${p.batch||''}"></div><div class="form-group"><label>计划台数</label><input id="editPreQty" class="form-control" type="number" min="0" value="${p.plannedQty||0}"></div><div class="form-group"><label>备注</label><input id="editPreRemark" class="form-control" value="${p.remark||''}"></div><button class="btn btn-success" onclick="savePreProductionPlanEdit('${p.id}')">保存</button>`;
+      openModal();
+    };
+    window.savePreProductionPlanEdit=function(id){
+      const p=productionPlans.find(x=>String(x.id)===String(id)); if(!p)return;
+      const ws=document.getElementById('editPreWorkshop')?.value||'welding';
+      p.date=document.getElementById('editPreDate')?.value||p.date; p.workshop=ws; p.area=productionPlanAreaFromWorkshop(ws); p.batch=(document.getElementById('editPreBatch')?.value||'').trim().toUpperCase(); p.plannedQty=Number(document.getElementById('editPreQty')?.value||0); p.remark=(document.getElementById('editPreRemark')?.value||'').trim();
+      if(!p.batch || p.plannedQty<=0){alert('请填写批次和计划台数');return;}
+      closeModal(); saveAndRenderContentKeepState();
+    };
+    window.deleteProductionPlan=function(id){if(!confirm('确认删除这条生产计划吗？'))return; productionPlans=productionPlans.filter(p=>String(p.id)!==String(id));saveAndRenderContentKeepState();};
+    window.prefillProductionPlanDates=function(){alert('当前页面可通过日期选择今天、明天、后天维护计划；批量导入支持多日期一起粘贴。');};
 
     function renderReceivingAndon(container){
       let d=document.getElementById('andonDate')?.value||getTodayStr();
@@ -5194,9 +5523,11 @@ let main=document.getElementById('mainContent');
     function v42BuildBatchGroups(area, date){
       const areaKey=area==='Welding'?'welding':'assembly';
       const groups={};
-      productionPlans.filter(p=>p.date===date && String(p.area||'').toLowerCase()===area.toLowerCase()).forEach(p=>{
+      productionPlans.filter(p=>p.date===date && ((String(p.area||'').toLowerCase()===area.toLowerCase()) || (p.planMode==='schedule' && productionPlanAreaFromWorkshop(p.workshop)===area))).forEach(p=>{
         const batch=String(p.batch||'').trim().toUpperCase(); if(!batch || v42IsSupplementBatch(batch)) return;
-        groups[batch]=groups[batch]||new Set(); if(p.seq) groups[batch].add(v42SeqNum(p.seq));
+        groups[batch]=groups[batch]||new Set();
+        if(p.seq) groups[batch].add(v42SeqNum(p.seq));
+        if(p.planMode==='schedule'){ const rule=v42BatchRule(batch); (rule[area==='Welding'?'welding':'assembly']||[]).forEach(n=>groups[batch].add(n)); }
       });
       transportTasks.filter(t=>t.to==='工厂' && !t.cancelled && (getDatePart(t.estimatedArrival||'')===date || getDatePart(t.gateArrivalTime||'')===date || getDatePart(t.waitingAreaTime||'')===date || getDatePart(t.unloadStartTime||'')===date || getDatePart(t.unloadFinishTime||'')===date)).forEach(t=>{
         const batch=String(t.batch||'').trim().toUpperCase(); const seq=v42SeqNum(t.containerSeq); if(!batch || !seq || v42IsSupplementBatch(batch)) return;
