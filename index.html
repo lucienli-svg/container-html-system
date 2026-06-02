@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V42.8 Production Plan Totals Fix</title>
+  <title>集装箱智能监控管理系统 V42.9 Production Plan Totals Fix</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
     /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
@@ -96,7 +96,7 @@
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.8</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.9</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -223,7 +223,7 @@
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.8</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.9</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -5776,7 +5776,7 @@ let main=document.getElementById('mainContent');
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.8</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.9</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -5906,7 +5906,7 @@ let main=document.getElementById('mainContent');
   </script>
 
 <script>
-/* ==================== V42.8：生产计划统计与保供看板同步修复 ====================
+/* ==================== V42.9：生产计划统计与保供看板同步修复 ====================
    1）生产计划合计只按 BS / GA-B / GA-P / GA 统计，不再显示 BS+GA 总计。
    2）三天排产表表头也按线体统计，不再显示跨车间总计。
    3）生产保供看板每次渲染直接读取最新 productionPlans，并显示今天/明天/后天三天。 */
@@ -6033,7 +6033,7 @@ let main=document.getElementById('mainContent');
         const main = document.getElementById('mainContent');
         if(main && typeof renderDashboard === 'function') renderDashboard(main);
       }
-    }catch(e){ console.warn('V42.8 dashboard refresh skipped', e); }
+    }catch(e){ console.warn('V42.9 dashboard refresh skipped', e); }
   };
   ['addPreProductionPlan','importPreProductionPlanPaste','saveProductionActual','savePreProductionPlanEdit','deleteProductionPlan','copyProductionPlan','moveProductionPlanOrder'].forEach(fn=>{
     const oldFn = window[fn];
@@ -6048,6 +6048,140 @@ let main=document.getElementById('mainContent');
       window[fn] = wrapped;
     }
   });
+})();
+</script>
+
+
+<script>
+/* ==================== V42.9：生产保供看板最终数据源修复 ====================
+   修复点：
+   1）保供看板只显示今天、明天。
+   2）看板批次列表只来自 productionPlans 中最新维护的有效生产计划，不再从运输任务反推旧批次。
+   3）运输任务只用于给计划中的箱号着色，不再决定显示哪些批次。
+   4）覆盖旧版本多次重复定义造成的缓存/旧数据问题。
+*/
+(function(){
+  function v429TodayTomorrow(){
+    const t = getTodayStr();
+    const d = new Date(t + 'T00:00:00');
+    d.setDate(d.getDate() + 1);
+    const m = String(d.getMonth()+1).padStart(2,'0');
+    const day = String(d.getDate()).padStart(2,'0');
+    return [t, `${d.getFullYear()}-${m}-${day}`];
+  }
+  function v429AreaOfPlan(p){
+    if(!p) return '';
+    const w = String(p.workshop || '').toLowerCase();
+    if(w === 'welding') return 'Welding';
+    if(w === 'assembly_b' || w === 'assembly_p') return 'Assembly';
+    const a = String(p.area || '').toLowerCase();
+    if(a === 'welding') return 'Welding';
+    if(a === 'assembly') return 'Assembly';
+    if(typeof productionPlanAreaFromWorkshop === 'function') return productionPlanAreaFromWorkshop(p.workshop);
+    return '';
+  }
+  function v429ValidPlans(date, area){
+    return (productionPlans || []).filter(p => {
+      if(!p || p.voided || p.planMode === 'schedule_voided') return false;
+      if(p.planMode && p.planMode !== 'schedule') return false;
+      if(String(p.date || '') !== String(date || '')) return false;
+      return v429AreaOfPlan(p) === area;
+    }).sort((a,b) => {
+      const oa = typeof getProductionPlanOrder === 'function' ? getProductionPlanOrder(a) : Number(a.planOrder || 999999);
+      const ob = typeof getProductionPlanOrder === 'function' ? getProductionPlanOrder(b) : Number(b.planOrder || 999999);
+      return oa - ob || String(a.batch||'').localeCompare(String(b.batch||''),'zh-CN',{numeric:true});
+    });
+  }
+  window.v42GetBoardDates = v429TodayTomorrow;
+  window.v42DateLabel = function(d,i){ return `${fmtDate(d)} ${i===0?'今日':'明日'}`; };
+  window.v426ValidProductionPlansForBoard = v429ValidPlans;
+  window.v42BuildBatchGroups = function(area, date){
+    const areaKey = area === 'Welding' ? 'welding' : 'assembly';
+    const groups = {};
+    const orders = {};
+    v429ValidPlans(date, area).forEach(p => {
+      const batch = String(p.batch || '').trim().toUpperCase();
+      if(!batch || (typeof v42IsSupplementBatch === 'function' && v42IsSupplementBatch(batch))) return;
+      const order = typeof getProductionPlanOrder === 'function' ? getProductionPlanOrder(p) : Number(p.planOrder || 999999);
+      if(!groups[batch]) groups[batch] = new Set();
+      orders[batch] = Math.min(orders[batch] || 999999, order);
+      const rule = typeof v42BatchRule === 'function' ? v42BatchRule(batch) : {welding:[], assembly:[]};
+      const defaults = rule[areaKey] || [];
+      if(p.seq){
+        const n = typeof v42SeqNum === 'function' ? v42SeqNum(p.seq) : parseInt(p.seq,10);
+        if(n) groups[batch].add(n);
+      }else{
+        defaults.forEach(n => groups[batch].add(n));
+      }
+    });
+    return Object.entries(groups)
+      .sort((a,b) => (orders[a[0]]||999999) - (orders[b[0]]||999999) || a[0].localeCompare(b[0],'zh-CN',{numeric:true}))
+      .map(([batch,set]) => ({batch, planOrder: orders[batch] || 999999, seqs: [...set].filter(Boolean).sort((x,y)=>x-y)}));
+  };
+  window.v42RenderProductionPanel = function(area){
+    const dates = v429TodayTomorrow();
+    const cls = area === 'Welding' ? 'welding' : 'assembly';
+    const icon = area === 'Welding' ? '🔧' : '🚚';
+    return `<div class="v42-panel ${cls}">
+      <div class="v42-panel-head"><div class="v42-panel-name">${icon} ${area.toUpperCase()}</div><div style="font-size:12px;opacity:.75;">生产保供进度</div></div>
+      ${typeof v42PanelKpis === 'function' ? v42PanelKpis(area) : ''}
+      ${dates.map((d,i)=>{ const groups = window.v42BuildBatchGroups(area,d); return `<div class="v42-date-block"><div class="v42-date-title">📅 ${window.v42DateLabel(d,i)} <span style="margin-left:auto;font-size:11px;opacity:.7;">${groups.length} batches</span></div>${groups.length ? `<table class="v42-batch-table"><thead><tr><th>BATCH</th><th>SIDER</th><th>CONTAINER</th><th>完成率</th></tr></thead><tbody>${groups.map(g => typeof v42RenderBatchRow === 'function' ? v42RenderBatchRow(g) : '').join('')}</tbody></table>` : `<div style="padding:14px;opacity:.65;">暂无生产计划</div>`}</div>`; }).join('')}
+      <div class="v42-legend"><span><i class="v42-dot" style="background:#16a34a"></i>已完成</span><span><i class="v42-dot" style="background:#2563eb"></i>厂内等待</span><span><i class="v42-dot" style="background:#eab308"></i>门口</span><span><i class="v42-dot" style="background:#0ea5e9"></i>卸货中</span><span><i class="v42-dot" style="background:#f97316"></i>运输中</span><span><i class="v42-dot" style="background:#dc2626"></i>未发运</span></div>
+    </div>`;
+  };
+  window.v42RenderProductionBoard = function(){
+    return `<div class="v42-section-title"><h3>🏭 生产保供看板</h3><span class="v42-mini-note">仅显示今日、明日生产计划；批次列表直接读取生产计划维护模块最新数据</span></div><div class="v42-board">${window.v42RenderProductionPanel('Welding')}${window.v42RenderProductionPanel('Assembly')}</div>`;
+  };
+  window.renderDashboard = function(container){
+    let activeContainers = containers.filter(isOperationalVisibleContainer);
+    let total = activeContainers.length;
+    let waiting = activeContainers.filter(c=>c.customsStatus==='清关中').length;
+    let inTransit = transportTasks.filter(t=>t.status==='in_transit' && isOperationalVisibleTask(t)).length;
+    let stock = {'港口':0,'RG堆场':0,'Rio Claro':0,'IRA库房':0,'工厂':0};
+    let producedCount = containers.filter(c => isProducedCompletedContainerId(c.id)).length;
+    activeContainers.forEach(c=>{ let loc=getContainerLocation(c.id); if(loc==='已生产') return; stock[loc]=(stock[loc]||0)+1; });
+    let totalAbnormalStorage = cachedFeeData.totalAbnormalStorage || 0;
+    let totalDemurrage = cachedFeeData.totalDemurrage || 0;
+    let storageWarningCount = cachedFeeData.storageWarningList.length;
+    let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
+    let dailyReport = getDailyOperationReport(getTodayStr());
+    container.innerHTML = `
+      <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.9</div><div class="v42-hero-sub">物流运营工作台 + 生产保供看板｜${fmtDate(getTodayStr())}</div></div>
+      <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">到厂进度由下方生产保供看板展示，本区保留费用、清关、提箱和库存核心指标</span></div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">📅 每日运营报表</span><span style="font-size:12px;color:#909399;">统计日期：${fmtDate(getTodayStr())}</span></div>
+        <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 8px;">
+          <div class="stat-card warning-card" onclick="showDailyReportDetail('todayAbnormalStorage')" style="padding:12px;cursor:pointer;"><div class="stat-number warning-number" style="font-size:22px;">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="stat-label">今日新增异常堆存费</div></div>
+          <div class="stat-card danger-card" onclick="showDailyReportDetail('todayDemurrage')" style="padding:12px;cursor:pointer;"><div class="stat-number danger-number" style="font-size:22px;">$ ${dailyReport.todayDemurrage.toFixed(2)}</div><div class="stat-label">今日新增滞箱费</div></div>
+          <div class="stat-card" onclick="showDailyReportDetail('clearanceCompleted')" style="padding:12px;cursor:pointer;"><div class="stat-number" style="font-size:24px;">${dailyReport.clearanceCompleted}</div><div class="stat-label">今日清关完成</div></div>
+          <div class="stat-card" onclick="showDailyReportDetail('plannedPickup')" style="padding:12px;cursor:pointer;"><div class="stat-number" style="font-size:24px;">${dailyReport.plannedPickup}</div><div class="stat-label">今日计划提箱</div></div>
+          <div class="stat-card" onclick="showDailyReportDetail('actualPickup')" style="padding:12px;cursor:pointer;"><div class="stat-number" style="font-size:24px;">${dailyReport.actualPickup}</div><div class="stat-label">今日实际提箱</div></div>
+          <div class="stat-card" onclick="showDailyReportDetail('clearedPendingPickup')" style="padding:12px;cursor:pointer;"><div class="stat-number" style="font-size:24px;">${dailyReport.clearedPendingPickup}</div><div class="stat-label">已清关待提箱</div></div>
+          <div class="stat-card warning-card" onclick="showDailyReportDetail('clearedPendingPickupAbnormal')" style="padding:12px;cursor:pointer;"><div class="stat-number warning-number" style="font-size:24px;">${dailyReport.clearedPendingPickupAbnormal}</div><div class="stat-label">待提箱-已产生异常堆存费</div></div>
+          <div class="stat-card" onclick="showDailyReportDetail('clearedPendingPickupNormal')" style="padding:12px;cursor:pointer;"><div class="stat-number" style="font-size:24px;">${dailyReport.clearedPendingPickupNormal}</div><div class="stat-label">待提箱-未产生异常堆存费</div></div>
+        </div>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card" onclick="jumpTo('containers')"><div class="stat-number">${total}</div><div class="stat-label">总集装箱</div></div>
+        <div class="stat-card" onclick="jumpTo('customs')"><div class="stat-number">${waiting}</div><div class="stat-label">待清关</div></div>
+        <div class="stat-card" onclick="jumpTo('transportTasks')"><div class="stat-number">${inTransit}</div><div class="stat-label">运输中</div></div>
+        <div class="stat-card" style="background:#fef8e6;"><div class="stat-number" style="color:#e6a23c;">R$ ${totalAbnormalStorage.toFixed(2)}</div><div class="stat-label">异常堆存费</div></div>
+        <div class="stat-card" style="background:#feefe6;"><div class="stat-number" style="color:#f56c6c;">$ ${totalDemurrage.toFixed(2)}</div><div class="stat-label">滞箱费总额</div></div>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card warning-card" onclick="showWarningDetail('storage')" style="cursor:pointer;"><div class="stat-number warning-number">${storageWarningCount}</div><div class="stat-label">⚠️ ${warningConfig.storageWarningDays}天内将产生异常堆存费</div></div>
+        <div class="stat-card danger-card" onclick="showWarningDetail('demurrage')" style="cursor:pointer;"><div class="stat-number danger-number">${demurrageWarningCount}</div><div class="stat-label">⚠️ ${warningConfig.demurrageWarningDays}天内将产生滞箱费</div></div>
+      </div>
+      <div class="card"><div class="card-title">📍 库存分布</div><div class="location-stock-grid">${Object.entries(stock).map(([k,v])=>`<div class="location-stock-item" onclick="showLocationStockDetail('${k}')" title="查看${k}集装箱明细"><div class="location-stock-count">${v}</div><div>${k}</div></div>`).join('')}<div class="location-stock-item" onclick="showLocationStockDetail('已生产')" title="查看已生产集装箱明细"><div class="location-stock-count">${producedCount}</div><div>已生产</div></div></div><div style="font-size:12px;color:#909399;margin-top:10px;">说明：工厂库存仅统计当前位置为工厂且尚未生产的集装箱；已生产集装箱单独统计。</div></div>
+      ${window.v42RenderProductionBoard()}
+    `;
+  };
+  window.refreshProductionBoardIfVisible = function(){
+    if(currentMenu === 'dashboard'){
+      const main = document.getElementById('mainContent');
+      if(main) window.renderDashboard(main);
+    }
+  };
 })();
 </script>
 
