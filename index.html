@@ -2914,6 +2914,41 @@ let main=document.getElementById('mainContent');
       });
     }
 
+    // ==================== V40.7：提箱计划连续编辑/取消，不重置筛选与页面位置 ====================
+    function capturePickupPlanViewState(){
+      const ids=['pickupSearchBatch','pickupSearchContainer','pickupSearchBl','pickupSearchDate'];
+      const state={fields:{}, publishedOpen:false, scrollTop:0, activeId:''};
+      ids.forEach(id=>{ const el=document.getElementById(id); if(el) state.fields[id]=el.value; });
+      const body=document.getElementById('publishedPlansBody');
+      state.publishedOpen=!!(body && body.style.display !== 'none');
+      state.scrollTop=document.querySelector('.main-content')?.scrollTop || 0;
+      state.activeId=document.activeElement?.id || '';
+      return state;
+    }
+
+    function restorePickupPlanViewState(state){
+      if(!state) return;
+      Object.entries(state.fields||{}).forEach(([id,value])=>{ const el=document.getElementById(id); if(el) el.value=value; });
+      const body=document.getElementById('publishedPlansBody');
+      const btn=document.getElementById('btnPublishedPlans');
+      if(body){
+        body.style.display=state.publishedOpen ? 'block' : 'none';
+        if(btn) btn.innerText=state.publishedOpen ? '收起' : '展开查看';
+      }
+      filterPickupTable();
+      const main=document.querySelector('.main-content');
+      if(main) main.scrollTop=state.scrollTop || 0;
+      if(state.activeId){
+        const el=document.getElementById(state.activeId);
+        if(el && typeof el.focus==='function') { try{ el.focus(); }catch(e){} }
+      }
+    }
+
+    function refreshPickupPlanTablesKeepState(state){
+      // 只刷新提箱计划两个表格，不重绘整个页面，避免批次/箱号/提单筛选条件丢失。
+      restorePickupPlanViewState(state || capturePickupPlanViewState());
+    }
+
     function selectAllPickup(){document.querySelectorAll('.pickup-checkbox').forEach(cb=>cb.checked=true);}
 
     function validatePickupInput(id){
@@ -2933,8 +2968,9 @@ let main=document.getElementById('mainContent');
       if(!cont)return;
       if(pickupPlans.some(p=>p.containerId===id&&p.status!=='cancelled')){alert('已有待确认计划');return;}
       pickupPlans.push({id:nextIds.plan++,containerId:id,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,arrivalDate:v.arrival,carrier:v.carrier,destination:v.dest,unloadingDock:v.dock,status:'pending',needReconfirm:false});
+      const viewState=capturePickupPlanViewState();
       saveData();
-      renderPickupPlan(document.getElementById('mainContent'));
+      refreshPickupPlanTablesKeepState(viewState);
       alert('计划已发布');
     };
 
@@ -2953,8 +2989,9 @@ let main=document.getElementById('mainContent');
         }
       }
       if(count>0){
+        const viewState=capturePickupPlanViewState();
         saveData();
-        renderPickupPlan(document.getElementById('mainContent'));
+        refreshPickupPlanTablesKeepState(viewState);
         alert(`成功发布 ${count} 个计划`);
       } else alert('没有可发布的计划');
     };
@@ -2973,8 +3010,9 @@ let main=document.getElementById('mainContent');
       plan.unloadingDock=newDock||'';
       plan.status='pending';
       plan.needReconfirm=true;
+      const viewState=capturePickupPlanViewState();
       saveData();
-      renderPickupPlan(document.getElementById('mainContent'));
+      refreshPickupPlanTablesKeepState(viewState);
       alert('计划已修改，需运输公司重新确认');
     };
 
@@ -2983,8 +3021,9 @@ let main=document.getElementById('mainContent');
         let plan=pickupPlans.find(p=>p.id===planId);
         if(plan){
           plan.status='cancelled';
+          const viewState=capturePickupPlanViewState();
           saveData();
-          renderPickupPlan(document.getElementById('mainContent'));
+          refreshPickupPlanTablesKeepState(viewState);
           alert('已取消');
         }
       }
