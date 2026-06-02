@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V42.3 Production Sequence</title>
+  <title>集装箱智能监控管理系统 V42.4 Production Sequence</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
     /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
@@ -96,7 +96,7 @@
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.3</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.4</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -223,7 +223,7 @@
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.3</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.4</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -4453,7 +4453,7 @@ let main=document.getElementById('mainContent');
           if(plans.length){
             html+=plans.map(p=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;border:1px solid #e4e7ed;border-radius:8px;padding:6px 8px;margin-bottom:6px;background:#f8f9fc;">
               <div style="min-width:0;"><span style="display:inline-block;background:#2a5298;color:white;border-radius:999px;padding:1px 7px;font-size:11px;margin-right:6px;">#${getProductionPlanOrder(p)===999999?'-':getProductionPlanOrder(p)}</span><b style="color:#2a5298;">${p.batch||'-'}</b><span style="margin-left:8px;color:#303133;">${Number(p.plannedQty||0)}</span><div style="font-size:11px;color:#909399;">实际 ${Number(p.actualQty||0)} ${isProductionPlanConfirmed(p)?'｜已确认':'｜未确认'}</div></div>
-              <div style="display:flex;gap:4px;align-items:center;"><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','up')">↑</button><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','down')">↓</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button></div>
+              <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;justify-content:flex-end;"><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','up')">↑</button><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','down')">↓</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button><button class="btn btn-sm" onclick="copyProductionPlan('${p.id}')">复制</button><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan('${p.id}')">删除</button></div>
             </div>`).join('');
           }else{
             html+=`<div style="color:${emptyRequired?'#e6a23c':'#c0c4cc'};font-size:12px;margin-bottom:8px;">${emptyRequired?'必填计划未维护':'可选未维护'}</div>`;
@@ -4470,7 +4470,7 @@ let main=document.getElementById('mainContent');
       renderTable('prePlanTable',['日期','车间','顺序','批次','车型/系列','计划台数','实际完成','差异','确认状态','备注','操作'],rows,(p)=>{
         const planned=Number(p.plannedQty||0), actual=Number(p.actualQty||0), remain=planned-actual;
         let status=isProductionPlanConfirmed(p)?'已确认':'未确认';
-        let tr=document.createElement('tr');tr.innerHTML=`<td>${p.date}</td><td>${productionPlanWorkshopLabel(p.workshop)}</td><td>${getProductionPlanOrder(p)===999999?'-':getProductionPlanOrder(p)}</td><td><b>${p.batch||'-'}</b></td><td>${v42BatchRule(p.batch).model}</td><td>${planned}</td><td>${actual}</td><td style="color:${remain===0?'#67c23a':remain>0?'#e6a23c':'#f56c6c'};font-weight:600;">${remain}</td><td>${status}</td><td>${p.remark||'-'}</td><td><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','up')">上移</button><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','down')">下移</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan('${p.id}')">删除</button></td>`;return tr;
+        let tr=document.createElement('tr');tr.innerHTML=`<td>${p.date}</td><td>${productionPlanWorkshopLabel(p.workshop)}</td><td>${getProductionPlanOrder(p)===999999?'-':getProductionPlanOrder(p)}</td><td><b>${p.batch||'-'}</b></td><td>${v42BatchRule(p.batch).model}</td><td>${planned}</td><td>${actual}</td><td style="color:${remain===0?'#67c23a':remain>0?'#e6a23c':'#f56c6c'};font-weight:600;">${remain}</td><td>${status}</td><td>${p.remark||'-'}</td><td><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','up')">上移</button><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','down')">下移</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button><button class="btn btn-sm" onclick="copyProductionPlan('${p.id}')">复制</button><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan('${p.id}')">${isProductionPlanConfirmed(p)?'作废':'删除'}</button></td>`;return tr;
       });
     }
     function renderProductionActualConfirmTable(rows){
@@ -4544,7 +4544,42 @@ let main=document.getElementById('mainContent');
       p.updatedAt=new Date().toISOString(); p.updatedBy=currentUser?.name||currentUser?.email||''; pushProductionPlanHistory(p,'edit_plan',{before,after:{date:p.date,workshop:p.workshop,batch:p.batch,planOrder:p.planOrder,plannedQty:p.plannedQty,actualQty:p.actualQty,remark:p.remark}});
       closeModal(); saveAndRenderContentKeepState();
     };
-    window.deleteProductionPlan=function(id){if(!confirm('确认删除这条生产计划吗？'))return; productionPlans=productionPlans.filter(p=>String(p.id)!==String(id));saveAndRenderContentKeepState();};
+    window.deleteProductionPlan=function(id){
+      const p=productionPlans.find(x=>String(x.id)===String(id)); if(!p)return;
+      if(isProductionPlanConfirmed(p)){
+        const reason=prompt('该生产计划已确认。为保留追溯记录，系统将执行“作废”而不是物理删除。请输入作废原因：','计划取消/录入错误');
+        if(reason===null)return;
+        if(!String(reason).trim()){alert('已确认计划作废必须填写原因');return;}
+        p.planMode='schedule_voided';
+        p.voided=true;
+        p.voidReason=String(reason).trim();
+        p.voidedAt=new Date().toISOString();
+        p.voidedBy=currentUser?.name||currentUser?.email||'';
+        pushProductionPlanHistory(p,'void_plan',{reason:p.voidReason});
+        saveAndRenderContentKeepState();
+        return;
+      }
+      if(!confirm('确认删除这条未确认生产计划吗？删除后将从预排产中移除。'))return;
+      const oldDate=p.date, oldWorkshop=p.workshop;
+      productionPlans=productionPlans.filter(x=>String(x.id)!==String(id));
+      normalizeProductionPlanOrders(oldDate,oldWorkshop);
+      saveAndRenderContentKeepState();
+    };
+    window.copyProductionPlan=function(id){
+      const p=productionPlans.find(x=>String(x.id)===String(id)); if(!p)return;
+      const defaultDate=addDays(p.date||getTodayStr(),1);
+      const newDate=prompt('复制到哪个日期？格式：YYYY-MM-DD', defaultDate);
+      if(newDate===null)return;
+      const d=normalizeDateOnly(newDate);
+      if(!d){alert('日期格式无效');return;}
+      const workshop=p.workshop||'welding';
+      const copied=Object.assign({},p,{id:String(Date.now()+Math.random()),date:d,planOrder:nextProductionPlanOrder(d,workshop),actualQty:0,confirmedAt:'',confirmedBy:'',updatedAt:new Date().toISOString(),updatedBy:currentUser?.name||currentUser?.email||'',createdAt:new Date().toISOString(),createdBy:currentUser?.name||currentUser?.email||'',remark:(p.remark? p.remark+'；':'')+'由 '+(p.date||'-')+' 复制',history:[]});
+      delete copied.voided; delete copied.voidReason; delete copied.voidedAt; delete copied.voidedBy;
+      copied.planMode='schedule';
+      productionPlans.push(copied);
+      normalizeProductionPlanOrders(d,workshop);
+      saveAndRenderContentKeepState();
+    };
     window.prefillProductionPlanDates=function(){alert('预排产页面固定显示起始日期起连续3天：今天、明天、后天。');};
 
     function renderReceivingAndon(container){
@@ -5676,7 +5711,7 @@ let main=document.getElementById('mainContent');
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.3</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.4</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
