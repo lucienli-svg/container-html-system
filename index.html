@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V42.1 Production Plan</title>
+  <title>集装箱智能监控管理系统 V42.3 Production Sequence</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
     /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
@@ -44,10 +44,11 @@
     function v42DateLabel(d,i){ return `${fmtDate(d)} ${i===0?'今日':'明日'}`; }
     function v42BuildBatchGroups(area, date){
       const areaKey=area==='Welding'?'welding':'assembly';
-      const groups={};
+      const groups={}; const groupOrders={};
       productionPlans.filter(p=>p.date===date && ((String(p.area||'').toLowerCase()===area.toLowerCase()) || (p.planMode==='schedule' && productionPlanAreaFromWorkshop(p.workshop)===area))).forEach(p=>{
         const batch=String(p.batch||'').trim().toUpperCase(); if(!batch || v42IsSupplementBatch(batch)) return;
         groups[batch]=groups[batch]||new Set();
+        groupOrders[batch]=Math.min(groupOrders[batch]||999999, getProductionPlanOrder(p));
         if(p.seq) groups[batch].add(v42SeqNum(p.seq));
         if(p.planMode==='schedule'){ const rule=v42BatchRule(batch); (rule[area==='Welding'?'welding':'assembly']||[]).forEach(n=>groups[batch].add(n)); }
       });
@@ -56,7 +57,7 @@
         const rule=v42BatchRule(batch); const seqs=rule[areaKey]||[]; if(seqs.includes(seq)){ groups[batch]=groups[batch]||new Set(); groups[batch].add(seq); }
       });
       Object.keys(groups).forEach(batch=>{ const rule=v42BatchRule(batch); const arr=rule[areaKey]||[]; if(arr.length){ groups[batch]=new Set(arr); } });
-      return Object.entries(groups).sort((a,b)=>a[0].localeCompare(b[0],'zh-CN',{numeric:true})).map(([batch,set])=>({batch,seqs:[...set].filter(Boolean).sort((x,y)=>x-y)}));
+      return Object.entries(groups).sort((a,b)=>(groupOrders[a[0]]||999999)-(groupOrders[b[0]]||999999) || a[0].localeCompare(b[0],'zh-CN',{numeric:true})).map(([batch,set])=>({batch,planOrder:groupOrders[batch]||999999,seqs:[...set].filter(Boolean).sort((x,y)=>x-y)}));
     }
     function v42RenderBatchRow(group){
       let done=0, total=group.seqs.length||1;
@@ -69,7 +70,7 @@
         if(type==='SIDER') sider.push(chip); else cont.push(chip);
       });
       const pct=Math.round(done/total*100);
-      return `<tr><td><span class="v42-batch-name">${group.batch}</span><div style="font-size:10px;color:#cbd5e1;margin-top:3px;">${v42BatchRule(group.batch).model}</div></td><td><div class="v42-chip-wrap">${sider.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div class="v42-chip-wrap">${cont.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div style="font-weight:900;">${done}/${total}</div><div class="v42-progress"><span style="width:${pct}%"></span></div></td></tr>`;
+      return `<tr><td><span style="display:inline-block;background:rgba(255,255,255,.12);border-radius:999px;padding:2px 7px;margin-right:6px;font-size:10px;">#${group.planOrder===999999?'-':group.planOrder}</span><span class="v42-batch-name">${group.batch}</span><div style="font-size:10px;color:#cbd5e1;margin-top:3px;">${v42BatchRule(group.batch).model}</div></td><td><div class="v42-chip-wrap">${sider.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div class="v42-chip-wrap">${cont.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div style="font-weight:900;">${done}/${total}</div><div class="v42-progress"><span style="width:${pct}%"></span></div></td></tr>`;
     }
     function v42PanelKpis(area){
       const dates=v42GetBoardDates(); let rows=[]; dates.forEach(d=>v42BuildBatchGroups(area,d).forEach(g=>g.seqs.forEach(seq=>rows.push(v42TaskFor(g.batch,seq)))));
@@ -95,7 +96,7 @@
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.2</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.3</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -170,10 +171,11 @@
     function v42DateLabel(d,i){ return `${fmtDate(d)} ${i===0?'今日':'明日'}`; }
     function v42BuildBatchGroups(area, date){
       const areaKey=area==='Welding'?'welding':'assembly';
-      const groups={};
+      const groups={}; const groupOrders={};
       productionPlans.filter(p=>p.date===date && ((String(p.area||'').toLowerCase()===area.toLowerCase()) || (p.planMode==='schedule' && productionPlanAreaFromWorkshop(p.workshop)===area))).forEach(p=>{
         const batch=String(p.batch||'').trim().toUpperCase(); if(!batch || v42IsSupplementBatch(batch)) return;
         groups[batch]=groups[batch]||new Set();
+        groupOrders[batch]=Math.min(groupOrders[batch]||999999, getProductionPlanOrder(p));
         if(p.seq) groups[batch].add(v42SeqNum(p.seq));
         if(p.planMode==='schedule'){ const rule=v42BatchRule(batch); (rule[area==='Welding'?'welding':'assembly']||[]).forEach(n=>groups[batch].add(n)); }
       });
@@ -182,7 +184,7 @@
         const rule=v42BatchRule(batch); const seqs=rule[areaKey]||[]; if(seqs.includes(seq)){ groups[batch]=groups[batch]||new Set(); groups[batch].add(seq); }
       });
       Object.keys(groups).forEach(batch=>{ const rule=v42BatchRule(batch); const arr=rule[areaKey]||[]; if(arr.length){ groups[batch]=new Set(arr); } });
-      return Object.entries(groups).sort((a,b)=>a[0].localeCompare(b[0],'zh-CN',{numeric:true})).map(([batch,set])=>({batch,seqs:[...set].filter(Boolean).sort((x,y)=>x-y)}));
+      return Object.entries(groups).sort((a,b)=>(groupOrders[a[0]]||999999)-(groupOrders[b[0]]||999999) || a[0].localeCompare(b[0],'zh-CN',{numeric:true})).map(([batch,set])=>({batch,planOrder:groupOrders[batch]||999999,seqs:[...set].filter(Boolean).sort((x,y)=>x-y)}));
     }
     function v42RenderBatchRow(group){
       let done=0, total=group.seqs.length||1;
@@ -195,7 +197,7 @@
         if(type==='SIDER') sider.push(chip); else cont.push(chip);
       });
       const pct=Math.round(done/total*100);
-      return `<tr><td><span class="v42-batch-name">${group.batch}</span><div style="font-size:10px;color:#cbd5e1;margin-top:3px;">${v42BatchRule(group.batch).model}</div></td><td><div class="v42-chip-wrap">${sider.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div class="v42-chip-wrap">${cont.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div style="font-weight:900;">${done}/${total}</div><div class="v42-progress"><span style="width:${pct}%"></span></div></td></tr>`;
+      return `<tr><td><span style="display:inline-block;background:rgba(255,255,255,.12);border-radius:999px;padding:2px 7px;margin-right:6px;font-size:10px;">#${group.planOrder===999999?'-':group.planOrder}</span><span class="v42-batch-name">${group.batch}</span><div style="font-size:10px;color:#cbd5e1;margin-top:3px;">${v42BatchRule(group.batch).model}</div></td><td><div class="v42-chip-wrap">${sider.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div class="v42-chip-wrap">${cont.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div style="font-weight:900;">${done}/${total}</div><div class="v42-progress"><span style="width:${pct}%"></span></div></td></tr>`;
     }
     function v42PanelKpis(area){
       const dates=v42GetBoardDates(); let rows=[]; dates.forEach(d=>v42BuildBatchGroups(area,d).forEach(g=>g.seqs.forEach(seq=>rows.push(v42TaskFor(g.batch,seq)))));
@@ -221,7 +223,7 @@
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.2</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.3</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -4366,14 +4368,44 @@ let main=document.getElementById('mainContent');
     function isProductionPlanConfirmed(p){
       return !!p.confirmedAt;
     }
+    function getProductionPlanOrder(p){
+      const n = Number(p && (p.planOrder ?? p.order ?? p.sequence));
+      return Number.isFinite(n) && n > 0 ? n : 999999;
+    }
+    function sortProductionPlansBySequence(list){
+      return (list||[]).sort((a,b)=>
+        getProductionPlanOrder(a)-getProductionPlanOrder(b) ||
+        String(a.batch||'').localeCompare(String(b.batch||''),'zh-CN',{numeric:true})
+      );
+    }
+    function nextProductionPlanOrder(date, workshop){
+      const same = productionPlans.filter(p=>p.planMode==='schedule' && p.date===date && String(p.workshop||'')===String(workshop||''));
+      const max = same.reduce((m,p)=>Math.max(m, getProductionPlanOrder(p)===999999?0:getProductionPlanOrder(p)), 0);
+      return max + 1;
+    }
+    function normalizeProductionPlanOrders(date, workshop){
+      const same = sortProductionPlansBySequence(productionPlans.filter(p=>p.planMode==='schedule' && p.date===date && String(p.workshop||'')===String(workshop||'')));
+      same.forEach((p,i)=>{ p.planOrder = i + 1; });
+    }
+    window.moveProductionPlanOrder=function(id, direction){
+      const p=productionPlans.find(x=>String(x.id)===String(id)); if(!p) return;
+      const same=sortProductionPlansBySequence(productionPlans.filter(x=>x.planMode==='schedule' && x.date===p.date && String(x.workshop||'')===String(p.workshop||'')));
+      const idx=same.findIndex(x=>String(x.id)===String(id));
+      const target=idx + (direction==='up'?-1:1);
+      if(idx<0 || target<0 || target>=same.length) return;
+      const a=same[idx], b=same[target];
+      const ao=getProductionPlanOrder(a), bo=getProductionPlanOrder(b);
+      a.planOrder=bo; b.planOrder=ao;
+      normalizeProductionPlanOrders(p.date,p.workshop);
+      saveAndRenderContentKeepState();
+    };
     function getProductionPlansForCell(date, workshop){
-      return getScheduleProductionPlans(date).filter(p => String(p.workshop||'')===String(workshop||''))
-        .sort((a,b)=>String(a.batch||'').localeCompare(String(b.batch||''),'zh-CN',{numeric:true}));
+      return sortProductionPlansBySequence(getScheduleProductionPlans(date).filter(p => String(p.workshop||'')===String(workshop||'')));
     }
     function getUnconfirmedProductionPlans(){
       const today = getTodayStr();
       return productionPlans.filter(p => p.planMode==='schedule' && p.date < today && !isProductionPlanConfirmed(p))
-        .sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')) || String(a.workshop||'').localeCompare(String(b.workshop||'')) || String(a.batch||'').localeCompare(String(b.batch||''),'zh-CN',{numeric:true}));
+        .sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')) || String(a.workshop||'').localeCompare(String(b.workshop||'')) || getProductionPlanOrder(a)-getProductionPlanOrder(b) || String(a.batch||'').localeCompare(String(b.batch||''),'zh-CN',{numeric:true}));
     }
     function getRequiredPlanMissingDates(baseDate){
       const dates = productionPlanBaseDates(baseDate).slice(0,2);
@@ -4385,7 +4417,7 @@ let main=document.getElementById('mainContent');
       const missing=getRequiredPlanMissingDates(baseDate);
       const unconfirmed=getUnconfirmedProductionPlans();
       container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🗓️ 生产计划维护</span><button class="btn btn-primary" onclick="currentMenu='dashboard';renderSidebar();renderContent();">返回工作台</button></div>
-        <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:14px;">本模块按照计划科排产表格式维护。预排产只显示三天：今天、明天、后天；其中今天和明天必须维护，后天可选。生产计划确认会显示所有历史未确认计划，并支持已确认计划修正。</div>
+        <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:14px;">本模块按照计划科排产表格式维护。预排产只显示三天：今天、明天、后天；其中今天和明天必须维护，后天可选。每条计划维护批次顺序，用于后续到箱顺序和收货优先级。生产计划确认会显示所有历史未确认计划，并支持已确认计划修正。</div>
         ${missing.length?`<div style="background:#fff7e6;border-left:4px solid #e6a23c;border-radius:8px;padding:10px 12px;margin-bottom:10px;color:#8a5a00;">⚠ 必填计划日期尚未维护：${missing.map(fmtDate).join('、')}</div>`:''}
         ${unconfirmed.length?`<div style="background:#fef0f0;border-left:4px solid #f56c6c;border-radius:8px;padding:10px 12px;margin-bottom:10px;color:#9b1c1c;">⚠ 有 ${unconfirmed.length} 条历史生产计划未确认实际完成数量，请在下方“生产计划确认”处理。</div>`:''}
         <div class="search-bar"><span>计划起始日期</span><input type="date" id="prodPlanBaseDate" value="${baseDate}" onchange="renderProductionPlan(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderProductionPlan(document.getElementById('mainContent'))">刷新</button><button class="btn btn-success" onclick="openAddProductionPlanModal('${baseDate}')">新增计划</button></div>
@@ -4393,7 +4425,7 @@ let main=document.getElementById('mainContent');
       <div class="card"><div class="card-header"><span class="card-title">① 预排产（三天滚动表）</span><span style="font-size:12px;color:#909399;">${fmtDate(dates[0])} - ${fmtDate(dates[2])}</span></div>
         <div id="prePlanGrid"></div>
         <div style="background:#f8f9fc;border-radius:10px;padding:12px;margin-top:12px;">
-          <div style="font-size:13px;color:#606266;margin-bottom:8px;">支持从Excel粘贴，推荐列顺序：日期、车间、批次、计划台数、备注。车间可写：焊装、总装B线、总装P线。</div>
+          <div style="font-size:13px;color:#606266;margin-bottom:8px;">支持从Excel粘贴，推荐列顺序：日期、车间、顺序、批次、计划台数、备注。也兼容旧格式：日期、车间、批次、计划台数、备注。车间可写：焊装、总装B线、总装P线。</div>
           <textarea id="prePlanPaste" class="form-control" style="height:80px" placeholder="2026-06-03\t焊装\tBHC7016\t60\n2026-06-03\t总装B线\tBHC7010\t60"></textarea>
           <button class="btn btn-primary" onclick="importPreProductionPlanPaste()">批量导入预排产</button>
         </div>
@@ -4405,7 +4437,7 @@ let main=document.getElementById('mainContent');
       <div class="card"><div class="card-header"><span class="card-title">③ 已维护计划明细</span><span style="font-size:12px;color:#909399;">支持编辑已确认/未确认计划</span></div><div id="prePlanTable"></div></div>`;
       renderProductionPlanGrid(baseDate);
       renderProductionActualConfirmTable(unconfirmed);
-      const allRows=productionPlans.filter(p=>p.planMode==='schedule').sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')) || String(a.workshop||'').localeCompare(String(b.workshop||'')) || String(a.batch||'').localeCompare(String(b.batch||''),'zh-CN',{numeric:true}));
+      const allRows=productionPlans.filter(p=>p.planMode==='schedule').sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')) || String(a.workshop||'').localeCompare(String(b.workshop||'')) || getProductionPlanOrder(a)-getProductionPlanOrder(b) || String(a.batch||'').localeCompare(String(b.batch||''),'zh-CN',{numeric:true}));
       renderPrePlanTable(allRows);
     }
     function renderProductionPlanGrid(baseDate){
@@ -4420,8 +4452,8 @@ let main=document.getElementById('mainContent');
           html+=`<td style="vertical-align:top;text-align:left!important;background:${emptyRequired?'#fff7e6':'#fff'};">`;
           if(plans.length){
             html+=plans.map(p=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;border:1px solid #e4e7ed;border-radius:8px;padding:6px 8px;margin-bottom:6px;background:#f8f9fc;">
-              <div style="min-width:0;"><b style="color:#2a5298;">${p.batch||'-'}</b><span style="margin-left:8px;color:#303133;">${Number(p.plannedQty||0)}</span><div style="font-size:11px;color:#909399;">实际 ${Number(p.actualQty||0)} ${isProductionPlanConfirmed(p)?'｜已确认':'｜未确认'}</div></div>
-              <button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button>
+              <div style="min-width:0;"><span style="display:inline-block;background:#2a5298;color:white;border-radius:999px;padding:1px 7px;font-size:11px;margin-right:6px;">#${getProductionPlanOrder(p)===999999?'-':getProductionPlanOrder(p)}</span><b style="color:#2a5298;">${p.batch||'-'}</b><span style="margin-left:8px;color:#303133;">${Number(p.plannedQty||0)}</span><div style="font-size:11px;color:#909399;">实际 ${Number(p.actualQty||0)} ${isProductionPlanConfirmed(p)?'｜已确认':'｜未确认'}</div></div>
+              <div style="display:flex;gap:4px;align-items:center;"><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','up')">↑</button><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','down')">↓</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button></div>
             </div>`).join('');
           }else{
             html+=`<div style="color:${emptyRequired?'#e6a23c':'#c0c4cc'};font-size:12px;margin-bottom:8px;">${emptyRequired?'必填计划未维护':'可选未维护'}</div>`;
@@ -4435,17 +4467,17 @@ let main=document.getElementById('mainContent');
     }
     function renderPrePlanTable(rows){
       if(rows.length===0){document.getElementById('prePlanTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">暂无已维护生产计划</div></div>';return;}
-      renderTable('prePlanTable',['日期','车间','批次','车型/系列','计划台数','实际完成','差异','确认状态','备注','操作'],rows,(p)=>{
+      renderTable('prePlanTable',['日期','车间','顺序','批次','车型/系列','计划台数','实际完成','差异','确认状态','备注','操作'],rows,(p)=>{
         const planned=Number(p.plannedQty||0), actual=Number(p.actualQty||0), remain=planned-actual;
         let status=isProductionPlanConfirmed(p)?'已确认':'未确认';
-        let tr=document.createElement('tr');tr.innerHTML=`<td>${p.date}</td><td>${productionPlanWorkshopLabel(p.workshop)}</td><td><b>${p.batch||'-'}</b></td><td>${v42BatchRule(p.batch).model}</td><td>${planned}</td><td>${actual}</td><td style="color:${remain===0?'#67c23a':remain>0?'#e6a23c':'#f56c6c'};font-weight:600;">${remain}</td><td>${status}</td><td>${p.remark||'-'}</td><td><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan('${p.id}')">删除</button></td>`;return tr;
+        let tr=document.createElement('tr');tr.innerHTML=`<td>${p.date}</td><td>${productionPlanWorkshopLabel(p.workshop)}</td><td>${getProductionPlanOrder(p)===999999?'-':getProductionPlanOrder(p)}</td><td><b>${p.batch||'-'}</b></td><td>${v42BatchRule(p.batch).model}</td><td>${planned}</td><td>${actual}</td><td style="color:${remain===0?'#67c23a':remain>0?'#e6a23c':'#f56c6c'};font-weight:600;">${remain}</td><td>${status}</td><td>${p.remark||'-'}</td><td><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','up')">上移</button><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','down')">下移</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan('${p.id}')">删除</button></td>`;return tr;
       });
     }
     function renderProductionActualConfirmTable(rows){
       if(rows.length===0){document.getElementById('prodConfirmPlanTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center;color:#67c23a;">暂无历史未确认生产计划</div></div>';return;}
-      renderTable('prodConfirmPlanTable',['日期','车间','批次','计划台数','实际完成数量','差异','操作'],rows,(p)=>{
+      renderTable('prodConfirmPlanTable',['日期','车间','顺序','批次','计划台数','实际完成数量','差异','操作'],rows,(p)=>{
         const planned=Number(p.plannedQty||0), actual=Number(p.actualQty||0);
-        let tr=document.createElement('tr');tr.innerHTML=`<td>${p.date}</td><td>${productionPlanWorkshopLabel(p.workshop)}</td><td><b>${p.batch||'-'}</b></td><td>${planned}</td><td><input id="actual_${p.id}" type="number" min="0" value="${actual}" style="width:90px"></td><td id="diff_${p.id}">${planned-actual}</td><td><button class="btn btn-sm btn-success" onclick="saveProductionActual('${p.id}')">确认实际完成</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑计划</button></td>`;return tr;
+        let tr=document.createElement('tr');tr.innerHTML=`<td>${p.date}</td><td>${productionPlanWorkshopLabel(p.workshop)}</td><td>${getProductionPlanOrder(p)===999999?'-':getProductionPlanOrder(p)}</td><td><b>${p.batch||'-'}</b></td><td>${planned}</td><td><input id="actual_${p.id}" type="number" min="0" value="${actual}" style="width:90px"></td><td id="diff_${p.id}">${planned-actual}</td><td><button class="btn btn-sm btn-success" onclick="saveProductionActual('${p.id}')">确认实际完成</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑计划</button></td>`;return tr;
       });
     }
     function normalizeWorkshopText(v){
@@ -4456,7 +4488,8 @@ let main=document.getElementById('mainContent');
     }
     window.openAddProductionPlanModal=function(date,workshop){
       document.getElementById('modalTitle').innerText='新增生产计划';
-      document.getElementById('modalBody').innerHTML=`<div class="form-group"><label>日期</label><input id="prePlanDate" class="form-control" type="date" value="${date||getTodayStr()}"></div><div class="form-group"><label>车间/产线</label><select id="prePlanWorkshop" class="form-control"><option value="welding" ${workshop==='welding'?'selected':''}>焊装 BS</option><option value="assembly_b" ${workshop==='assembly_b'?'selected':''}>总装B线 GA-B</option><option value="assembly_p" ${workshop==='assembly_p'?'selected':''}>总装P线 GA-P</option></select></div><div class="form-group"><label>批次</label><input id="prePlanBatch" class="form-control" placeholder="如 BHC7016"></div><div class="form-group"><label>计划台数</label><input id="prePlanQty" class="form-control" type="number" min="0" placeholder="计划数量"></div><div class="form-group"><label>备注</label><input id="prePlanRemark" class="form-control" placeholder="可选"></div><button class="btn btn-success" onclick="addPreProductionPlan()">保存新增</button>`;
+      const defaultDate=date||getTodayStr(); const defaultWorkshop=workshop||'welding'; const defaultOrder=nextProductionPlanOrder(defaultDate, defaultWorkshop);
+      document.getElementById('modalBody').innerHTML=`<div class="form-group"><label>日期</label><input id="prePlanDate" class="form-control" type="date" value="${defaultDate}" onchange="document.getElementById('prePlanOrder').value=nextProductionPlanOrder(this.value, document.getElementById('prePlanWorkshop').value)"></div><div class="form-group"><label>车间/产线</label><select id="prePlanWorkshop" class="form-control" onchange="document.getElementById('prePlanOrder').value=nextProductionPlanOrder(document.getElementById('prePlanDate').value, this.value)"><option value="welding" ${defaultWorkshop==='welding'?'selected':''}>焊装 BS</option><option value="assembly_b" ${defaultWorkshop==='assembly_b'?'selected':''}>总装B线 GA-B</option><option value="assembly_p" ${defaultWorkshop==='assembly_p'?'selected':''}>总装P线 GA-P</option></select></div><div class="form-group"><label>批次顺序</label><input id="prePlanOrder" class="form-control" type="number" min="1" value="${defaultOrder}"></div><div class="form-group"><label>批次</label><input id="prePlanBatch" class="form-control" placeholder="如 BHC7016"></div><div class="form-group"><label>计划台数</label><input id="prePlanQty" class="form-control" type="number" min="0" placeholder="计划数量"></div><div class="form-group"><label>备注</label><input id="prePlanRemark" class="form-control" placeholder="可选"></div><button class="btn btn-success" onclick="addPreProductionPlan()">保存新增</button>`;
       openModal();
     };
     window.addPreProductionPlan=function(){
@@ -4464,19 +4497,23 @@ let main=document.getElementById('mainContent');
       const workshop=document.getElementById('prePlanWorkshop')?.value||'welding';
       const batch=(document.getElementById('prePlanBatch')?.value||'').trim().toUpperCase();
       const plannedQty=Number(document.getElementById('prePlanQty')?.value||0);
+      const planOrder=Number(document.getElementById('prePlanOrder')?.value||nextProductionPlanOrder(date,workshop));
       const remark=(document.getElementById('prePlanRemark')?.value||'').trim();
       if(!date || !batch || plannedQty<=0){alert('请填写日期、批次号和计划台数');return;}
-      productionPlans.push({id:String(Date.now()+Math.random()),planMode:'schedule',date,area:productionPlanAreaFromWorkshop(workshop),workshop,batch,plannedQty,actualQty:0,remark,createdAt:new Date().toISOString(),createdBy:currentUser?.name||currentUser?.email||''});
+      productionPlans.push({id:String(Date.now()+Math.random()),planMode:'schedule',date,area:productionPlanAreaFromWorkshop(workshop),workshop,batch,plannedQty,actualQty:0,planOrder,remark,createdAt:new Date().toISOString(),createdBy:currentUser?.name||currentUser?.email||''});
+      normalizeProductionPlanOrders(date,workshop);
       closeModal(); saveAndRenderContentKeepState();
     };
     window.importPreProductionPlanPaste=function(){
       const text=document.getElementById('prePlanPaste')?.value||''; if(!text.trim()){alert('请先粘贴预排产内容');return;}
       let count=0;
       text.split(/\r?\n/).forEach((line,i)=>{let parts=line.split(/\t|,|;/).map(x=>x.trim()); if(parts.length<3) return; if(i===0 && /日期|date|批次|batch|车间/i.test(line)) return;
-        let date,workshop,batch,plannedQty,remark='';
-        if(/^\d{4}-\d{1,2}-\d{1,2}/.test(parts[0])){[date,workshop,batch,plannedQty,remark]=parts;} else {date=document.getElementById('prodPlanBaseDate')?.value||getTodayStr(); [workshop,batch,plannedQty,remark]=parts;}
-        if(date && workshop && batch && Number(plannedQty)>0){const ws=normalizeWorkshopText(workshop); productionPlans.push({id:String(Date.now()+Math.random()+count),planMode:'schedule',date:normalizeDateOnly(date),area:productionPlanAreaFromWorkshop(ws),workshop:ws,batch:String(batch).toUpperCase(),plannedQty:Number(plannedQty),actualQty:0,remark:remark||'',createdAt:new Date().toISOString(),createdBy:currentUser?.name||currentUser?.email||''}); count++;}
+        let date,workshop,planOrder,batch,plannedQty,remark='';
+        if(/^\d{4}-\d{1,2}-\d{1,2}/.test(parts[0])){date=parts[0]; workshop=parts[1]; if(/^\d+$/.test(parts[2]||'')){planOrder=Number(parts[2]); batch=parts[3]; plannedQty=parts[4]; remark=parts[5]||'';} else {batch=parts[2]; plannedQty=parts[3]; remark=parts[4]||'';}}
+        else {date=document.getElementById('prodPlanBaseDate')?.value||getTodayStr(); workshop=parts[0]; if(/^\d+$/.test(parts[1]||'')){planOrder=Number(parts[1]); batch=parts[2]; plannedQty=parts[3]; remark=parts[4]||'';} else {batch=parts[1]; plannedQty=parts[2]; remark=parts[3]||'';}}
+        if(date && workshop && batch && Number(plannedQty)>0){const ws=normalizeWorkshopText(workshop); const d=normalizeDateOnly(date); const order=planOrder||nextProductionPlanOrder(d,ws); productionPlans.push({id:String(Date.now()+Math.random()+count),planMode:'schedule',date:d,area:productionPlanAreaFromWorkshop(ws),workshop:ws,batch:String(batch).toUpperCase(),plannedQty:Number(plannedQty),actualQty:0,planOrder:order,remark:remark||'',createdAt:new Date().toISOString(),createdBy:currentUser?.name||currentUser?.email||''}); count++;}
       });
+      [...new Set(productionPlans.filter(p=>p.planMode==='schedule').map(p=>`${p.date}||${p.workshop}`))].forEach(k=>{const [d,w]=k.split('||'); normalizeProductionPlanOrders(d,w);});
       saveAndRenderContentKeepState(); alert(`已导入 ${count} 条预排产计划`);
     };
     function pushProductionPlanHistory(p,action,extra){
@@ -4494,16 +4531,17 @@ let main=document.getElementById('mainContent');
     window.editPreProductionPlan=function(id){
       const p=productionPlans.find(x=>String(x.id)===String(id)); if(!p)return;
       document.getElementById('modalTitle').innerText=isProductionPlanConfirmed(p)?'编辑/修正生产计划':'编辑预排产';
-      document.getElementById('modalBody').innerHTML=`<div class="form-group"><label>日期</label><input id="editPreDate" class="form-control" type="date" value="${p.date||getTodayStr()}"></div><div class="form-group"><label>车间</label><select id="editPreWorkshop" class="form-control"><option value="welding" ${p.workshop==='welding'?'selected':''}>焊装 BS</option><option value="assembly_b" ${p.workshop==='assembly_b'?'selected':''}>总装B线 GA-B</option><option value="assembly_p" ${p.workshop==='assembly_p'?'selected':''}>总装P线 GA-P</option></select></div><div class="form-group"><label>批次</label><input id="editPreBatch" class="form-control" value="${p.batch||''}"></div><div class="form-group"><label>计划台数</label><input id="editPreQty" class="form-control" type="number" min="0" value="${p.plannedQty||0}"></div><div class="form-group"><label>实际完成数量</label><input id="editPreActual" class="form-control" type="number" min="0" value="${p.actualQty||0}"></div><div class="form-group"><label>备注</label><input id="editPreRemark" class="form-control" value="${p.remark||''}"></div><div style="font-size:12px;color:#909399;margin-bottom:10px;">已确认计划也可以修正，系统会记录修改时间和操作人。</div><button class="btn btn-success" onclick="savePreProductionPlanEdit('${p.id}')">保存</button>`;
+      document.getElementById('modalBody').innerHTML=`<div class="form-group"><label>日期</label><input id="editPreDate" class="form-control" type="date" value="${p.date||getTodayStr()}"></div><div class="form-group"><label>车间</label><select id="editPreWorkshop" class="form-control"><option value="welding" ${p.workshop==='welding'?'selected':''}>焊装 BS</option><option value="assembly_b" ${p.workshop==='assembly_b'?'selected':''}>总装B线 GA-B</option><option value="assembly_p" ${p.workshop==='assembly_p'?'selected':''}>总装P线 GA-P</option></select></div><div class="form-group"><label>批次顺序</label><input id="editPreOrder" class="form-control" type="number" min="1" value="${getProductionPlanOrder(p)===999999?nextProductionPlanOrder(p.date,p.workshop):getProductionPlanOrder(p)}"></div><div class="form-group"><label>批次</label><input id="editPreBatch" class="form-control" value="${p.batch||''}"></div><div class="form-group"><label>计划台数</label><input id="editPreQty" class="form-control" type="number" min="0" value="${p.plannedQty||0}"></div><div class="form-group"><label>实际完成数量</label><input id="editPreActual" class="form-control" type="number" min="0" value="${p.actualQty||0}"></div><div class="form-group"><label>备注</label><input id="editPreRemark" class="form-control" value="${p.remark||''}"></div><div style="font-size:12px;color:#909399;margin-bottom:10px;">已确认计划也可以修正，系统会记录修改时间和操作人。批次顺序用于后续到箱计划和看板显示顺序。</div><button class="btn btn-success" onclick="savePreProductionPlanEdit('${p.id}')">保存</button>`;
       openModal();
     };
     window.savePreProductionPlanEdit=function(id){
       const p=productionPlans.find(x=>String(x.id)===String(id)); if(!p)return;
-      const before={date:p.date,workshop:p.workshop,batch:p.batch,plannedQty:p.plannedQty,actualQty:p.actualQty,remark:p.remark};
+      const before={date:p.date,workshop:p.workshop,batch:p.batch,planOrder:p.planOrder,plannedQty:p.plannedQty,actualQty:p.actualQty,remark:p.remark};
       const ws=document.getElementById('editPreWorkshop')?.value||'welding';
-      p.date=document.getElementById('editPreDate')?.value||p.date; p.workshop=ws; p.area=productionPlanAreaFromWorkshop(ws); p.batch=(document.getElementById('editPreBatch')?.value||'').trim().toUpperCase(); p.plannedQty=Number(document.getElementById('editPreQty')?.value||0); p.actualQty=Number(document.getElementById('editPreActual')?.value||0); p.remark=(document.getElementById('editPreRemark')?.value||'').trim();
+      const oldDate=p.date, oldWorkshop=p.workshop; p.date=document.getElementById('editPreDate')?.value||p.date; p.workshop=ws; p.area=productionPlanAreaFromWorkshop(ws); p.planOrder=Number(document.getElementById('editPreOrder')?.value||getProductionPlanOrder(p)); p.batch=(document.getElementById('editPreBatch')?.value||'').trim().toUpperCase(); p.plannedQty=Number(document.getElementById('editPreQty')?.value||0); p.actualQty=Number(document.getElementById('editPreActual')?.value||0); p.remark=(document.getElementById('editPreRemark')?.value||'').trim();
       if(!p.batch || p.plannedQty<=0){alert('请填写批次和计划台数');return;}
-      p.updatedAt=new Date().toISOString(); p.updatedBy=currentUser?.name||currentUser?.email||''; pushProductionPlanHistory(p,'edit_plan',{before,after:{date:p.date,workshop:p.workshop,batch:p.batch,plannedQty:p.plannedQty,actualQty:p.actualQty,remark:p.remark}});
+      normalizeProductionPlanOrders(oldDate,oldWorkshop); normalizeProductionPlanOrders(p.date,p.workshop);
+      p.updatedAt=new Date().toISOString(); p.updatedBy=currentUser?.name||currentUser?.email||''; pushProductionPlanHistory(p,'edit_plan',{before,after:{date:p.date,workshop:p.workshop,batch:p.batch,planOrder:p.planOrder,plannedQty:p.plannedQty,actualQty:p.actualQty,remark:p.remark}});
       closeModal(); saveAndRenderContentKeepState();
     };
     window.deleteProductionPlan=function(id){if(!confirm('确认删除这条生产计划吗？'))return; productionPlans=productionPlans.filter(p=>String(p.id)!==String(id));saveAndRenderContentKeepState();};
@@ -5586,10 +5624,11 @@ let main=document.getElementById('mainContent');
     function v42DateLabel(d,i){ return `${fmtDate(d)} ${i===0?'今日':'明日'}`; }
     function v42BuildBatchGroups(area, date){
       const areaKey=area==='Welding'?'welding':'assembly';
-      const groups={};
+      const groups={}; const groupOrders={};
       productionPlans.filter(p=>p.date===date && ((String(p.area||'').toLowerCase()===area.toLowerCase()) || (p.planMode==='schedule' && productionPlanAreaFromWorkshop(p.workshop)===area))).forEach(p=>{
         const batch=String(p.batch||'').trim().toUpperCase(); if(!batch || v42IsSupplementBatch(batch)) return;
         groups[batch]=groups[batch]||new Set();
+        groupOrders[batch]=Math.min(groupOrders[batch]||999999, getProductionPlanOrder(p));
         if(p.seq) groups[batch].add(v42SeqNum(p.seq));
         if(p.planMode==='schedule'){ const rule=v42BatchRule(batch); (rule[area==='Welding'?'welding':'assembly']||[]).forEach(n=>groups[batch].add(n)); }
       });
@@ -5598,7 +5637,7 @@ let main=document.getElementById('mainContent');
         const rule=v42BatchRule(batch); const seqs=rule[areaKey]||[]; if(seqs.includes(seq)){ groups[batch]=groups[batch]||new Set(); groups[batch].add(seq); }
       });
       Object.keys(groups).forEach(batch=>{ const rule=v42BatchRule(batch); const arr=rule[areaKey]||[]; if(arr.length){ groups[batch]=new Set(arr); } });
-      return Object.entries(groups).sort((a,b)=>a[0].localeCompare(b[0],'zh-CN',{numeric:true})).map(([batch,set])=>({batch,seqs:[...set].filter(Boolean).sort((x,y)=>x-y)}));
+      return Object.entries(groups).sort((a,b)=>(groupOrders[a[0]]||999999)-(groupOrders[b[0]]||999999) || a[0].localeCompare(b[0],'zh-CN',{numeric:true})).map(([batch,set])=>({batch,planOrder:groupOrders[batch]||999999,seqs:[...set].filter(Boolean).sort((x,y)=>x-y)}));
     }
     function v42RenderBatchRow(group){
       let done=0, total=group.seqs.length||1;
@@ -5611,7 +5650,7 @@ let main=document.getElementById('mainContent');
         if(type==='SIDER') sider.push(chip); else cont.push(chip);
       });
       const pct=Math.round(done/total*100);
-      return `<tr><td><span class="v42-batch-name">${group.batch}</span><div style="font-size:10px;color:#cbd5e1;margin-top:3px;">${v42BatchRule(group.batch).model}</div></td><td><div class="v42-chip-wrap">${sider.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div class="v42-chip-wrap">${cont.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div style="font-weight:900;">${done}/${total}</div><div class="v42-progress"><span style="width:${pct}%"></span></div></td></tr>`;
+      return `<tr><td><span style="display:inline-block;background:rgba(255,255,255,.12);border-radius:999px;padding:2px 7px;margin-right:6px;font-size:10px;">#${group.planOrder===999999?'-':group.planOrder}</span><span class="v42-batch-name">${group.batch}</span><div style="font-size:10px;color:#cbd5e1;margin-top:3px;">${v42BatchRule(group.batch).model}</div></td><td><div class="v42-chip-wrap">${sider.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div class="v42-chip-wrap">${cont.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div style="font-weight:900;">${done}/${total}</div><div class="v42-progress"><span style="width:${pct}%"></span></div></td></tr>`;
     }
     function v42PanelKpis(area){
       const dates=v42GetBoardDates(); let rows=[]; dates.forEach(d=>v42BuildBatchGroups(area,d).forEach(g=>g.seqs.forEach(seq=>rows.push(v42TaskFor(g.batch,seq)))));
@@ -5637,7 +5676,7 @@ let main=document.getElementById('mainContent');
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.2</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.3</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
