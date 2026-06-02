@@ -95,7 +95,7 @@
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.2</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -221,7 +221,7 @@
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.2</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -4352,57 +4352,113 @@ let main=document.getElementById('mainContent');
     function getScheduleProductionPlans(date){
       return productionPlans.filter(p=>p.planMode==='schedule' && (!date || p.date===date));
     }
+    function productionPlanBaseDates(baseDate){
+      const base = baseDate || getTodayStr();
+      return [base, addDaysToDateStr(base,1), addDaysToDateStr(base,2)];
+    }
+    function productionPlanWorkshops(){
+      return [
+        {id:'welding', label:'BS 焊装'},
+        {id:'assembly_b', label:'GA 总装B线'},
+        {id:'assembly_p', label:'GA 总装P线'}
+      ];
+    }
+    function isProductionPlanConfirmed(p){
+      return !!p.confirmedAt;
+    }
+    function getProductionPlansForCell(date, workshop){
+      return getScheduleProductionPlans(date).filter(p => String(p.workshop||'')===String(workshop||''))
+        .sort((a,b)=>String(a.batch||'').localeCompare(String(b.batch||''),'zh-CN',{numeric:true}));
+    }
+    function getUnconfirmedProductionPlans(){
+      const today = getTodayStr();
+      return productionPlans.filter(p => p.planMode==='schedule' && p.date < today && !isProductionPlanConfirmed(p))
+        .sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')) || String(a.workshop||'').localeCompare(String(b.workshop||'')) || String(a.batch||'').localeCompare(String(b.batch||''),'zh-CN',{numeric:true}));
+    }
+    function getRequiredPlanMissingDates(baseDate){
+      const dates = productionPlanBaseDates(baseDate).slice(0,2);
+      return dates.filter(d => getScheduleProductionPlans(d).length===0);
+    }
     function renderProductionPlan(container){
-      let d=document.getElementById('prodPlanDate')?.value || getTodayStr();
-      let rows=getScheduleProductionPlans(d).sort((a,b)=>String(a.workshop||'').localeCompare(String(b.workshop||''),'zh-CN',{numeric:true}) || String(a.batch||'').localeCompare(String(b.batch||''),'zh-CN',{numeric:true}));
+      let baseDate=document.getElementById('prodPlanBaseDate')?.value || getTodayStr();
+      const dates=productionPlanBaseDates(baseDate);
+      const missing=getRequiredPlanMissingDates(baseDate);
+      const unconfirmed=getUnconfirmedProductionPlans();
       container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🗓️ 生产计划维护</span><button class="btn btn-primary" onclick="currentMenu='dashboard';renderSidebar();renderContent();">返回工作台</button></div>
-        <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:14px;">本模块分为两部分：① 预排产：维护今天、明天、后天计划；② 生产计划确认：维护实际完成数量。后续系统将根据实际完成情况滚动判断批次剩余生产量和到箱需求。</div>
-        <div class="search-bar"><input type="date" id="prodPlanDate" value="${d}" onchange="renderProductionPlan(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderProductionPlan(document.getElementById('mainContent'))">查询</button><button class="btn btn-success" onclick="prefillProductionPlanDates()">显示今日/明日/后日</button></div>
+        <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:14px;">本模块按照计划科排产表格式维护。预排产只显示三天：今天、明天、后天；其中今天和明天必须维护，后天可选。生产计划确认会显示所有历史未确认计划，并支持已确认计划修正。</div>
+        ${missing.length?`<div style="background:#fff7e6;border-left:4px solid #e6a23c;border-radius:8px;padding:10px 12px;margin-bottom:10px;color:#8a5a00;">⚠ 必填计划日期尚未维护：${missing.map(fmtDate).join('、')}</div>`:''}
+        ${unconfirmed.length?`<div style="background:#fef0f0;border-left:4px solid #f56c6c;border-radius:8px;padding:10px 12px;margin-bottom:10px;color:#9b1c1c;">⚠ 有 ${unconfirmed.length} 条历史生产计划未确认实际完成数量，请在下方“生产计划确认”处理。</div>`:''}
+        <div class="search-bar"><span>计划起始日期</span><input type="date" id="prodPlanBaseDate" value="${baseDate}" onchange="renderProductionPlan(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderProductionPlan(document.getElementById('mainContent'))">刷新</button><button class="btn btn-success" onclick="openAddProductionPlanModal('${baseDate}')">新增计划</button></div>
       </div>
-      <div class="card"><div class="card-header"><span class="card-title">① 预排产</span></div>
-        <div class="search-bar">
-          <input type="date" id="prePlanDate" value="${d}">
-          <select id="prePlanWorkshop"><option value="welding">焊装</option><option value="assembly_b">总装B线</option><option value="assembly_p">总装P线</option></select>
-          <input id="prePlanBatch" placeholder="批次号，如 BHC7016">
-          <input id="prePlanQty" type="number" min="0" placeholder="计划台数">
-          <input id="prePlanRemark" placeholder="备注，可选">
-          <button class="btn btn-success" onclick="addPreProductionPlan()">新增预排产</button>
-        </div>
-        <div style="background:#f8f9fc;border-radius:10px;padding:12px;margin-bottom:12px;">
+      <div class="card"><div class="card-header"><span class="card-title">① 预排产（三天滚动表）</span><span style="font-size:12px;color:#909399;">${fmtDate(dates[0])} - ${fmtDate(dates[2])}</span></div>
+        <div id="prePlanGrid"></div>
+        <div style="background:#f8f9fc;border-radius:10px;padding:12px;margin-top:12px;">
           <div style="font-size:13px;color:#606266;margin-bottom:8px;">支持从Excel粘贴，推荐列顺序：日期、车间、批次、计划台数、备注。车间可写：焊装、总装B线、总装P线。</div>
           <textarea id="prePlanPaste" class="form-control" style="height:80px" placeholder="2026-06-03\t焊装\tBHC7016\t60\n2026-06-03\t总装B线\tBHC7010\t60"></textarea>
           <button class="btn btn-primary" onclick="importPreProductionPlanPaste()">批量导入预排产</button>
         </div>
-        <div id="prePlanTable"></div>
       </div>
-      <div class="card"><div class="card-header"><span class="card-title">② 生产计划确认 / 实际完成数量</span></div>
-        <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:12px;">在这里确认当天每个批次实际完成数量。未完成数量会作为后续滚动计划和到箱需求分析的基础。</div>
+      <div class="card"><div class="card-header"><span class="card-title">② 生产计划确认 / 实际完成数量</span><span style="font-size:12px;color:#909399;">显示所有历史未确认计划</span></div>
+        <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:12px;">计划日期早于今天且未确认的记录都会显示。已确认计划仍可在“已维护计划明细”中编辑修正，系统会记录修改时间和修改人。</div>
         <div id="prodConfirmPlanTable"></div>
-      </div>`;
-      renderPrePlanTable(rows);
-      renderProductionActualConfirmTable(rows);
+      </div>
+      <div class="card"><div class="card-header"><span class="card-title">③ 已维护计划明细</span><span style="font-size:12px;color:#909399;">支持编辑已确认/未确认计划</span></div><div id="prePlanTable"></div></div>`;
+      renderProductionPlanGrid(baseDate);
+      renderProductionActualConfirmTable(unconfirmed);
+      const allRows=productionPlans.filter(p=>p.planMode==='schedule').sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')) || String(a.workshop||'').localeCompare(String(b.workshop||'')) || String(a.batch||'').localeCompare(String(b.batch||''),'zh-CN',{numeric:true}));
+      renderPrePlanTable(allRows);
+    }
+    function renderProductionPlanGrid(baseDate){
+      const dates=productionPlanBaseDates(baseDate);
+      const workshops=productionPlanWorkshops();
+      let html='<div class="table-wrapper"><table class="data-table" style="min-width:980px!important;table-layout:fixed!important;"><thead><tr><th style="width:130px;">Workshop</th>'+dates.map((d,i)=>`<th>${fmtDate(d)}<br><span style="font-size:11px;color:${i<2?'#f56c6c':'#909399'};">${i===0?'今天 必填':i===1?'明天 必填':'后天 可选'}</span></th>`).join('')+'</tr></thead><tbody>';
+      workshops.forEach(ws=>{
+        html+=`<tr><td style="font-weight:700;background:#f5f7fa;">${ws.label}</td>`;
+        dates.forEach((d,idx)=>{
+          const plans=getProductionPlansForCell(d,ws.id);
+          const emptyRequired = idx<2 && plans.length===0;
+          html+=`<td style="vertical-align:top;text-align:left!important;background:${emptyRequired?'#fff7e6':'#fff'};">`;
+          if(plans.length){
+            html+=plans.map(p=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;border:1px solid #e4e7ed;border-radius:8px;padding:6px 8px;margin-bottom:6px;background:#f8f9fc;">
+              <div style="min-width:0;"><b style="color:#2a5298;">${p.batch||'-'}</b><span style="margin-left:8px;color:#303133;">${Number(p.plannedQty||0)}</span><div style="font-size:11px;color:#909399;">实际 ${Number(p.actualQty||0)} ${isProductionPlanConfirmed(p)?'｜已确认':'｜未确认'}</div></div>
+              <button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button>
+            </div>`).join('');
+          }else{
+            html+=`<div style="color:${emptyRequired?'#e6a23c':'#c0c4cc'};font-size:12px;margin-bottom:8px;">${emptyRequired?'必填计划未维护':'可选未维护'}</div>`;
+          }
+          html+=`<button class="btn btn-sm btn-success" onclick="openAddProductionPlanModal('${d}','${ws.id}')">+ 新增</button></td>`;
+        });
+        html+='</tr>';
+      });
+      html+='</tbody></table></div>';
+      const el=document.getElementById('prePlanGrid'); if(el) el.innerHTML=html;
     }
     function renderPrePlanTable(rows){
-      if(rows.length===0){document.getElementById('prePlanTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无预排产计划</div></div>';return;}
-      renderTable('prePlanTable',['日期','车间','批次','车型/系列','计划台数','实际完成','剩余','备注','操作'],rows,(p)=>{
-        const planned=Number(p.plannedQty||0), actual=Number(p.actualQty||0), remain=Math.max(planned-actual,0);
-        let tr=document.createElement('tr');tr.innerHTML=`<td>${p.date}</td><td>${productionPlanWorkshopLabel(p.workshop)}</td><td><b>${p.batch||'-'}</b></td><td>${v42BatchRule(p.batch).model}</td><td>${planned}</td><td>${actual}</td><td>${remain}</td><td>${p.remark||'-'}</td><td><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan('${p.id}')">删除</button></td>`;return tr;
+      if(rows.length===0){document.getElementById('prePlanTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">暂无已维护生产计划</div></div>';return;}
+      renderTable('prePlanTable',['日期','车间','批次','车型/系列','计划台数','实际完成','差异','确认状态','备注','操作'],rows,(p)=>{
+        const planned=Number(p.plannedQty||0), actual=Number(p.actualQty||0), remain=planned-actual;
+        let status=isProductionPlanConfirmed(p)?'已确认':'未确认';
+        let tr=document.createElement('tr');tr.innerHTML=`<td>${p.date}</td><td>${productionPlanWorkshopLabel(p.workshop)}</td><td><b>${p.batch||'-'}</b></td><td>${v42BatchRule(p.batch).model}</td><td>${planned}</td><td>${actual}</td><td style="color:${remain===0?'#67c23a':remain>0?'#e6a23c':'#f56c6c'};font-weight:600;">${remain}</td><td>${status}</td><td>${p.remark||'-'}</td><td><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan('${p.id}')">删除</button></td>`;return tr;
       });
     }
     function renderProductionActualConfirmTable(rows){
-      if(rows.length===0){document.getElementById('prodConfirmPlanTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无可确认的生产计划</div></div>';return;}
-      renderTable('prodConfirmPlanTable',['日期','车间','批次','计划台数','实际完成数量','完成率','确认状态','操作'],rows,(p)=>{
-        const planned=Number(p.plannedQty||0), actual=Number(p.actualQty||0), pct=planned?Math.min(Math.round(actual/planned*100),100):0;
-        let status=actual>0?(actual>=planned?'已完成':'部分完成'):'未确认';
-        let tr=document.createElement('tr');tr.innerHTML=`<td>${p.date}</td><td>${productionPlanWorkshopLabel(p.workshop)}</td><td><b>${p.batch||'-'}</b></td><td>${planned}</td><td><input id="actual_${p.id}" type="number" min="0" value="${actual}" style="width:90px"></td><td>${pct}%</td><td>${status}</td><td><button class="btn btn-sm btn-success" onclick="saveProductionActual('${p.id}')">保存实际完成</button></td>`;return tr;
+      if(rows.length===0){document.getElementById('prodConfirmPlanTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center;color:#67c23a;">暂无历史未确认生产计划</div></div>';return;}
+      renderTable('prodConfirmPlanTable',['日期','车间','批次','计划台数','实际完成数量','差异','操作'],rows,(p)=>{
+        const planned=Number(p.plannedQty||0), actual=Number(p.actualQty||0);
+        let tr=document.createElement('tr');tr.innerHTML=`<td>${p.date}</td><td>${productionPlanWorkshopLabel(p.workshop)}</td><td><b>${p.batch||'-'}</b></td><td>${planned}</td><td><input id="actual_${p.id}" type="number" min="0" value="${actual}" style="width:90px"></td><td id="diff_${p.id}">${planned-actual}</td><td><button class="btn btn-sm btn-success" onclick="saveProductionActual('${p.id}')">确认实际完成</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑计划</button></td>`;return tr;
       });
     }
     function normalizeWorkshopText(v){
       const s=String(v||'').trim().toLowerCase();
-      if(s.includes('焊') || s.includes('weld')) return 'welding';
+      if(s.includes('焊') || s.includes('weld') || s==='bs') return 'welding';
       if(s.includes('p') || s.includes('非承载')) return 'assembly_p';
       return 'assembly_b';
     }
+    window.openAddProductionPlanModal=function(date,workshop){
+      document.getElementById('modalTitle').innerText='新增生产计划';
+      document.getElementById('modalBody').innerHTML=`<div class="form-group"><label>日期</label><input id="prePlanDate" class="form-control" type="date" value="${date||getTodayStr()}"></div><div class="form-group"><label>车间/产线</label><select id="prePlanWorkshop" class="form-control"><option value="welding" ${workshop==='welding'?'selected':''}>焊装 BS</option><option value="assembly_b" ${workshop==='assembly_b'?'selected':''}>总装B线 GA-B</option><option value="assembly_p" ${workshop==='assembly_p'?'selected':''}>总装P线 GA-P</option></select></div><div class="form-group"><label>批次</label><input id="prePlanBatch" class="form-control" placeholder="如 BHC7016"></div><div class="form-group"><label>计划台数</label><input id="prePlanQty" class="form-control" type="number" min="0" placeholder="计划数量"></div><div class="form-group"><label>备注</label><input id="prePlanRemark" class="form-control" placeholder="可选"></div><button class="btn btn-success" onclick="addPreProductionPlan()">保存新增</button>`;
+      openModal();
+    };
     window.addPreProductionPlan=function(){
       const date=document.getElementById('prePlanDate')?.value||getTodayStr();
       const workshop=document.getElementById('prePlanWorkshop')?.value||'welding';
@@ -4410,40 +4466,48 @@ let main=document.getElementById('mainContent');
       const plannedQty=Number(document.getElementById('prePlanQty')?.value||0);
       const remark=(document.getElementById('prePlanRemark')?.value||'').trim();
       if(!date || !batch || plannedQty<=0){alert('请填写日期、批次号和计划台数');return;}
-      productionPlans.push({id:String(Date.now()+Math.random()),planMode:'schedule',date,area:productionPlanAreaFromWorkshop(workshop),workshop,batch,plannedQty,actualQty:0,remark,createdAt:new Date().toISOString()});
-      saveAndRenderContentKeepState();
+      productionPlans.push({id:String(Date.now()+Math.random()),planMode:'schedule',date,area:productionPlanAreaFromWorkshop(workshop),workshop,batch,plannedQty,actualQty:0,remark,createdAt:new Date().toISOString(),createdBy:currentUser?.name||currentUser?.email||''});
+      closeModal(); saveAndRenderContentKeepState();
     };
     window.importPreProductionPlanPaste=function(){
       const text=document.getElementById('prePlanPaste')?.value||''; if(!text.trim()){alert('请先粘贴预排产内容');return;}
       let count=0;
       text.split(/\r?\n/).forEach((line,i)=>{let parts=line.split(/\t|,|;/).map(x=>x.trim()); if(parts.length<3) return; if(i===0 && /日期|date|批次|batch|车间/i.test(line)) return;
         let date,workshop,batch,plannedQty,remark='';
-        if(/^\d{4}-\d{1,2}-\d{1,2}/.test(parts[0])){[date,workshop,batch,plannedQty,remark]=parts;} else {date=document.getElementById('prodPlanDate')?.value||getTodayStr(); [workshop,batch,plannedQty,remark]=parts;}
-        if(date && workshop && batch && Number(plannedQty)>0){const ws=normalizeWorkshopText(workshop); productionPlans.push({id:String(Date.now()+Math.random()+count),planMode:'schedule',date,area:productionPlanAreaFromWorkshop(ws),workshop:ws,batch:String(batch).toUpperCase(),plannedQty:Number(plannedQty),actualQty:0,remark:remark||'',createdAt:new Date().toISOString()}); count++;}
+        if(/^\d{4}-\d{1,2}-\d{1,2}/.test(parts[0])){[date,workshop,batch,plannedQty,remark]=parts;} else {date=document.getElementById('prodPlanBaseDate')?.value||getTodayStr(); [workshop,batch,plannedQty,remark]=parts;}
+        if(date && workshop && batch && Number(plannedQty)>0){const ws=normalizeWorkshopText(workshop); productionPlans.push({id:String(Date.now()+Math.random()+count),planMode:'schedule',date:normalizeDateOnly(date),area:productionPlanAreaFromWorkshop(ws),workshop:ws,batch:String(batch).toUpperCase(),plannedQty:Number(plannedQty),actualQty:0,remark:remark||'',createdAt:new Date().toISOString(),createdBy:currentUser?.name||currentUser?.email||''}); count++;}
       });
       saveAndRenderContentKeepState(); alert(`已导入 ${count} 条预排产计划`);
     };
+    function pushProductionPlanHistory(p,action,extra){
+      if(!p) return; if(!Array.isArray(p.history)) p.history=[];
+      p.history.push(Object.assign({action,time:new Date().toISOString(),user:currentUser?.name||currentUser?.email||''}, extra||{}));
+    }
     window.saveProductionActual=function(id){
       const p=productionPlans.find(x=>String(x.id)===String(id)); if(!p)return;
+      const oldActual=Number(p.actualQty||0);
       const v=Number(document.getElementById('actual_'+id)?.value||0); if(v<0){alert('实际完成数量不能小于0');return;}
       p.actualQty=v; p.confirmedAt=new Date().toISOString(); p.confirmedBy=currentUser?.name||currentUser?.email||'';
+      pushProductionPlanHistory(p,'confirm_actual',{oldActual,newActual:v});
       saveAndRenderContentKeepState();
     };
     window.editPreProductionPlan=function(id){
       const p=productionPlans.find(x=>String(x.id)===String(id)); if(!p)return;
-      document.getElementById('modalTitle').innerText='编辑预排产';
-      document.getElementById('modalBody').innerHTML=`<div class="form-group"><label>日期</label><input id="editPreDate" class="form-control" type="date" value="${p.date||getTodayStr()}"></div><div class="form-group"><label>车间</label><select id="editPreWorkshop" class="form-control"><option value="welding" ${p.workshop==='welding'?'selected':''}>焊装</option><option value="assembly_b" ${p.workshop==='assembly_b'?'selected':''}>总装B线</option><option value="assembly_p" ${p.workshop==='assembly_p'?'selected':''}>总装P线</option></select></div><div class="form-group"><label>批次</label><input id="editPreBatch" class="form-control" value="${p.batch||''}"></div><div class="form-group"><label>计划台数</label><input id="editPreQty" class="form-control" type="number" min="0" value="${p.plannedQty||0}"></div><div class="form-group"><label>备注</label><input id="editPreRemark" class="form-control" value="${p.remark||''}"></div><button class="btn btn-success" onclick="savePreProductionPlanEdit('${p.id}')">保存</button>`;
+      document.getElementById('modalTitle').innerText=isProductionPlanConfirmed(p)?'编辑/修正生产计划':'编辑预排产';
+      document.getElementById('modalBody').innerHTML=`<div class="form-group"><label>日期</label><input id="editPreDate" class="form-control" type="date" value="${p.date||getTodayStr()}"></div><div class="form-group"><label>车间</label><select id="editPreWorkshop" class="form-control"><option value="welding" ${p.workshop==='welding'?'selected':''}>焊装 BS</option><option value="assembly_b" ${p.workshop==='assembly_b'?'selected':''}>总装B线 GA-B</option><option value="assembly_p" ${p.workshop==='assembly_p'?'selected':''}>总装P线 GA-P</option></select></div><div class="form-group"><label>批次</label><input id="editPreBatch" class="form-control" value="${p.batch||''}"></div><div class="form-group"><label>计划台数</label><input id="editPreQty" class="form-control" type="number" min="0" value="${p.plannedQty||0}"></div><div class="form-group"><label>实际完成数量</label><input id="editPreActual" class="form-control" type="number" min="0" value="${p.actualQty||0}"></div><div class="form-group"><label>备注</label><input id="editPreRemark" class="form-control" value="${p.remark||''}"></div><div style="font-size:12px;color:#909399;margin-bottom:10px;">已确认计划也可以修正，系统会记录修改时间和操作人。</div><button class="btn btn-success" onclick="savePreProductionPlanEdit('${p.id}')">保存</button>`;
       openModal();
     };
     window.savePreProductionPlanEdit=function(id){
       const p=productionPlans.find(x=>String(x.id)===String(id)); if(!p)return;
+      const before={date:p.date,workshop:p.workshop,batch:p.batch,plannedQty:p.plannedQty,actualQty:p.actualQty,remark:p.remark};
       const ws=document.getElementById('editPreWorkshop')?.value||'welding';
-      p.date=document.getElementById('editPreDate')?.value||p.date; p.workshop=ws; p.area=productionPlanAreaFromWorkshop(ws); p.batch=(document.getElementById('editPreBatch')?.value||'').trim().toUpperCase(); p.plannedQty=Number(document.getElementById('editPreQty')?.value||0); p.remark=(document.getElementById('editPreRemark')?.value||'').trim();
+      p.date=document.getElementById('editPreDate')?.value||p.date; p.workshop=ws; p.area=productionPlanAreaFromWorkshop(ws); p.batch=(document.getElementById('editPreBatch')?.value||'').trim().toUpperCase(); p.plannedQty=Number(document.getElementById('editPreQty')?.value||0); p.actualQty=Number(document.getElementById('editPreActual')?.value||0); p.remark=(document.getElementById('editPreRemark')?.value||'').trim();
       if(!p.batch || p.plannedQty<=0){alert('请填写批次和计划台数');return;}
+      p.updatedAt=new Date().toISOString(); p.updatedBy=currentUser?.name||currentUser?.email||''; pushProductionPlanHistory(p,'edit_plan',{before,after:{date:p.date,workshop:p.workshop,batch:p.batch,plannedQty:p.plannedQty,actualQty:p.actualQty,remark:p.remark}});
       closeModal(); saveAndRenderContentKeepState();
     };
     window.deleteProductionPlan=function(id){if(!confirm('确认删除这条生产计划吗？'))return; productionPlans=productionPlans.filter(p=>String(p.id)!==String(id));saveAndRenderContentKeepState();};
-    window.prefillProductionPlanDates=function(){alert('当前页面可通过日期选择今天、明天、后天维护计划；批量导入支持多日期一起粘贴。');};
+    window.prefillProductionPlanDates=function(){alert('预排产页面固定显示起始日期起连续3天：今天、明天、后天。');};
 
     function renderReceivingAndon(container){
       let d=document.getElementById('andonDate')?.value||getTodayStr();
@@ -5573,7 +5637,7 @@ let main=document.getElementById('mainContent');
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.2</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
