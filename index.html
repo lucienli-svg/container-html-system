@@ -3476,18 +3476,18 @@ let main=document.getElementById('mainContent');
       document.querySelectorAll('.date-tab').forEach(el=>{el.addEventListener('click',()=>{renderTransportTasksWithDate(container,el.dataset.date);});});
       setTimeout(()=>{let active=document.querySelector('.date-tab.active'); if(active) active.scrollIntoView({inline:'center',block:'nearest'});},0);
       if(filteredPickup.length>0){
-        renderTable('pendingPickupTable',['批次','集装箱号','提单号','计划到货时间','目的地','卸货口','实际提箱时间','状态','操作'],filteredPickup,(item)=>{
+        renderTable('pendingPickupTable',['批次','集装箱号','提单号','IRA号','计划到货时间','目的地','卸货口','实际提箱时间','状态','操作'],filteredPickup,(item)=>{
           let destClass=getDestClass(item.destination);
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${getTaskBlText(item)}</td><td>${fmtDateTime(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="date" id="pickupTime_${item.id}" class="form-control" style="width:125px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${getTaskBlText(item)}</td><td>${getIraList(item.containerId)||item.iraNo||'-'}</td><td>${fmtDateTime(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="date" id="pickupTime_${item.id}" class="form-control" style="width:125px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
           return tr;
         });
       }
       if(filteredTransit.length>0){
-        renderTable('inTransitTable',['批次','集装箱号','提单号','计划到货时间','目的地','卸货口','状态','操作'],filteredTransit,(item)=>{
+        renderTable('inTransitTable',['批次','集装箱号','提单号','IRA号','计划到货时间','目的地','卸货口','状态','操作'],filteredTransit,(item)=>{
           let destClass=getDestClass(item.to);
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${getTaskBlText(item)}</td><td>${fmtDateTime(item.estimatedArrival)}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge status-transport">运输中</span></td><td><button class="btn btn-sm btn-warning" onclick="editDynamicTask(${item.id})">编辑</button></td>`;
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${getTaskBlText(item)}</td><td>${getIraList(item.containerId)||item.iraNo||'-'}</td><td>${fmtDateTime(item.estimatedArrival)}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge status-transport">运输中</span></td><td><button class="btn btn-sm btn-warning" onclick="editDynamicTask(${item.id})">编辑</button></td>`;
           return tr;
         });
       }
@@ -3521,18 +3521,18 @@ let main=document.getElementById('mainContent');
       document.querySelectorAll('.date-tab').forEach(el=>{el.addEventListener('click',()=>{renderTransportTasksWithDate(container,el.dataset.date);});});
       setTimeout(()=>{let active=document.querySelector('.date-tab.active'); if(active) active.scrollIntoView({inline:'center',block:'nearest'});},0);
       if(filteredPickup.length>0){
-        renderTable('pendingPickupTable',['批次','集装箱号','提单号','计划到货时间','目的地','卸货口','实际提箱时间','状态','操作'],filteredPickup,(item)=>{
+        renderTable('pendingPickupTable',['批次','集装箱号','提单号','IRA号','计划到货时间','目的地','卸货口','实际提箱时间','状态','操作'],filteredPickup,(item)=>{
           let destClass=getDestClass(item.destination);
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${getTaskBlText(item)}</td><td>${fmtDateTime(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="date" id="pickupTime_${item.id}" class="form-control" style="width:125px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${getTaskBlText(item)}</td><td>${getIraList(item.containerId)||item.iraNo||'-'}</td><td>${fmtDateTime(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="date" id="pickupTime_${item.id}" class="form-control" style="width:125px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
           return tr;
         });
       }
       if(filteredTransit.length>0){
-        renderTable('inTransitTable',['批次','集装箱号','提单号','计划到货时间','目的地','卸货口','状态','操作'],filteredTransit,(item)=>{
+        renderTable('inTransitTable',['批次','集装箱号','提单号','IRA号','计划到货时间','目的地','卸货口','状态','操作'],filteredTransit,(item)=>{
           let destClass=getDestClass(item.to);
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${getTaskBlText(item)}</td><td>${fmtDateTime(item.estimatedArrival)}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge status-transport">运输中</span></td><td><button class="btn btn-sm btn-warning" onclick="editDynamicTask(${item.id})">编辑</button></td>`;
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${getTaskBlText(item)}</td><td>${getIraList(item.containerId)||item.iraNo||'-'}</td><td>${fmtDateTime(item.estimatedArrival)}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge status-transport">运输中</span></td><td><button class="btn btn-sm btn-warning" onclick="editDynamicTask(${item.id})">编辑</button></td>`;
           return tr;
         });
       }
@@ -3559,7 +3559,7 @@ let main=document.getElementById('mainContent');
       plan.status = 'confirmed';
       plan.actualPickupTime = actualTime;
       plan.needReconfirm = false;
-      transportTasks.push({id:nextIds.task++,containerId:plan.containerId,containerNo:plan.containerNo,batch:plan.batch,blNo:getTaskBlText(plan),from:'港口',to:plan.destination,carrier:plan.carrier,status:'in_transit',estimatedArrival:plan.arrivalDate,unloadingDock:plan.unloadingDock||''});
+      transportTasks.push({id:nextIds.task++,containerId:plan.containerId,containerNo:plan.containerNo,batch:plan.batch,blNo:getTaskBlText(plan),iraNo:getIraList(plan.containerId),from:'港口',to:plan.destination,carrier:plan.carrier,status:'in_transit',estimatedArrival:plan.arrivalDate,unloadingDock:plan.unloadingDock||''});
       saveData();
       // 保持当前运输任务日期页签，不再自动跳回第一个日期
       let activeTab = document.querySelector('.date-tab.active');
@@ -3576,10 +3576,10 @@ let main=document.getElementById('mainContent');
     window.exportTransportTasks = function(){
       let myPickupTasks = pickupPlans.filter(p => canViewCarrier(p.carrier) && p.status !== 'confirmed' && p.status !== 'cancelled' && !isProducedCompletedContainerId(p.containerId));
       let myTransitTasks = transportTasks.filter(t => canViewCarrier(t.carrier) && t.status === 'in_transit' && isTransportCompanyVisibleTask(t));
-      let wsData = [['类型','批次','集装箱号','提单号','计划到箱时间','目的地','状态']];
-      myPickupTasks.forEach(item=>{wsData.push(['待确认提箱',item.batch,item.containerNo,getTaskBlText(item),fmtDateTime(item.arrivalDate),item.destination||'-','待确认']);});
-      myTransitTasks.forEach(item=>{wsData.push(['运输中',item.batch,item.containerNo,getTaskBlText(item),fmtDateTime(item.estimatedArrival),item.to||'-','运输中']);});
-      if(wsData.length===1)wsData.push(['','','','','','','']);
+      let wsData = [['类型','批次','集装箱号','提单号','IRA号','计划到箱时间','目的地','状态']];
+      myPickupTasks.forEach(item=>{wsData.push(['待确认提箱',item.batch,item.containerNo,getTaskBlText(item),getIraList(item.containerId)||item.iraNo||'-',fmtDateTime(item.arrivalDate),item.destination||'-','待确认']);});
+      myTransitTasks.forEach(item=>{wsData.push(['运输中',item.batch,item.containerNo,getTaskBlText(item),getIraList(item.containerId)||item.iraNo||'-',fmtDateTime(item.estimatedArrival),item.to||'-','运输中']);});
+      if(wsData.length===1)wsData.push(['','','','','','','','']);
       let ws=XLSX.utils.aoa_to_sheet(wsData);
       let wb=XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb,ws,'运输任务');
