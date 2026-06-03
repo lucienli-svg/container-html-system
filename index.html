@@ -96,7 +96,7 @@
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.10</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.12</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -223,7 +223,7 @@
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.10</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.12</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -1724,6 +1724,13 @@
       }).filter(Boolean).join(',');
     }
 
+
+    function getTaskBlText(item){
+      if(!item) return '-';
+      const fromContainer = getContainerBlTextById(item.containerId);
+      return fromContainer || item.blNo || item.bl || item.billOfLading || '-';
+    }
+
     function toDateInput(dateStr) {
       if (!dateStr) return '';
       let s = String(dateStr);
@@ -2788,6 +2795,10 @@ let main=document.getElementById('mainContent');
     window.editDynamicTask = function(taskId){
       let task = transportTasks.find(t => t.id === taskId);
       if(!task){ alert('未找到运输任务'); return; }
+      if(hasFactoryExecutionStarted(task)){
+        alert('该计划已进入门岗/工厂收货执行环节，不允许在动态运输计划中重新编辑。请在工厂到货监控中继续操作。');
+        return;
+      }
       if(task.status === 'cancelled' || task.cancelled){ alert('已撤回计划不可编辑，可使用复制功能重新生成计划'); return; }
       let newEta = prompt('修改预计到达时间（必填，格式：YYYY-MM-DDTHH:mm 或 YYYY/MM/DD HH:mm）', task.estimatedArrival || '');
       if(newEta === null) return;
@@ -2822,8 +2833,8 @@ let main=document.getElementById('mainContent');
       let task = transportTasks.find(t => t.id === taskId);
       if(!task){ alert('未找到运输任务'); return; }
       if(task.status === 'cancelled' || task.cancelled){ alert('该计划已撤回'); return; }
-      if(task.gateArrivalTime || task.arrivalTime || task.unloadStartTime || task.unloadFinishTime || task.operationStatus === 'outside_parking' || task.operationStatus === 'inside_waiting' || task.operationStatus === 'unloading' || task.operationStatus === 'unloaded'){
-        alert('该集装箱已进入到厂/卸货执行环节，不允许撤回计划');
+      if(hasFactoryExecutionStarted(task)){
+        alert('该集装箱已进入门岗/工厂收货执行环节，不允许撤回计划');
         return;
       }
       const reasons = ['工厂计划变更','清关异常','运输异常','库存调整','供应商原因','其他'];
@@ -3465,18 +3476,18 @@ let main=document.getElementById('mainContent');
       document.querySelectorAll('.date-tab').forEach(el=>{el.addEventListener('click',()=>{renderTransportTasksWithDate(container,el.dataset.date);});});
       setTimeout(()=>{let active=document.querySelector('.date-tab.active'); if(active) active.scrollIntoView({inline:'center',block:'nearest'});},0);
       if(filteredPickup.length>0){
-        renderTable('pendingPickupTable',['批次','集装箱号','计划到货时间','目的地','卸货口','实际提箱时间','状态','操作'],filteredPickup,(item)=>{
+        renderTable('pendingPickupTable',['批次','集装箱号','提单号','计划到货时间','目的地','卸货口','实际提箱时间','状态','操作'],filteredPickup,(item)=>{
           let destClass=getDestClass(item.destination);
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="date" id="pickupTime_${item.id}" class="form-control" style="width:125px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${getTaskBlText(item)}</td><td>${fmtDateTime(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="date" id="pickupTime_${item.id}" class="form-control" style="width:125px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
           return tr;
         });
       }
       if(filteredTransit.length>0){
-        renderTable('inTransitTable',['批次','集装箱号','计划到货时间','目的地','卸货口','状态'],filteredTransit,(item)=>{
+        renderTable('inTransitTable',['批次','集装箱号','提单号','计划到货时间','目的地','卸货口','状态','操作'],filteredTransit,(item)=>{
           let destClass=getDestClass(item.to);
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.estimatedArrival)}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge status-transport">运输中</span></td><td><button class="btn btn-sm btn-warning" onclick="editDynamicTask(${item.id})">编辑</button></td>`;
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${getTaskBlText(item)}</td><td>${fmtDateTime(item.estimatedArrival)}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge status-transport">运输中</span></td><td><button class="btn btn-sm btn-warning" onclick="editDynamicTask(${item.id})">编辑</button></td>`;
           return tr;
         });
       }
@@ -3510,18 +3521,18 @@ let main=document.getElementById('mainContent');
       document.querySelectorAll('.date-tab').forEach(el=>{el.addEventListener('click',()=>{renderTransportTasksWithDate(container,el.dataset.date);});});
       setTimeout(()=>{let active=document.querySelector('.date-tab.active'); if(active) active.scrollIntoView({inline:'center',block:'nearest'});},0);
       if(filteredPickup.length>0){
-        renderTable('pendingPickupTable',['批次','集装箱号','计划到货时间','目的地','卸货口','实际提箱时间','状态','操作'],filteredPickup,(item)=>{
+        renderTable('pendingPickupTable',['批次','集装箱号','提单号','计划到货时间','目的地','卸货口','实际提箱时间','状态','操作'],filteredPickup,(item)=>{
           let destClass=getDestClass(item.destination);
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="date" id="pickupTime_${item.id}" class="form-control" style="width:125px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${getTaskBlText(item)}</td><td>${fmtDateTime(item.arrivalDate)}</td><td><span class="status-badge ${destClass}">${item.destination}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="date" id="pickupTime_${item.id}" class="form-control" style="width:125px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask(${item.id})">确认提箱</button></td>`;
           return tr;
         });
       }
       if(filteredTransit.length>0){
-        renderTable('inTransitTable',['批次','集装箱号','计划到货时间','目的地','卸货口','状态'],filteredTransit,(item)=>{
+        renderTable('inTransitTable',['批次','集装箱号','提单号','计划到货时间','目的地','卸货口','状态','操作'],filteredTransit,(item)=>{
           let destClass=getDestClass(item.to);
           let tr=document.createElement('tr');
-          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${fmtDateTime(item.estimatedArrival)}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge status-transport">运输中</span></td><td><button class="btn btn-sm btn-warning" onclick="editDynamicTask(${item.id})">编辑</button></td>`;
+          tr.innerHTML=`<td>${item.batch}</td><td>${item.containerNo}</td><td>${getTaskBlText(item)}</td><td>${fmtDateTime(item.estimatedArrival)}</td><td><span class="status-badge ${destClass}">${item.to}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge status-transport">运输中</span></td><td><button class="btn btn-sm btn-warning" onclick="editDynamicTask(${item.id})">编辑</button></td>`;
           return tr;
         });
       }
@@ -3548,7 +3559,7 @@ let main=document.getElementById('mainContent');
       plan.status = 'confirmed';
       plan.actualPickupTime = actualTime;
       plan.needReconfirm = false;
-      transportTasks.push({id:nextIds.task++,containerId:plan.containerId,containerNo:plan.containerNo,batch:plan.batch,from:'港口',to:plan.destination,carrier:plan.carrier,status:'in_transit',estimatedArrival:plan.arrivalDate,unloadingDock:plan.unloadingDock||''});
+      transportTasks.push({id:nextIds.task++,containerId:plan.containerId,containerNo:plan.containerNo,batch:plan.batch,blNo:getTaskBlText(plan),from:'港口',to:plan.destination,carrier:plan.carrier,status:'in_transit',estimatedArrival:plan.arrivalDate,unloadingDock:plan.unloadingDock||''});
       saveData();
       // 保持当前运输任务日期页签，不再自动跳回第一个日期
       let activeTab = document.querySelector('.date-tab.active');
@@ -3565,10 +3576,10 @@ let main=document.getElementById('mainContent');
     window.exportTransportTasks = function(){
       let myPickupTasks = pickupPlans.filter(p => canViewCarrier(p.carrier) && p.status !== 'confirmed' && p.status !== 'cancelled' && !isProducedCompletedContainerId(p.containerId));
       let myTransitTasks = transportTasks.filter(t => canViewCarrier(t.carrier) && t.status === 'in_transit' && isTransportCompanyVisibleTask(t));
-      let wsData = [['类型','批次','集装箱号','计划到箱时间','目的地','状态']];
-      myPickupTasks.forEach(item=>{wsData.push(['待确认提箱',item.batch,item.containerNo,fmtDateTime(item.arrivalDate),item.destination||'-','待确认']);});
-      myTransitTasks.forEach(item=>{wsData.push(['运输中',item.batch,item.containerNo,fmtDateTime(item.estimatedArrival),item.to||'-','运输中']);});
-      if(wsData.length===1)wsData.push(['','','','','','']);
+      let wsData = [['类型','批次','集装箱号','提单号','计划到箱时间','目的地','状态']];
+      myPickupTasks.forEach(item=>{wsData.push(['待确认提箱',item.batch,item.containerNo,getTaskBlText(item),fmtDateTime(item.arrivalDate),item.destination||'-','待确认']);});
+      myTransitTasks.forEach(item=>{wsData.push(['运输中',item.batch,item.containerNo,getTaskBlText(item),fmtDateTime(item.estimatedArrival),item.to||'-','运输中']);});
+      if(wsData.length===1)wsData.push(['','','','','','','']);
       let ws=XLSX.utils.aoa_to_sheet(wsData);
       let wb=XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb,ws,'运输任务');
@@ -3579,8 +3590,11 @@ let main=document.getElementById('mainContent');
 
     function isTaskVisibleForArrivalConfirm(task){
       if(!task) return false;
-      if(isAdminUser()) return true;
       const dest = task.to || task.destination || task.location || '';
+      // V42.12：目的地=工厂的计划统一走“工厂到货监控”状态机，
+      // 不再进入“到货确认”板块，避免重复确认或被旧逻辑直接判定为已完成卸货。
+      if(dest === '工厂') return false;
+      if(isAdminUser()) return true;
       return canViewLocation(dest);
     }
 
@@ -4178,7 +4192,9 @@ let main=document.getElementById('mainContent');
       let err = validateDynamicPlanFields(dest, eta, dock);
       if(err){ alert(err); return; }
       let cont=containers.find(c=>c.id===containerId);
-      transportTasks.push({id:nextIds.task++,containerId,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,from:fromLoc,to:dest,carrier,status:'in_transit',operationStatus:'not_arrived',estimatedArrival:eta,unloadingDock:dock,source:'dynamic',createdAt:new Date().toISOString(),publishedAt:new Date().toISOString()});
+      const activeSameFactory = transportTasks.some(t => t.containerId===containerId && t.to==='工厂' && !t.cancelled && t.status!=='completed' && !['unloaded','cancelled'].includes(t.operationStatus));
+      if(dest==='工厂' && activeSameFactory){ alert('该集装箱已有未完成的工厂到货计划，请先处理或撤回后再发布。'); return; }
+      transportTasks.push({id:nextIds.task++,containerId,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,from:fromLoc,to:dest,carrier,status:'in_transit',operationStatus:'not_arrived',estimatedArrival:eta,unloadingDock:dock,source:'dynamic',createdAt:new Date().toISOString(),publishedAt:new Date().toISOString(),gateArrivalTime:'',gateReleaseTime:'',waitingAreaTime:'',unloadStartTime:'',unloadFinishTime:''});
       saveAndRenderContentKeepState();
       alert(`动态运输计划已发布，目的地：${dest}`);
     };
@@ -4197,7 +4213,9 @@ let main=document.getElementById('mainContent');
         let err = validateDynamicPlanFields(dest, eta, dock);
         if(err){ alert(`${cont?.containerNo || id}：${err}`); return; }
         if(cont){
-          transportTasks.push({id:nextIds.task++,containerId:id,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,from:fromLoc,to:dest,carrier:'RG',status:'in_transit',operationStatus:'not_arrived',estimatedArrival:eta,unloadingDock:dock,source:'dynamic',createdAt:new Date().toISOString(),publishedAt:new Date().toISOString()});
+          const activeSameFactory = transportTasks.some(t => t.containerId===id && t.to==='工厂' && !t.cancelled && t.status!=='completed' && !['unloaded','cancelled'].includes(t.operationStatus));
+          if(dest==='工厂' && activeSameFactory){ alert(`${cont.containerNo}：已有未完成的工厂到货计划，请先处理或撤回后再发布。`); return; }
+          transportTasks.push({id:nextIds.task++,containerId:id,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,from:fromLoc,to:dest,carrier:'RG',status:'in_transit',operationStatus:'not_arrived',estimatedArrival:eta,unloadingDock:dock,source:'dynamic',createdAt:new Date().toISOString(),publishedAt:new Date().toISOString(),gateArrivalTime:'',gateReleaseTime:'',waitingAreaTime:'',unloadStartTime:'',unloadFinishTime:''});
           count++;
         }
       }
@@ -4220,12 +4238,29 @@ let main=document.getElementById('mainContent');
       };
       return map[status] || status || 'not_arrived';
     }
+    function sanitizeFactoryTaskState(t){
+      if(!t || t.to !== '工厂') return;
+      // V42.12：工厂收货状态必须由门岗/卸货口按钮逐步推进，不能由运输计划发布或旧到货确认自动完成。
+      const valid = ['not_arrived','outside_parking','inside_waiting','unloading','unloaded','cancelled'];
+      if(!valid.includes(t.operationStatus)) t.operationStatus = 'not_arrived';
+      // 防止旧数据/复制数据带入异常完成状态：没有完成时间不能算已完成卸货。
+      if(t.operationStatus === 'unloaded' && !t.unloadFinishTime) t.operationStatus = 'not_arrived';
+      if(t.operationStatus === 'unloading' && !t.unloadStartTime) t.operationStatus = 'inside_waiting';
+      if(t.operationStatus === 'inside_waiting' && !(t.waitingAreaTime || t.gateReleaseTime)) t.operationStatus = 'outside_parking';
+      if(t.operationStatus === 'outside_parking' && !t.gateArrivalTime) t.operationStatus = 'not_arrived';
+    }
+    function hasFactoryExecutionStarted(t){
+      if(!t || t.to !== '工厂') return false;
+      return !!(t.gateArrivalTime || t.gateReleaseTime || t.waitingAreaTime || t.unloadStartTime || t.unloadFinishTime || ['outside_parking','inside_waiting','unloading','unloaded'].includes(t.operationStatus));
+    }
     function getOpStatus(t){
-      if(t.operationStatus) return normalizeOpStatus(t.operationStatus);
-      if(t.unloadFinishTime) return 'unloaded';
-      if(t.unloadStartTime) return 'unloading';
-      if(t.waitingAreaTime || t.gateReleaseTime) return 'inside_waiting';
-      if(t.gateArrivalTime) return 'outside_parking';
+      if(t && t.to === '工厂') sanitizeFactoryTaskState(t);
+      if(t && t.operationStatus) return normalizeOpStatus(t.operationStatus);
+      // 仅兼容真正有手工执行时间的历史记录；新计划默认必须为未到工厂。
+      if(t && t.unloadFinishTime && (t.unloadStartTime || t.gateArrivalTime || t.waitingAreaTime)) return 'unloaded';
+      if(t && t.unloadStartTime) return 'unloading';
+      if(t && (t.waitingAreaTime || t.gateReleaseTime)) return 'inside_waiting';
+      if(t && t.gateArrivalTime) return 'outside_parking';
       return 'not_arrived';
     }
     function getOpStatusText(t){
@@ -4748,6 +4783,7 @@ let main=document.getElementById('mainContent');
       if(date){
         tasks = tasks.filter(t => getDatePart(t.estimatedArrival || t.plannedDate || '') === date || getDatePart(t.gateArrivalTime || '') === date || getDatePart(t.waitingAreaTime || '') === date || getDatePart(t.unloadStartTime || '') === date || getDatePart(t.unloadFinishTime || '') === date);
       }
+      tasks.forEach(t => sanitizeFactoryTaskState(t));
       tasks = tasks.filter(t => canViewDock(t.unloadingDock || ''));
       return tasks.sort((a,b)=> String(a.estimatedArrival||'').localeCompare(String(b.estimatedArrival||'')) || String(a.unloadingDock||'').localeCompare(String(b.unloadingDock||''),'zh-CN',{numeric:true}) || compareProductionSequence(a,b));
     }
@@ -5311,13 +5347,20 @@ let main=document.getElementById('mainContent');
       return getDaysDiff(cDate, pDate);
     }
 
+    function getArrivalToClearanceDays(arrivalDate, clearanceDate){
+      let aDate = normalizeDateOnly(arrivalDate ? getDatePart(arrivalDate) : '');
+      let cDate = normalizeDateOnly(clearanceDate);
+      if(!aDate || !cDate) return '-';
+      return getDaysDiff(aDate, cDate);
+    }
+
     function renderFeeReport(container){
       let currentDate = getTodayStr();
       let feeData = containers.map(c => {
         let fees = calculateFeesForContainer(c, currentDate);
         let clearanceCompleteDate = getContainerClearanceCompleteDate(c);
         let pickupDate = c.actualPickupTime ? getDatePart(c.actualPickupTime) : '';
-        return { ...c, clearanceCompleteDate, pickupDate, clearanceToPickupDays: getClearanceToPickupDays(clearanceCompleteDate, pickupDate), storageFee: fees.storageFee, normalStorageFee: fees.normalStorageFee, abnormalStorageFee: fees.abnormalStorageFee, storageDays: fees.storageDays, storageAbnormalDays: fees.storageAbnormalDays, demurrageFee: fees.demurrageFee };
+        return { ...c, clearanceCompleteDate, pickupDate, arrivalToClearanceDays: getArrivalToClearanceDays(c.eta, clearanceCompleteDate), clearanceToPickupDays: getClearanceToPickupDays(clearanceCompleteDate, pickupDate), storageFee: fees.storageFee, normalStorageFee: fees.normalStorageFee, abnormalStorageFee: fees.abnormalStorageFee, storageDays: fees.storageDays, storageAbnormalDays: fees.storageAbnormalDays, demurrageFee: fees.demurrageFee };
       });
       let totalNormalStorage = feeData.reduce((sum, c) => sum + c.normalStorageFee, 0);
       let totalAbnormalStorage = feeData.reduce((sum, c) => sum + c.abnormalStorageFee, 0);
@@ -5325,13 +5368,13 @@ let main=document.getElementById('mainContent');
       let totalDemurrage = feeData.reduce((sum, c) => sum + c.demurrageFee, 0);
       container.innerHTML = `<div class="card"><div class="card-header"><span class="card-title">📈 费用报表</span><div><button class="btn export-btn" onclick="exportFeeReport()">📥 导出Excel</button></div></div>
         <div class="stats-grid"><div class="stat-card"><div class="stat-number">R$ ${totalNormalStorage.toFixed(2)}</div><div class="stat-label">正常堆存费</div></div><div class="stat-card warning-card"><div class="stat-number warning-number">R$ ${totalAbnormalStorage.toFixed(2)}</div><div class="stat-label">异常堆存费</div></div><div class="stat-card"><div class="stat-number">R$ ${totalStorage.toFixed(2)}</div><div class="stat-label">堆存费合计</div></div><div class="stat-card"><div class="stat-number">$ ${totalDemurrage.toFixed(2)}</div><div class="stat-label">滞箱费总额</div></div></div>
-        <div class="fee-card"><div class="fee-row"><span class="fee-label">费用计算截止日期:</span><span class="fee-value">${fmtDate(currentDate)}</span></div><div class="fee-row"><span class="fee-label">说明:</span><span class="fee-label">堆存费计算至提箱日；新增“清关完成时间”和“清关完成→提箱间隔”，用于判断额外堆存主要由清关晚还是提箱晚造成。</span></div></div>
+        <div class="fee-card"><div class="fee-row"><span class="fee-label">费用计算截止日期:</span><span class="fee-value">${fmtDate(currentDate)}</span></div><div class="fee-row"><span class="fee-label">说明:</span><span class="fee-label">堆存费计算至提箱日；新增“清关完成时间”“到港→清关用时”和“清关完成→提箱间隔”，用于判断额外堆存主要由清关晚还是提箱晚造成。</span></div></div>
         <div id="feeTable"></div></div>`;
-      renderTable('feeTable',['批次','箱号','船公司','箱型','到港日期','清关完成时间','提箱日期','清关完成→提箱间隔(天)','还箱日期','堆存天数','正常堆存费(雷亚尔)','异常堆存费(雷亚尔)','堆存费合计(雷亚尔)','滞箱费(美元)'],feeData,(c)=>{
+      renderTable('feeTable',['批次','箱号','船公司','箱型','到港日期','清关完成时间','到港→清关用时(天)','提箱日期','清关完成→提箱间隔(天)','还箱日期','堆存天数','正常堆存费(雷亚尔)','异常堆存费(雷亚尔)','堆存费合计(雷亚尔)','滞箱费(美元)'],feeData,(c)=>{
         let returnRec = returnRecords.find(r => r.containerId === c.id && r.isReturnConfirmed);
         let returnDate = returnRec ? returnRec.returnDate : '-';
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td>${c.batch}</td><td>${c.containerNo}</td><td>${c.vessel}</td><td>${c.containerType||'-'}</td><td>${fmtDate(c.eta)}</td><td>${c.clearanceCompleteDate?fmtDate(c.clearanceCompleteDate):'-'}</td><td>${c.pickupDate?fmtDate(c.pickupDate):'-'}</td><td>${c.clearanceToPickupDays}</td><td>${fmtDate(returnDate)}</td><td>${c.storageDays}</td><td style="text-align:center;color:#67c23a;font-weight:600;">R$ ${c.normalStorageFee.toFixed(2)}</td><td style="text-align:center;color:#e6a23c;font-weight:600;">R$ ${c.abnormalStorageFee.toFixed(2)}</td><td style="text-align:center;color:#2a5298;font-weight:600;">R$ ${c.storageFee.toFixed(2)}</td><td style="text-align:center;color:#f56c6c;font-weight:600;">$ ${c.demurrageFee.toFixed(2)}</td>`;
+        tr.innerHTML=`<td>${c.batch}</td><td>${c.containerNo}</td><td>${c.vessel}</td><td>${c.containerType||'-'}</td><td>${fmtDate(c.eta)}</td><td>${c.clearanceCompleteDate?fmtDate(c.clearanceCompleteDate):'-'}</td><td>${c.arrivalToClearanceDays}</td><td>${c.pickupDate?fmtDate(c.pickupDate):'-'}</td><td>${c.clearanceToPickupDays}</td><td>${fmtDate(returnDate)}</td><td>${c.storageDays}</td><td style="text-align:center;color:#67c23a;font-weight:600;">R$ ${c.normalStorageFee.toFixed(2)}</td><td style="text-align:center;color:#e6a23c;font-weight:600;">R$ ${c.abnormalStorageFee.toFixed(2)}</td><td style="text-align:center;color:#2a5298;font-weight:600;">R$ ${c.storageFee.toFixed(2)}</td><td style="text-align:center;color:#f56c6c;font-weight:600;">$ ${c.demurrageFee.toFixed(2)}</td>`;
         return tr;
       });
     }
@@ -5343,7 +5386,7 @@ let main=document.getElementById('mainContent');
         let returnRec = returnRecords.find(r => r.containerId === c.id && r.isReturnConfirmed);
         let clearanceCompleteDate = getContainerClearanceCompleteDate(c);
         let pickupDate = c.actualPickupTime ? getDatePart(c.actualPickupTime) : '';
-        return { 批次: c.batch, 集装箱号: c.containerNo, 船公司: c.vessel, 箱型: c.containerType || '-', 到港日期: fmtDate(c.eta), 清关完成时间: clearanceCompleteDate ? fmtDate(clearanceCompleteDate) : '-', 提箱日期: pickupDate ? fmtDate(pickupDate) : '-', 清关完成到提箱间隔_天: getClearanceToPickupDays(clearanceCompleteDate, pickupDate), 还箱日期: returnRec ? fmtDate(returnRec.returnDate) : '-', 堆存天数: fees.storageDays, 正常堆存费_雷亚尔: fees.normalStorageFee.toFixed(2), 异常堆存费_雷亚尔: fees.abnormalStorageFee.toFixed(2), 堆存费合计_雷亚尔: fees.storageFee.toFixed(2), 滞箱费_美元: fees.demurrageFee.toFixed(2) };
+        return { 批次: c.batch, 集装箱号: c.containerNo, 船公司: c.vessel, 箱型: c.containerType || '-', 到港日期: fmtDate(c.eta), 清关完成时间: clearanceCompleteDate ? fmtDate(clearanceCompleteDate) : '-', 到港到清关完成用时_天: getArrivalToClearanceDays(c.eta, clearanceCompleteDate), 提箱日期: pickupDate ? fmtDate(pickupDate) : '-', 清关完成到提箱间隔_天: getClearanceToPickupDays(clearanceCompleteDate, pickupDate), 还箱日期: returnRec ? fmtDate(returnRec.returnDate) : '-', 堆存天数: fees.storageDays, 正常堆存费_雷亚尔: fees.normalStorageFee.toFixed(2), 异常堆存费_雷亚尔: fees.abnormalStorageFee.toFixed(2), 堆存费合计_雷亚尔: fees.storageFee.toFixed(2), 滞箱费_美元: fees.demurrageFee.toFixed(2) };
       });
       let ws = XLSX.utils.json_to_sheet(feeData);
       let wb = XLSX.utils.book_new();
@@ -5800,7 +5843,7 @@ let main=document.getElementById('mainContent');
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.10</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.12</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -6170,7 +6213,7 @@ let main=document.getElementById('mainContent');
     let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
     let dailyReport = getDailyOperationReport(getTodayStr());
     container.innerHTML = `
-      <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.10</div><div class="v42-hero-sub">物流运营工作台 + 生产保供看板｜费用报表增加清关完成时间｜${fmtDate(getTodayStr())}</div></div>
+      <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.12</div><div class="v42-hero-sub">物流运营工作台 + 生产保供看板｜费用报表增加清关用时｜${fmtDate(getTodayStr())}</div></div>
       <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">到厂进度由下方生产保供看板展示，本区保留费用、清关、提箱和库存核心指标</span></div>
       <div class="card">
         <div class="card-header"><span class="card-title">📅 每日运营报表</span><span style="font-size:12px;color:#909399;">统计日期：${fmtDate(getTodayStr())}</span></div>
