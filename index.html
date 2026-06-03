@@ -96,7 +96,7 @@
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.9</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.10</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -223,7 +223,7 @@
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.9</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.10</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -5291,11 +5291,33 @@ let main=document.getElementById('mainContent');
     };
     
     // 费用报表
+    function getContainerClearanceCompleteDate(c){
+      if(!c) return '';
+      let relatedBls = typeof getRelatedBlsByContainer === 'function' ? getRelatedBlsByContainer(c) : [];
+      if(relatedBls && relatedBls.length){
+        let allCleared = relatedBls.every(bl => bl && bl.isCleared);
+        if(!allCleared) return '';
+        let dates = relatedBls.map(bl => normalizeDateOnly(bl.clearanceDate)).filter(Boolean).sort();
+        return dates.length ? dates[dates.length - 1] : '';
+      }
+      // 兼容没有提单映射但基础数据中已存在清关日期的历史数据
+      return normalizeDateOnly(c.clearanceDate || c.customsClearanceDate || c.clearanceTime || '');
+    }
+
+    function getClearanceToPickupDays(clearanceDate, pickupTime){
+      let cDate = normalizeDateOnly(clearanceDate);
+      let pDate = normalizeDateOnly(pickupTime ? getDatePart(pickupTime) : '');
+      if(!cDate || !pDate) return '-';
+      return getDaysDiff(cDate, pDate);
+    }
+
     function renderFeeReport(container){
       let currentDate = getTodayStr();
       let feeData = containers.map(c => {
         let fees = calculateFeesForContainer(c, currentDate);
-        return { ...c, storageFee: fees.storageFee, normalStorageFee: fees.normalStorageFee, abnormalStorageFee: fees.abnormalStorageFee, storageDays: fees.storageDays, storageAbnormalDays: fees.storageAbnormalDays, demurrageFee: fees.demurrageFee };
+        let clearanceCompleteDate = getContainerClearanceCompleteDate(c);
+        let pickupDate = c.actualPickupTime ? getDatePart(c.actualPickupTime) : '';
+        return { ...c, clearanceCompleteDate, pickupDate, clearanceToPickupDays: getClearanceToPickupDays(clearanceCompleteDate, pickupDate), storageFee: fees.storageFee, normalStorageFee: fees.normalStorageFee, abnormalStorageFee: fees.abnormalStorageFee, storageDays: fees.storageDays, storageAbnormalDays: fees.storageAbnormalDays, demurrageFee: fees.demurrageFee };
       });
       let totalNormalStorage = feeData.reduce((sum, c) => sum + c.normalStorageFee, 0);
       let totalAbnormalStorage = feeData.reduce((sum, c) => sum + c.abnormalStorageFee, 0);
@@ -5303,13 +5325,13 @@ let main=document.getElementById('mainContent');
       let totalDemurrage = feeData.reduce((sum, c) => sum + c.demurrageFee, 0);
       container.innerHTML = `<div class="card"><div class="card-header"><span class="card-title">📈 费用报表</span><div><button class="btn export-btn" onclick="exportFeeReport()">📥 导出Excel</button></div></div>
         <div class="stats-grid"><div class="stat-card"><div class="stat-number">R$ ${totalNormalStorage.toFixed(2)}</div><div class="stat-label">正常堆存费</div></div><div class="stat-card warning-card"><div class="stat-number warning-number">R$ ${totalAbnormalStorage.toFixed(2)}</div><div class="stat-label">异常堆存费</div></div><div class="stat-card"><div class="stat-number">R$ ${totalStorage.toFixed(2)}</div><div class="stat-label">堆存费合计</div></div><div class="stat-card"><div class="stat-number">$ ${totalDemurrage.toFixed(2)}</div><div class="stat-label">滞箱费总额</div></div></div>
-        <div class="fee-card"><div class="fee-row"><span class="fee-label">费用计算截止日期:</span><span class="fee-value">${fmtDate(currentDate)}</span></div><div class="fee-row"><span class="fee-label">说明:</span><span class="fee-label">堆存费计算至提箱日，正常收费时长和异常日费按费率配置匹配；滞箱费计算至还箱日，未发生事件则以今日为截止</span></div></div>
+        <div class="fee-card"><div class="fee-row"><span class="fee-label">费用计算截止日期:</span><span class="fee-value">${fmtDate(currentDate)}</span></div><div class="fee-row"><span class="fee-label">说明:</span><span class="fee-label">堆存费计算至提箱日；新增“清关完成时间”和“清关完成→提箱间隔”，用于判断额外堆存主要由清关晚还是提箱晚造成。</span></div></div>
         <div id="feeTable"></div></div>`;
-      renderTable('feeTable',['批次','箱号','船公司','箱型','到港日期','提箱日期','还箱日期','堆存天数','正常堆存费(雷亚尔)','异常堆存费(雷亚尔)','堆存费合计(雷亚尔)','滞箱费(美元)'],feeData,(c)=>{
+      renderTable('feeTable',['批次','箱号','船公司','箱型','到港日期','清关完成时间','提箱日期','清关完成→提箱间隔(天)','还箱日期','堆存天数','正常堆存费(雷亚尔)','异常堆存费(雷亚尔)','堆存费合计(雷亚尔)','滞箱费(美元)'],feeData,(c)=>{
         let returnRec = returnRecords.find(r => r.containerId === c.id && r.isReturnConfirmed);
         let returnDate = returnRec ? returnRec.returnDate : '-';
         let tr=document.createElement('tr');
-        tr.innerHTML=`<td>${c.batch}</td><td>${c.containerNo}</td><td>${c.vessel}</td><td>${c.containerType||'-'}</td><td>${fmtDate(c.eta)}</td><td>${c.actualPickupTime?fmtDate(c.actualPickupTime.split('T')[0]):'-'}</td><td>${fmtDate(returnDate)}</td><td>${c.storageDays}</td><td style="text-align:center;color:#67c23a;font-weight:600;">R$ ${c.normalStorageFee.toFixed(2)}</td><td style="text-align:center;color:#e6a23c;font-weight:600;">R$ ${c.abnormalStorageFee.toFixed(2)}</td><td style="text-align:center;color:#2a5298;font-weight:600;">R$ ${c.storageFee.toFixed(2)}</td><td style="text-align:center;color:#f56c6c;font-weight:600;">$ ${c.demurrageFee.toFixed(2)}</td>`;
+        tr.innerHTML=`<td>${c.batch}</td><td>${c.containerNo}</td><td>${c.vessel}</td><td>${c.containerType||'-'}</td><td>${fmtDate(c.eta)}</td><td>${c.clearanceCompleteDate?fmtDate(c.clearanceCompleteDate):'-'}</td><td>${c.pickupDate?fmtDate(c.pickupDate):'-'}</td><td>${c.clearanceToPickupDays}</td><td>${fmtDate(returnDate)}</td><td>${c.storageDays}</td><td style="text-align:center;color:#67c23a;font-weight:600;">R$ ${c.normalStorageFee.toFixed(2)}</td><td style="text-align:center;color:#e6a23c;font-weight:600;">R$ ${c.abnormalStorageFee.toFixed(2)}</td><td style="text-align:center;color:#2a5298;font-weight:600;">R$ ${c.storageFee.toFixed(2)}</td><td style="text-align:center;color:#f56c6c;font-weight:600;">$ ${c.demurrageFee.toFixed(2)}</td>`;
         return tr;
       });
     }
@@ -5319,7 +5341,9 @@ let main=document.getElementById('mainContent');
       let feeData = containers.map(c => {
         let fees = calculateFeesForContainer(c, currentDate);
         let returnRec = returnRecords.find(r => r.containerId === c.id && r.isReturnConfirmed);
-        return { 批次: c.batch, 集装箱号: c.containerNo, 船公司: c.vessel, 箱型: c.containerType || '-', 到港日期: fmtDate(c.eta), 提箱日期: c.actualPickupTime ? fmtDate(c.actualPickupTime.split('T')[0]) : '-', 还箱日期: returnRec ? fmtDate(returnRec.returnDate) : '-', 堆存天数: fees.storageDays, 正常堆存费_雷亚尔: fees.normalStorageFee.toFixed(2), 异常堆存费_雷亚尔: fees.abnormalStorageFee.toFixed(2), 堆存费合计_雷亚尔: fees.storageFee.toFixed(2), 滞箱费_美元: fees.demurrageFee.toFixed(2) };
+        let clearanceCompleteDate = getContainerClearanceCompleteDate(c);
+        let pickupDate = c.actualPickupTime ? getDatePart(c.actualPickupTime) : '';
+        return { 批次: c.batch, 集装箱号: c.containerNo, 船公司: c.vessel, 箱型: c.containerType || '-', 到港日期: fmtDate(c.eta), 清关完成时间: clearanceCompleteDate ? fmtDate(clearanceCompleteDate) : '-', 提箱日期: pickupDate ? fmtDate(pickupDate) : '-', 清关完成到提箱间隔_天: getClearanceToPickupDays(clearanceCompleteDate, pickupDate), 还箱日期: returnRec ? fmtDate(returnRec.returnDate) : '-', 堆存天数: fees.storageDays, 正常堆存费_雷亚尔: fees.normalStorageFee.toFixed(2), 异常堆存费_雷亚尔: fees.abnormalStorageFee.toFixed(2), 堆存费合计_雷亚尔: fees.storageFee.toFixed(2), 滞箱费_美元: fees.demurrageFee.toFixed(2) };
       });
       let ws = XLSX.utils.json_to_sheet(feeData);
       let wb = XLSX.utils.book_new();
@@ -5776,7 +5800,7 @@ let main=document.getElementById('mainContent');
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.9</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.10</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -6146,7 +6170,7 @@ let main=document.getElementById('mainContent');
     let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
     let dailyReport = getDailyOperationReport(getTodayStr());
     container.innerHTML = `
-      <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.9</div><div class="v42-hero-sub">物流运营工作台 + 生产保供看板｜${fmtDate(getTodayStr())}</div></div>
+      <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.10</div><div class="v42-hero-sub">物流运营工作台 + 生产保供看板｜费用报表增加清关完成时间｜${fmtDate(getTodayStr())}</div></div>
       <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">到厂进度由下方生产保供看板展示，本区保留费用、清关、提箱和库存核心指标</span></div>
       <div class="card">
         <div class="card-header"><span class="card-title">📅 每日运营报表</span><span style="font-size:12px;color:#909399;">统计日期：${fmtDate(getTodayStr())}</span></div>
