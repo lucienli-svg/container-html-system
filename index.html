@@ -7513,5 +7513,100 @@ let main=document.getElementById('mainContent');
   })();
 </script>
 
+
+<script>
+  /* ==================== V42.26 工作台保供看板最终修复：只显示未来2个有效生产日 ====================
+     修复V42.25中看板仍显示休息日的问题：
+     1）不再使用旧的 today/tomorrow 自然日函数；
+     2）看板渲染函数内部直接调用最新工厂日历有效生产日函数；
+     3）自动跳过休息日/法定假日；工作日/特殊加班日才显示；
+     4）生产计划维护仍维持未来3个有效生产日。
+  */
+  (function(){
+    function v4226Today(){
+      return (typeof getTodayStr === 'function') ? getTodayStr() : new Date().toISOString().slice(0,10);
+    }
+    function v4226AddDays(dateStr, days){
+      if(typeof addDaysToDateStr === 'function') return addDaysToDateStr(dateStr, days);
+      const d = new Date(String(dateStr || v4226Today()) + 'T00:00:00');
+      d.setDate(d.getDate() + Number(days || 0));
+      return d.toISOString().slice(0,10);
+    }
+    function v4226IsEffectiveProductionDay(dateStr){
+      // 优先使用工厂日历判断。isFactoryWorkday 已包含：工作日/特殊加班=true，休息日/法定假日=false。
+      if(typeof isFactoryWorkday === 'function') return !!isFactoryWorkday(dateStr);
+      const d = new Date(String(dateStr || '') + 'T00:00:00');
+      if(isNaN(d.getTime())) return true;
+      const day = d.getDay();
+      return day !== 0 && day !== 6;
+    }
+    function v4226EffectiveProductionDays(baseDate, count){
+      const result = [];
+      let d = baseDate || v4226Today();
+      let guard = 0;
+      while(result.length < Number(count || 2) && guard < 120){
+        if(v4226IsEffectiveProductionDay(d)) result.push(d);
+        d = v4226AddDays(d, 1);
+        guard++;
+      }
+      return result;
+    }
+
+    window.v42GetBoardDates = function(){
+      return v4226EffectiveProductionDays(v4226Today(), 2);
+    };
+    try { v42GetBoardDates = window.v42GetBoardDates; } catch(e) {}
+
+    // 生产计划维护继续显示未来3个有效生产日。
+    window.productionPlanBaseDates = function(baseDate){
+      return v4226EffectiveProductionDays(baseDate || v4226Today(), 3);
+    };
+    try { productionPlanBaseDates = window.productionPlanBaseDates; } catch(e) {}
+
+    window.v42DateLabel = function(dateStr, index){
+      const typeLabel = (typeof getFactoryDayTypeLabel === 'function' && typeof getFactoryDayType === 'function')
+        ? getFactoryDayTypeLabel(getFactoryDayType(dateStr))
+        : '生产日';
+      const label = index === 0 ? '第1生产日' : (index === 1 ? '第2生产日' : `第${index+1}生产日`);
+      return `${typeof fmtDate === 'function' ? fmtDate(dateStr) : dateStr} ${label}｜${typeLabel}`;
+    };
+    try { v42DateLabel = window.v42DateLabel; } catch(e) {}
+
+    // 关键覆盖：旧版 v42RenderProductionPanel 内部写死 v429TodayTomorrow()，这里强制改为 window.v42GetBoardDates()。
+    window.v42RenderProductionPanel = function(area){
+      const dates = (typeof window.v42GetBoardDates === 'function') ? window.v42GetBoardDates() : v4226EffectiveProductionDays(v4226Today(), 2);
+      const cls = area === 'Welding' ? 'welding' : 'assembly';
+      const icon = area === 'Welding' ? '🔧' : '🚚';
+      return `<div class="v42-panel ${cls}">
+        <div class="v42-panel-head"><div class="v42-panel-name">${icon} ${String(area).toUpperCase()}</div><div style="font-size:12px;opacity:.75;">生产保供进度</div></div>
+        ${typeof v42PanelKpis === 'function' ? v42PanelKpis(area) : ''}
+        ${dates.map((d,i)=>{
+          const groups = (typeof window.v42BuildBatchGroups === 'function') ? window.v42BuildBatchGroups(area,d) : [];
+          return `<div class="v42-date-block"><div class="v42-date-title">📅 ${window.v42DateLabel(d,i)} <span style="margin-left:auto;font-size:11px;opacity:.7;">${groups.length} batches</span></div>${groups.length ? `<table class="v42-batch-table"><thead><tr><th>BATCH</th><th>SIDER</th><th>CONTAINER</th><th>完成率</th></tr></thead><tbody>${groups.map(g => typeof v42RenderBatchRow === 'function' ? v42RenderBatchRow(g) : '').join('')}</tbody></table>` : `<div style="padding:14px;opacity:.65;">暂无生产计划</div>`}</div>`;
+        }).join('')}
+        <div class="v42-legend"><span><i class="v42-dot" style="background:#16a34a"></i>已完成</span><span><i class="v42-dot" style="background:#2563eb"></i>厂内等待</span><span><i class="v42-dot" style="background:#eab308"></i>门口</span><span><i class="v42-dot" style="background:#0ea5e9"></i>卸货中</span><span><i class="v42-dot" style="background:#f97316"></i>运输中</span><span><i class="v42-dot" style="background:#dc2626"></i>未发运</span></div>
+      </div>`;
+    };
+    try { v42RenderProductionPanel = window.v42RenderProductionPanel; } catch(e) {}
+
+    window.v42RenderProductionBoard = function(){
+      return `<div class="v42-section-title"><h3>🏭 生产保供看板</h3><span class="v42-mini-note">显示未来2个有效生产日；自动跳过休息日和法定假日</span></div><div class="v42-board">${window.v42RenderProductionPanel('Welding')}${window.v42RenderProductionPanel('Assembly')}</div>`;
+    };
+    try { v42RenderProductionBoard = window.v42RenderProductionBoard; } catch(e) {}
+
+    // 工厂日历变化后，立即刷新工作台/生产计划维护，防止仍显示旧自然日。
+    const oldSetFactoryCalendarDay = window.setFactoryCalendarDay;
+    if(typeof oldSetFactoryCalendarDay === 'function'){
+      window.setFactoryCalendarDay = function(date, type, note){
+        const ret = oldSetFactoryCalendarDay(date, type, note);
+        try{
+          if(currentMenu === 'dashboard' || currentMenu === 'productionPlan') renderContent();
+        }catch(e){ console.warn('V42.26 calendar refresh skipped', e); }
+        return ret;
+      };
+    }
+  })();
+</script>
+
 </body>
 </html>
