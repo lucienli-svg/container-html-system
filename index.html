@@ -3559,7 +3559,7 @@ let main=document.getElementById('mainContent');
       plan.status = 'confirmed';
       plan.actualPickupTime = actualTime;
       plan.needReconfirm = false;
-      transportTasks.push({id:nextIds.task++,containerId:plan.containerId,containerNo:plan.containerNo,containerSeq:(cont?.containerSeq || plan.containerSeq || ''),batch:plan.batch,blNo:getTaskBlText(plan),iraNo:getIraList(plan.containerId),from:'港口',to:plan.destination,carrier:plan.carrier,status:'in_transit',operationStatus:plan.destination==='工厂'?'not_arrived':'',estimatedArrival:plan.arrivalDate,unloadingDock:plan.unloadingDock||'',source:'pickupPlan',createdAt:new Date().toISOString(),publishedAt:new Date().toISOString(),gateArrivalTime:'',gateReleaseTime:'',waitingAreaTime:'',unloadStartTime:'',unloadFinishTime:''});
+      transportTasks.push({id:nextIds.task++,containerId:plan.containerId,containerNo:plan.containerNo,batch:plan.batch,blNo:getTaskBlText(plan),iraNo:getIraList(plan.containerId),from:'港口',to:plan.destination,carrier:plan.carrier,status:'in_transit',estimatedArrival:plan.arrivalDate,unloadingDock:plan.unloadingDock||''});
       saveData();
       // 保持当前运输任务日期页签，不再自动跳回第一个日期
       let activeTab = document.querySelector('.date-tab.active');
@@ -4344,7 +4344,7 @@ let main=document.getElementById('mainContent');
       renderTable('operationDashTable',['计划到达','批次','集装箱号','卸货口','车牌','司机','电话','状态','厂外等待分钟','厂内等待分钟','卸货分钟'],tasks,(t)=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${fmtDateTime(t.estimatedArrival)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td>${t.driverPhone||'-'}</td><td>${getOpStatusText(t)}</td><td>${minutesBetween(t.gateArrivalTime,t.gateReleaseTime)}</td><td>${minutesBetween(t.waitingAreaTime,t.unloadStartTime)}</td><td>${minutesBetween(t.unloadStartTime,t.unloadFinishTime)}</td>`;return tr;});
     }
     window.exportFactoryOperationTasks=function(){
-      let rows=getFactoryOperationTasks('').map(t=>({批次:t.batch,序号:getTaskContainerSeqDisplay(t),集装箱号:t.containerNo,卸货口:t.unloadingDock,计划到达:fmtDateTime(t.estimatedArrival),车牌:t.truckPlate,司机:t.driverName,电话:t.driverPhone,门岗到达:fmtDateTime(t.gateArrivalTime),门岗放行:fmtDateTime(t.gateReleaseTime),等待区:t.waitingAreaTime,卸货开始:t.unloadStartTime,卸货完成:t.unloadFinishTime,状态:getOpStatusText(t)}));
+      let rows=getFactoryOperationTasks('').map(t=>({批次:t.batch,集装箱号:t.containerNo,卸货口:t.unloadingDock,计划到达:fmtDateTime(t.estimatedArrival),车牌:t.truckPlate,司机:t.driverName,电话:t.driverPhone,门岗到达:fmtDateTime(t.gateArrivalTime),门岗放行:fmtDateTime(t.gateReleaseTime),等待区:t.waitingAreaTime,卸货开始:t.unloadStartTime,卸货完成:t.unloadFinishTime,状态:getOpStatusText(t)}));
       if(typeof XLSX==='undefined'){alert('XLSX组件未加载');return;} let ws=XLSX.utils.json_to_sheet(rows); let wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Operation'); XLSX.writeFile(wb,`factory_operation_${getTodayStr()}.xlsx`);
     };
 
@@ -4778,34 +4778,12 @@ let main=document.getElementById('mainContent');
         unloaded:'已完成卸货'
       }[st] || '未到工厂';
     }
-    function getTaskContainerMaster(t){
-      if(!t) return null;
-      return containers.find(c =>
-        (t.containerId && c.id === t.containerId) ||
-        (t.containerNo && String(c.containerNo||'').trim().toUpperCase() === String(t.containerNo||'').trim().toUpperCase())
-      ) || null;
-    }
-    function getTaskContainerSeqDisplay(t){
-      if(!t) return '-';
-      if(t.containerSeq !== undefined && t.containerSeq !== null && String(t.containerSeq).trim() !== '') return t.containerSeq;
-      const c = getTaskContainerMaster(t);
-      if(c && c.containerSeq !== undefined && c.containerSeq !== null && String(c.containerSeq).trim() !== '') return c.containerSeq;
-      return '-';
-    }
-    function syncTaskContainerSeqFromMaster(t){
-      if(!t) return t;
-      if(!(t.containerSeq !== undefined && t.containerSeq !== null && String(t.containerSeq).trim() !== '')){
-        const c = getTaskContainerMaster(t);
-        if(c && c.containerSeq !== undefined && c.containerSeq !== null && String(c.containerSeq).trim() !== '') t.containerSeq = c.containerSeq;
-      }
-      return t;
-    }
     function getFactoryReceivingTasksV41(date){
       let tasks = transportTasks.filter(t => t && t.to === '工厂' && isOperationalVisibleTask(t) && !t.cancelled && t.status !== 'completed');
       if(date){
         tasks = tasks.filter(t => getDatePart(t.estimatedArrival || t.plannedDate || '') === date || getDatePart(t.gateArrivalTime || '') === date || getDatePart(t.waitingAreaTime || '') === date || getDatePart(t.unloadStartTime || '') === date || getDatePart(t.unloadFinishTime || '') === date);
       }
-      tasks.forEach(t => { syncTaskContainerSeqFromMaster(t); sanitizeFactoryTaskState(t); });
+      tasks.forEach(t => sanitizeFactoryTaskState(t));
       tasks = tasks.filter(t => canViewDock(t.unloadingDock || ''));
       return tasks.sort((a,b)=> String(a.estimatedArrival||'').localeCompare(String(b.estimatedArrival||'')) || String(a.unloadingDock||'').localeCompare(String(b.unloadingDock||''),'zh-CN',{numeric:true}) || compareProductionSequence(a,b));
     }
@@ -4875,7 +4853,7 @@ let main=document.getElementById('mainContent');
       renderTable('factoryGateSection',['计划到达','序号','批次','集装箱号','卸货口','车牌','司机','电话','门口到达','状态','操作'],list,(t)=>{
         let st=getFactoryReceivingStatus(t); let tr=document.createElement('tr');
         const disabled = canOperateGate() ? '' : 'disabled';
-        tr.innerHTML=`<td>${fmtDateTime(t.estimatedArrival)}</td><td>${getTaskContainerSeqDisplay(t)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td>
+        tr.innerHTML=`<td>${fmtDateTime(t.estimatedArrival)}</td><td>${t.containerSeq||'-'}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td>
           <td><input id="gatePlate_${t.id}" class="form-control" value="${t.truckPlate||''}" placeholder="车牌" style="width:95px" ${disabled}></td>
           <td><input id="gateDriver_${t.id}" class="form-control" value="${t.driverName||''}" placeholder="司机" style="width:90px" ${disabled}></td>
           <td><input id="gatePhone_${t.id}" class="form-control" value="${t.driverPhone||''}" placeholder="电话" style="width:105px" ${disabled}></td>
@@ -4888,7 +4866,7 @@ let main=document.getElementById('mainContent');
       const list = rows.filter(t => getFactoryReceivingStatus(t)==='inside_waiting');
       if(!document.getElementById('factoryWaitingSection')) return;
       if(list.length===0){document.getElementById('factoryWaitingSection').innerHTML='<div class="table-wrapper"><div style="padding:16px;text-align:center">暂无工厂内等待集装箱</div></div>'; return;}
-      renderTable('factoryWaitingSection',['进入工厂时间','等待分钟','序号','批次','集装箱号','卸货口','车牌','司机','电话'],list,(t)=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${fmtDateTime(t.waitingAreaTime || t.gateReleaseTime)}</td><td>${minutesBetween(t.waitingAreaTime || t.gateReleaseTime,nowLocalInput())}</td><td>${getTaskContainerSeqDisplay(t)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td>${t.driverPhone||'-'}</td>`;return tr;});
+      renderTable('factoryWaitingSection',['进入工厂时间','等待分钟','序号','批次','集装箱号','卸货口','车牌','司机','电话'],list,(t)=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${fmtDateTime(t.waitingAreaTime || t.gateReleaseTime)}</td><td>${minutesBetween(t.waitingAreaTime || t.gateReleaseTime,nowLocalInput())}</td><td>${t.containerSeq||'-'}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td>${t.driverPhone||'-'}</td>`;return tr;});
     }
     function renderFactoryDockSection(rows){
       const list = rows.filter(t => ['inside_waiting','unloading','unloaded'].includes(getFactoryReceivingStatus(t)));
@@ -4896,7 +4874,7 @@ let main=document.getElementById('mainContent');
       if(list.length===0){document.getElementById('factoryDockSection').innerHTML='<div class="table-wrapper"><div style="padding:16px;text-align:center">暂无卸货口收货数据</div></div>'; return;}
       renderTable('factoryDockSection',['卸货口','状态','序号','批次','集装箱号','车牌','进厂时间','开始卸货','完成掏箱','操作'],list,(t)=>{
         let tr=document.createElement('tr'); let st=getFactoryReceivingStatus(t); const dock=t.unloadingDock||''; const disabled=canOperateDock(dock)?'':'disabled';
-        tr.innerHTML=`<td>${dock||'-'}</td><td>${renderStatusBadgeV41(st)}</td><td>${getTaskContainerSeqDisplay(t)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime||t.gateReleaseTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})" ${disabled}>确认到达卸货口/开始卸货</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading(${t.id})" ${disabled}>确认掏箱完成</button>`:'-'}</td>`;
+        tr.innerHTML=`<td>${dock||'-'}</td><td>${renderStatusBadgeV41(st)}</td><td>${t.containerSeq||'-'}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime||t.gateReleaseTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})" ${disabled}>确认到达卸货口/开始卸货</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading(${t.id})" ${disabled}>确认掏箱完成</button>`:'-'}</td>`;
         return tr;
       });
     }
