@@ -206,7 +206,6 @@
     if(el) el.innerHTML = html;
   };
 
-
 </script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">
 
@@ -410,7 +409,6 @@
     if(el) el.innerHTML = html;
   };
 
-
 </script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -498,8 +496,6 @@
     .empty-section { display: none; }
     .status-badge { text-align: center; min-width: 56px; }
 
-
-
     /* ==================== 固定顶部操作区（专业系统风格） ==================== */
     .navbar { position: sticky; top: 0; z-index: 1200; }
     /* 仅固定当前页面第一个业务卡片的标题栏和查询栏，避免多个卡片互相覆盖 */
@@ -529,14 +525,12 @@
       .main-content > .card:first-child > .search-bar { top: 116px; }
     }
 
-
     .transport-date-scroll { display:flex; gap:10px; margin-bottom:20px; overflow-x:auto; overflow-y:hidden; white-space:nowrap; padding:8px 4px 14px; scroll-behavior:smooth; border-bottom:1px solid #e4e7ed; }
     .transport-date-scroll::-webkit-scrollbar { height:8px; }
     .transport-date-scroll::-webkit-scrollbar-thumb { background:#c0c4cc; border-radius:8px; }
     .transport-date-scroll::-webkit-scrollbar-track { background:#f0f2f5; border-radius:8px; }
     .date-tab { flex:0 0 auto; min-width:126px; text-align:center; user-select:none; }
     .date-tab.active { box-shadow:0 4px 10px rgba(42,82,152,.25); }
-
 
     /* ==================== V14：表格字段栏置顶 + 运输任务日期页签显示修复 ==================== */
     /* 只对带查询栏的业务页面固定表格字段栏，避免影响运输任务日期页签 */
@@ -579,7 +573,6 @@
       .main-content > .card:first-child:has(> .search-bar) .data-table thead th { top: 180px; }
     }
 
-
     /* ==================== V16：修复表头遮挡与错位 ====================
        说明：表头不再按页面坐标固定，而是在表格容器内部固定，
        避免滚动时表头压到数据中间或被查询栏遮挡。 */
@@ -612,7 +605,6 @@
     .main-content > .card:first-child > .search-bar {
       margin-bottom: 10px;
     }
-
 
     /* ==================== V17：修复固定区域压字/遮挡 ====================
        核心思路：
@@ -723,7 +715,6 @@
       overflow: auto !important;
     }
 
-
     /* ==================== V19：14寸笔记本紧凑布局优化 ====================
        目标：减少列间距和无效空白，在 1366~1440 宽度屏幕下尽量展示完整业务信息。 */
     .sidebar { width: 220px !important; }
@@ -803,7 +794,6 @@
       #publishedPlans .data-table { min-width: 990px !important; }
     }
 
-
     /* ==================== V20：运输任务横向列宽专项优化 ====================
        目标：14寸笔记本 100% 缩放下，运输任务页面尽量完整显示，无需缩放到90%。 */
     #pendingPickupTable .data-table,
@@ -881,8 +871,6 @@
         padding-right: 3px !important;
       }
     }
-
-
 
     /* ==================== V23：动态运输计划专项优化 ====================
        目标：默认RG到工厂、工厂卸货口必填，并压缩横向列宽，适配14寸笔记本。 */
@@ -982,7 +970,6 @@
     .attachment-meta { flex:1; font-size:12px; line-height:1.6; color:#606266; min-width:0; }
     .attachment-name { font-weight:600; color:#303133; word-break:break-all; }
     @media(max-width:768px){ .attachment-card{display:block;} .attachment-thumb{max-width:100%; width:100%; height:150px; margin-bottom:8px;} .attachment-actions{justify-content:flex-start;} }
-
 
     /* ==================== V40.2 Andon顺序看板 ==================== */
     .andon-board { background:#0f172a; color:#e5e7eb; border-radius:16px; padding:18px; overflow-x:auto; }
@@ -1100,7 +1087,6 @@
     .prod-empty-cell.required { color:#b26b00; background:#fffaf0; border-color:#f3d19e; }
     @media(max-width:768px){ .prod-plan-summary-grid{grid-template-columns:1fr!important;} .prod-plan-sheet{min-width:980px!important;} .prod-plan-item{grid-template-columns:1fr;} .prod-plan-actions{justify-content:flex-start;} }
 
-
     /* ==================== V42.22 工厂日历 ==================== */
     .factory-calendar-toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; background:#f5f7fa; border:1px solid #ebeef5; border-radius:12px; padding:12px; margin-bottom:14px; }
     .factory-calendar-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:14px; }
@@ -1130,7 +1116,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V40.2 Cloud：Andon收货看板 + 生产顺序控制 + 门岗车辆信息维护。
+        V42.25 Slim：移除旧工厂到货监控入口，保留门岗登记与卸货口收货核心流程。
       </div>
       <button class="login-btn" onclick="loginWithGoogle()" style="width:100%;margin-bottom:14px;">使用 Google 登录</button>
 
@@ -1361,7 +1347,6 @@
       if(error) alert('Google登录失败：' + error.message);
     };
 
-
     function getLoginEmailPassword(){
       const email = document.getElementById('loginEmail')?.value.trim().toLowerCase();
       const password = document.getElementById('loginPassword')?.value || '';
@@ -1403,7 +1388,6 @@
       if(error){ alert('发送邮箱验证码/登录链接失败：' + error.message); return; }
       alert('已发送邮箱验证码/登录链接，请到邮箱中打开链接完成登录。');
     };
-
 
     async function logoutCloud(){
       const sb = initSupabaseClient();
@@ -1485,7 +1469,6 @@
       return true;
     }
 
-
     function showRealtimeSyncHint(text){
       let el = document.getElementById('realtimeSyncHint');
       if(!el){
@@ -1499,7 +1482,6 @@
       }
       el.innerText = text;
     }
-
 
     function captureCurrentUiState(){
       const state = {
@@ -1606,7 +1588,6 @@
       }, true);
     }
 
-
     async function pullCloudStateAndRefresh(reason){
       const sb = initSupabaseClient();
       if(!sb || isCloudSaving) return;
@@ -1707,7 +1688,6 @@
       a.click();
     };
 
-
     // ==================== 用户配置 ====================
     const users = {
       'dinggou':{password:'123456',role:'订购科',name:'张经理'},
@@ -1730,7 +1710,6 @@
       { id:'customs', name:'清关维护', icon:'🛃', roles:['订购科','关务'] },
       { id:'pickupPlan', name:'提箱计划', icon:'🚚', roles:['订购科'] },
       { id:'transportTasks', name:'运输任务', icon:'🚛', roles:['运输公司RG','运输公司JSL'] },
-      { id:'factoryReceiving', name:'工厂到货监控', icon:'🏭', roles:['订购科','工厂管理员','门卫','卸货员','运输公司RG','运输公司JSL'] },
       { id:'gateMonitoring', name:'门岗登记', icon:'🚪', roles:['订购科','工厂管理员','门卫'] },
       { id:'dockMonitoring', name:'卸货口收货', icon:'📦', roles:['订购科','工厂管理员','卸货员'] },
       { id:'locationConfirm', name:'到货确认', icon:'✅', roles:['RG堆场管理员','Rio Claro管理员','IRA库房管理员','工厂管理员'] },
@@ -1748,7 +1727,7 @@
       {id:'dashboard', name:'工作台'}, {id:'productionPlan', name:'生产计划维护'}, {id:'factoryCalendar', name:'工厂日历'}, {id:'containers', name:'基础数据'},
       {id:'blIra', name:'提单/IRA管理'}, {id:'customs', name:'清关维护'},
       {id:'pickupPlan', name:'提箱计划'}, {id:'dynamicPlan', name:'动态运输计划'},
-      {id:'transportTasks', name:'运输任务'}, {id:'factoryReceiving', name:'工厂到货监控'},
+      {id:'transportTasks', name:'运输任务'},
       {id:'gateMonitoring', name:'门岗登记'}, {id:'dockMonitoring', name:'卸货口收货'},
       {id:'returnConfirm', name:'还箱确认'},
       {id:'locationConfirm', name:'到货确认'}, {id:'locationStock', name:'库存看板'},
@@ -1871,7 +1850,6 @@
       }
     }
 
-
     function fmtDateTime(value) {
       if (!value) return '-';
       let s = String(value).trim();
@@ -1903,7 +1881,6 @@
         return m.blNo || '';
       }).filter(Boolean).join(',');
     }
-
 
     function getTaskBlText(item){
       if(!item) return '-';
@@ -2197,7 +2174,6 @@ function getContainerLocation(cid){
       });
     }
 
-
     window.clearLargeProofData = function(){
       let count = 0;
       returnRecords.forEach(r => {
@@ -2384,11 +2360,11 @@ let main=document.getElementById('mainContent');
         case'customs':renderCustoms(main);break;
         case'pickupPlan':renderPickupPlan(main);break;
         case'transportTasks':renderTransportTasks(main);break;
-        case'factoryReceiving':renderFactoryReceiving(main);break;
+        case'factoryReceiving': currentMenu='gateMonitoring'; renderFactoryGateOnly(main); break;
         case'gateMonitoring':renderFactoryGateOnly(main);break;
-        case'waitingArea':renderFactoryReceiving(main);break;
+        case'waitingArea': currentMenu='gateMonitoring'; renderFactoryGateOnly(main); break;
         case'dockMonitoring':renderFactoryDockOnly(main);break;
-        case'andonCenter':renderAndonCenter(main);break;
+        case'andonCenter': currentMenu='dashboard'; renderDashboard(main); break;
         case'locationConfirm':renderLocationConfirm(main);break;
         case'returnConfirm':renderReturnConfirm(main);break;
         case'dynamicPlan':renderDynamicPlan(main);break;
@@ -2520,7 +2496,6 @@ let main=document.getElementById('mainContent');
         clearedPendingPickupNormal
       };
     }
-
 
     function getRelatedBlsByContainer(c){
       let blNos = containerBlMap.filter(m => m.containerId === c.id).map(m => m.blNo);
@@ -3797,8 +3772,6 @@ let main=document.getElementById('mainContent');
       return canViewLocation(dest);
     }
 
-
-
     function getTaskContainerSeq(task){
       if(!task) return '';
       if(task.containerSeq !== undefined && task.containerSeq !== null && String(task.containerSeq).trim() !== '') return String(task.containerSeq).trim();
@@ -4422,7 +4395,6 @@ let main=document.getElementById('mainContent');
       else alert('请填写完整信息');
     };
 
-
     // ==================== V40.1 Operation Control Tower：集装箱计划 + 门岗车辆信息 + 五状态执行流 ====================
     function getFactoryOperationTasks(date){
       let tasks = transportTasks.filter(t => t && t.to === '工厂' && isOperationalVisibleTask(t) && t.status !== 'completed');
@@ -4547,8 +4519,6 @@ let main=document.getElementById('mainContent');
       if(typeof XLSX==='undefined'){alert('XLSX组件未加载');return;} let ws=XLSX.utils.json_to_sheet(rows); let wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Operation'); XLSX.writeFile(wb,`factory_operation_${getTodayStr()}.xlsx`);
     };
 
-
-
     // ==================== V40.2 Andon顺序控制增强版 ====================
     function getPlanDateFromTask(t){ return getDatePart(t.estimatedArrival || t.plannedDate || t.gateArrivalTime || t.unloadStartTime || t.unloadFinishTime || ''); }
     function getProductionPlanForTask(t){
@@ -4604,8 +4574,6 @@ let main=document.getElementById('mainContent');
       let existingNos=new Set(tasks.map(t=>String(t.containerNo||'').trim().toUpperCase()));
       return productionPlans.filter(p => p.date===date && (!dock || p.dock===dock) && parseInt(p.seq||999999)<doneMax && !existingNos.has(String(p.containerNo||'').trim().toUpperCase()));
     }
-
-
 
     // ==================== V42.22 工厂日历 / 工作日判断 ====================
     function getFactoryCalendarItem(date){
@@ -5103,8 +5071,6 @@ let main=document.getElementById('mainContent');
       let ordered=[];docks.forEach(dk=>ordered.push(...getPriorityOrderedTasks(d,dk,['inside_waiting','unloading','unloaded'])));
       renderTable('dockMonitorTable',['卸货口','顺序','状态','批次','集装箱号','车牌','等待开始','卸货开始','卸货完成','操作'],ordered,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);let late=isLateRecoveryTask(t,d);let rec=getRecommendedTaskForDock(d,getTaskDock(t));let recommended=rec&&rec.id===t.id;tr.className=late?'priority-row':recommended?'recommended-row':'';tr.innerHTML=`<td>${getTaskDock(t)}</td><td><span class="sequence-badge">${t._seq<999999?t._seq:'-'}</span>${late?' <span class="andon-tag priority">异常到达优先</span>':recommended?' <span class="andon-tag recommended">当前推荐</span>':''}</td><td><span class="status-badge ${st==='unloading'?'status-transport':st==='unloaded'?'status-completed':'status-warning'}">${getOpStatusText(t)}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})">开始</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading(${t.id})">完成</button>`:'-'}</td>`;return tr;});
     }
-
-
 
     // ==================== V41 工厂到货监控：按实际收货流程重构 ====================
     const FACTORY_DOCKS = ['120B','140B','132','140C'];
@@ -5777,7 +5743,6 @@ let main=document.getElementById('mainContent');
     };
     
 
-
     function isImageFileName(name){
       return /\.(png|jpg|jpeg|gif|webp|bmp)$/i.test(name || '');
     }
@@ -5987,7 +5952,6 @@ let main=document.getElementById('mainContent');
       document.getElementById('attachmentsList').innerHTML = renderAttachmentCards(list);
     };
 
-
     function renderUserManagement(){
       if(!isAdminUser()){
         document.getElementById('mainContent').innerHTML = '<div class="card"><div class="card-title">无权限</div></div>';
@@ -6053,16 +6017,16 @@ let main=document.getElementById('mainContent');
     window.applyRolePreset = function(role){
       const presets = {
         Admin:{modules:permissionModules.map(m=>m.id),carriers:['ALL'],locations:['ALL']},
-        Purchasing:{modules:['dashboard','containers','pickupPlan','dynamicPlan','factoryReceiving','locationStock','rateConfig','feeReport'],carriers:['RG','JSL'],locations:['RG堆场','Rio Claro','IRA库房','工厂']},
+        Purchasing:{modules:['dashboard','containers','pickupPlan','dynamicPlan','locationStock','rateConfig','feeReport'],carriers:['RG','JSL'],locations:['RG堆场','Rio Claro','IRA库房','工厂']},
         Customs:{modules:['containers','blIra','customs','feeReport'],carriers:[],locations:[]},
-        RG:{modules:['transportTasks','returnConfirm','factoryReceiving'],carriers:['RG'],locations:[]},
-        JSL:{modules:['transportTasks','returnConfirm','factoryReceiving'],carriers:['JSL'],locations:[]},
+        RG:{modules:['transportTasks','returnConfirm'],carriers:['RG'],locations:[]},
+        JSL:{modules:['transportTasks','returnConfirm'],carriers:['JSL'],locations:[]},
         Warehouse_RG:{modules:['locationConfirm','locationStock'],carriers:[],locations:['RG堆场']},
         Warehouse_RioClaro:{modules:['locationConfirm','locationStock'],carriers:[],locations:['Rio Claro']},
         Warehouse_IRA:{modules:['locationConfirm','locationStock','productionConfirm'],carriers:[],locations:['IRA库房']},
-        Unloading:{modules:['factoryReceiving','gateMonitoring','dockMonitoring','locationConfirm','locationStock','productionConfirm'],carriers:[],locations:['工厂']},
-        GateGuard:{modules:['factoryReceiving','gateMonitoring'],carriers:[],locations:['工厂']},
-        Receiver:{modules:['factoryReceiving','dockMonitoring'],carriers:[],locations:['120B','140B','132','140C']},
+        Unloading:{modules:['gateMonitoring','dockMonitoring','locationConfirm','locationStock','productionConfirm'],carriers:[],locations:['工厂']},
+        GateGuard:{modules:['gateMonitoring'],carriers:[],locations:['工厂']},
+        Receiver:{modules:['dockMonitoring'],carriers:[],locations:['120B','140B','132','140C']},
         Viewer:{modules:['containers','locationStock','feeReport'],carriers:[],locations:[]}
       };
       const p = presets[role] || {};
@@ -6133,7 +6097,6 @@ let main=document.getElementById('mainContent');
       logoutCloud();
     }
     window.addEventListener('DOMContentLoaded', () => { loadData(); });
-
 
     /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
     function v42SeqNum(v){ const n=parseInt(String(v||'').replace(/[^0-9]/g,''),10); return isNaN(n)?null:n; }
@@ -6258,7 +6221,6 @@ let main=document.getElementById('mainContent');
       }catch(e){ console.warn('V42 auto dock skipped', e); }
       return v42OriginalPublishDynamicSingle ? v42OriginalPublishDynamicSingle(id, fromLoc) : undefined;
     };
-
 
     /* ==================== V42.6：生产保供看板与生产计划实时联动修复 ====================
        修复点：
@@ -6427,7 +6389,6 @@ let main=document.getElementById('mainContent');
     const el = document.getElementById('prePlanGrid');
     if(el) el.innerHTML = html;
   };
-
 
 </script>
 
@@ -6747,7 +6708,6 @@ let main=document.getElementById('mainContent');
 
 })();
 
-
   /* ==================== V42.22 工厂日历联动生产计划维护 ====================
      修复：生产计划维护必须先判断工厂日历。休息日/法定假日不再强制维护，默认不可新增排产；特殊加班按工作日处理。
   */
@@ -6822,9 +6782,7 @@ let main=document.getElementById('mainContent');
     if(el) el.innerHTML = html;
   };
 
-
 </script>
-
 
 <script>
 /* ==================== V42.9：生产保供看板最终数据源修复 ====================
@@ -6957,7 +6915,6 @@ let main=document.getElementById('mainContent');
     }
   };
 })();
-
 
 /* ==================== V42.15：运输任务按港口/其他分板块 + 保供看板Hover精简 ==================== */
 (function(){
@@ -7261,7 +7218,6 @@ let main=document.getElementById('mainContent');
 
 })();
 
-
   // ==================== V42.19 修复：工厂完成卸货后运输任务结束并进入待还箱 ====================
   function v4218NeedReturnAfterFactoryUnload(task){
     if(!task) return false;
@@ -7345,8 +7301,6 @@ let main=document.getElementById('mainContent');
     return true;
   };
 
-
-
   /* ==================== V42.22 工厂日历联动生产计划维护 ====================
      修复：生产计划维护必须先判断工厂日历。休息日/法定假日不再强制维护，默认不可新增排产；特殊加班按工作日处理。
   */
@@ -7421,9 +7375,7 @@ let main=document.getElementById('mainContent');
     if(el) el.innerHTML = html;
   };
 
-
 </script>
-
 
 <script>
   /* ==================== V42.23 生产计划维护：3个有效生产日 ====================
@@ -7487,7 +7439,6 @@ let main=document.getElementById('mainContent');
     if(typeof openAddProductionPlanModal === 'function') openAddProductionPlanModal(d);
   };
 </script>
-
 
 <script>
   /* ==================== V42.24 工作台保供看板：同步工厂日历有效生产日 ====================
