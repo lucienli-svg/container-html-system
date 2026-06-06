@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V42.15 Transport Split + Hover Container</title>
+  <title>集装箱智能监控管理系统 V42.23 3 Workdays Plan</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
     /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
@@ -1274,7 +1274,7 @@
       return {
         containers, blList, containerBlMap, transportTasks, locationStock, returnRecords,
         pickupPlans, productionRecords, productionPlans, factoryCalendar, nextIds, storageConfig, demurrageConfig, warningConfig,
-        version: 'V42.22 Factory Calendar',
+        version: 'V42.23 3 Workdays Plan',
         updatedAt: new Date().toISOString(),
         updatedBy: cloudUser?.email || currentUser?.email || currentUser?.name || ''
       };
@@ -4841,13 +4841,13 @@ let main=document.getElementById('mainContent');
       const missing=getRequiredPlanMissingDates(baseDate);
       const unconfirmed=getUnconfirmedProductionPlans();
       container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🗓️ 生产计划维护</span><button class="btn btn-primary" onclick="currentMenu='dashboard';renderSidebar();renderContent();">返回工作台</button></div>
-        <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:14px;">本模块按照计划科排产表格式维护。预排产只显示三天：今天、明天、后天；其中今天和明天的工作日必须维护，后天可选；休息日/假日禁止排产，特殊加班可排产。每条计划维护批次顺序，用于后续到箱顺序和收货优先级。生产计划确认会显示所有历史未确认计划，并支持已确认计划修正。</div>
+        <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:14px;">本模块按照计划科排产表格式维护。预排产显示从起始日期开始的未来3个有效生产日（工作日/特殊加班），自动跳过休息日和法定假日；前2个有效生产日必须维护，第3个有效生产日可选。每条计划维护批次顺序，用于后续到箱顺序和收货优先级。生产计划确认会显示所有历史未确认计划，并支持已确认计划修正。</div>
         ${missing.length?`<div style="background:#fff7e6;border-left:4px solid #e6a23c;border-radius:8px;padding:10px 12px;margin-bottom:10px;color:#8a5a00;">⚠ 必填计划日期尚未维护：${missing.map(fmtDate).join('、')}</div>`:''}
         ${unconfirmed.length?`<div style="background:#fef0f0;border-left:4px solid #f56c6c;border-radius:8px;padding:10px 12px;margin-bottom:10px;color:#9b1c1c;">⚠ 有 ${unconfirmed.length} 条历史生产计划未确认实际完成数量，请在下方“生产计划确认”处理。</div>`:''}
-        <div class="search-bar"><span>计划起始日期</span><input type="date" id="prodPlanBaseDate" value="${baseDate}" onchange="renderProductionPlan(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderProductionPlan(document.getElementById('mainContent'))">刷新</button><button class="btn btn-success" onclick="openAddProductionPlanModal('${baseDate}')">新增计划</button><button class="btn btn-warning" onclick="currentMenu='factoryCalendar';renderSidebar();renderContent();">工厂日历</button></div>
+        <div class="search-bar"><span>计划起始日期</span><input type="date" id="prodPlanBaseDate" value="${baseDate}" onchange="renderProductionPlan(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderProductionPlan(document.getElementById('mainContent'))">刷新</button><button class="btn btn-success" onclick="openAddFirstWorkdayProductionPlan('${baseDate}')">新增计划</button><button class="btn btn-warning" onclick="currentMenu='factoryCalendar';renderSidebar();renderContent();">工厂日历</button></div>
         ${renderProductionPlanSummary(baseDate)}
       </div>
-      <div class="card"><div class="card-header"><span class="card-title">① 预排产（三天滚动表）</span><span style="font-size:12px;color:#909399;">${fmtDate(dates[0])} - ${fmtDate(dates[2])}</span></div>
+      <div class="card"><div class="card-header"><span class="card-title">① 预排产（未来3个有效生产日）</span><span style="font-size:12px;color:#909399;">${fmtDate(dates[0])} - ${fmtDate(dates[2])}</span></div>
         <div id="prePlanGrid"></div>
         <div style="background:#f8f9fc;border-radius:10px;padding:12px;margin-top:12px;">
           <div style="font-size:13px;color:#606266;margin-bottom:8px;">支持从Excel粘贴，推荐列顺序：日期、车间、顺序、批次、计划台数、备注。也兼容旧格式：日期、车间、批次、计划台数、备注。车间可写：焊装、总装B线、总装P线。</div>
@@ -7422,6 +7422,70 @@ let main=document.getElementById('mainContent');
   };
 
 
+</script>
+
+
+<script>
+  /* ==================== V42.23 生产计划维护：3个有效生产日 ====================
+     将生产计划维护从“3个自然日”改为“未来3个工作日/特殊加班日”。
+     休息日、法定假日自动跳过，保证页面始终展示3天有效生产计划。
+  */
+  function v423NextProductionWorkdays(baseDate, count){
+    const result = [];
+    let d = baseDate || (typeof getTodayStr === 'function' ? getTodayStr() : new Date().toISOString().slice(0,10));
+    let guard = 0;
+    while(result.length < (count || 3) && guard < 45){
+      const isWork = (typeof isFactoryWorkday === 'function') ? isFactoryWorkday(d) : true;
+      if(isWork) result.push(d);
+      d = (typeof addDaysToDateStr === 'function') ? addDaysToDateStr(d, 1) : new Date(new Date(d+'T00:00:00').getTime()+86400000).toISOString().slice(0,10);
+      guard++;
+    }
+    return result;
+  }
+  productionPlanBaseDates = function(baseDate){
+    return v423NextProductionWorkdays(baseDate || getTodayStr(), 3);
+  };
+  window.productionPlanBaseDates = productionPlanBaseDates;
+  window.v423ProductionDayIndexLabel = function(idx){
+    if(idx === 0) return '第1个生产日 必填';
+    if(idx === 1) return '第2个生产日 必填';
+    return '第3个生产日 可选';
+  };
+  if(typeof v4222ProductionDayStatusText === 'function'){
+    v4222ProductionDayStatusText = function(date, idx){
+      if(typeof isFactoryWorkday === 'function' && !isFactoryWorkday(date)) return getFactoryDayTypeLabel(getFactoryDayType(date)) + '｜不排产';
+      return window.v423ProductionDayIndexLabel(idx);
+    };
+    window.v4222ProductionDayStatusText = v4222ProductionDayStatusText;
+  }
+  if(typeof v4222ProductionDayStatusColor === 'function'){
+    v4222ProductionDayStatusColor = function(date, idx){
+      if(typeof isFactoryWorkday === 'function' && !isFactoryWorkday(date)) return '#f56c6c';
+      return idx < 2 ? '#f56c6c' : '#909399';
+    };
+    window.v4222ProductionDayStatusColor = v4222ProductionDayStatusColor;
+  }
+  if(typeof v4222IsProductionRequiredDate === 'function'){
+    v4222IsProductionRequiredDate = function(date, idx){ return idx < 2; };
+    window.v4222IsProductionRequiredDate = v4222IsProductionRequiredDate;
+  }
+  getRequiredPlanMissingDates = function(baseDate){
+    const dates = productionPlanBaseDates(baseDate).slice(0,2);
+    return dates.filter(d => getScheduleProductionPlans(d).length === 0);
+  };
+  if(typeof v42GetBoardDates === 'function'){
+    v42GetBoardDates = function(){ return productionPlanBaseDates(getTodayStr()).slice(0,2); };
+    window.v42GetBoardDates = v42GetBoardDates;
+  }
+  if(typeof v42DateLabel === 'function'){
+    v42DateLabel = function(d,i){ return `${fmtDate(d)} ${i===0?'第1生产日':'第2生产日'}`; };
+    window.v42DateLabel = v42DateLabel;
+  }
+  // 顶部新增按钮默认指向第一个有效生产日，避免起始日期为休息日时误触发禁止排产。
+  window.openAddFirstWorkdayProductionPlan = function(baseDate){
+    const d = productionPlanBaseDates(baseDate || getTodayStr())[0];
+    if(typeof openAddProductionPlanModal === 'function') openAddProductionPlanModal(d);
+  };
 </script>
 
 </body>
