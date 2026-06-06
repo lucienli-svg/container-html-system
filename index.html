@@ -130,7 +130,84 @@
       return v42OriginalPublishDynamicSingle ? v42OriginalPublishDynamicSingle(id, fromLoc) : undefined;
     };
 
-  </script>
+  
+
+  /* ==================== V42.22 工厂日历联动生产计划维护 ====================
+     修复：生产计划维护必须先判断工厂日历。休息日/法定假日不再强制维护，默认不可新增排产；特殊加班按工作日处理。
+  */
+  function v4222IsProductionRequiredDate(date, idx){
+    return idx < 2 && isFactoryWorkday(date);
+  }
+  function v4222ProductionDayStatusText(date, idx){
+    if(!isFactoryWorkday(date)) return getFactoryDayTypeLabel(getFactoryDayType(date)) + '｜不排产';
+    if(idx === 0) return '今天 必填';
+    if(idx === 1) return '明天 必填';
+    return '后天 可选';
+  }
+  function v4222ProductionDayStatusColor(date, idx){
+    if(!isFactoryWorkday(date)) return '#f56c6c';
+    return idx < 2 ? '#f56c6c' : '#909399';
+  }
+  function v4222OpenAddProductionPlanModal(date, workshop){
+    if(date && !isFactoryWorkday(date)){
+      alert(`${fmtDate(date)} 是${getFactoryDayTypeLabel(getFactoryDayType(date))}，不能维护生产计划。如当天需要生产，请先到“工厂日历”设置为特殊加班。`);
+      return;
+    }
+    if(typeof window.__originalOpenAddProductionPlanModalV4222 === 'function'){
+      window.__originalOpenAddProductionPlanModalV4222(date, workshop);
+    }
+  }
+  if(typeof window.openAddProductionPlanModal === 'function' && !window.__originalOpenAddProductionPlanModalV4222){
+    window.__originalOpenAddProductionPlanModalV4222 = window.openAddProductionPlanModal;
+    window.openAddProductionPlanModal = v4222OpenAddProductionPlanModal;
+  }
+  // 覆盖必填缺失检查：仅今天/明天且为工作日/特殊加班时才强制维护。
+  getRequiredPlanMissingDates = function(baseDate){
+    const dates = productionPlanBaseDates(baseDate).slice(0,2);
+    return dates.filter((d,idx) => isFactoryWorkday(d) && getScheduleProductionPlans(d).length===0);
+  };
+  // 覆盖生产计划表格渲染：休息日/假日显示为灰红提示，不再标记“必填计划未维护”。
+  renderProductionPlanGrid = function(baseDate){
+    const dates = productionPlanBaseDates(baseDate);
+    const workshops = productionPlanWorkshops();
+    let html = '<div class="table-wrapper"><table class="data-table prod-plan-sheet"><thead><tr><th style="width:140px;">车间/产线</th>' + dates.map((d,i)=>{
+      const bs = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='welding') : productionPlanTotalsFor(d);
+      const gaB = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b') : productionPlanTotalsFor(d,'assembly_b');
+      const gaP = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_p') : productionPlanTotalsFor(d,'assembly_p');
+      const ga = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b' || p.workshop==='assembly_p') : {total:(gaB.total||0)+(gaP.total||0)};
+      return `<th>${fmtDate(d)}<br><span style="font-size:11px;color:${v4222ProductionDayStatusColor(d,i)};">${v4222ProductionDayStatusText(d,i)}</span><div class="prod-day-total" style="line-height:1.8;"><span class="prod-chip gray">BS ${bs.total||0}</span><span class="prod-chip gray">GA ${ga.total||0}</span><span class="prod-chip b">GA-B ${gaB.total||0}</span><span class="prod-chip p">GA-P ${gaP.total||0}</span></div></th>`;
+    }).join('') + '</tr></thead><tbody>';
+
+    workshops.forEach(ws=>{
+      const ws3 = typeof v428Totals === 'function' ? v428Totals(dates, p=>p.workshop===ws.id) : productionPlanTotalsForDates(dates,p=>p.workshop===ws.id);
+      html += `<tr><td class="prod-plan-workshop"><div>${ws.label}</div><div style="font-size:12px;color:#606266;margin-top:8px;line-height:1.8;"><span class="prod-chip gray">合计 ${ws3.total||0}</span><br><span class="prod-chip b">B ${ws3.b||0}</span><br><span class="prod-chip p">P ${ws3.p||0}</span>${ws3.other?`<br><span class="prod-chip gray">其他 ${ws3.other}</span>`:''}</div></td>`;
+      dates.forEach((d,idx)=>{
+        const plans = getProductionPlansForCell(d, ws.id);
+        const isWorkday = isFactoryWorkday(d);
+        const emptyRequired = v4222IsProductionRequiredDate(d,idx) && plans.length === 0;
+        const cellTotal = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop===ws.id) : productionPlanTotalsFor(d,ws.id);
+        html += `<td class="${!isWorkday?'prod-nonworkday-cell':''}"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><span style="font-size:12px;color:#606266;font-weight:700;">${ws.label}</span><span class="prod-chip gray">${cellTotal.total||0} 台</span></div><div class="prod-plan-list">`;
+        if(plans.length){
+          html += plans.map(p=>`<div class="prod-plan-item">
+            <div class="prod-plan-main"><span class="prod-order-badge">#${getProductionPlanOrder(p)===999999?'-':getProductionPlanOrder(p)}</span><span class="prod-batch-code">${p.batch||'-'}</span><span class="prod-qty">${Number(p.plannedQty||0)} 台</span><div class="prod-meta">${productionBatchSeries(p.batch)}系列｜实际 ${Number(p.actualQty||0)}｜${isProductionPlanConfirmed(p)?'已确认':'未确认'}${p.remark?'｜'+p.remark:''}</div></div>
+            <div class="prod-plan-actions"><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','up')">↑</button><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','down')">↓</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button><button class="btn btn-sm" onclick="copyProductionPlan('${p.id}')">复制</button><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan('${p.id}')">删除</button></div>
+          </div>`).join('');
+        }else if(!isWorkday){
+          html += `<div class="prod-empty-cell" style="border-color:#fbc4c4;background:#fef0f0;color:#9b1c1c;">${getFactoryDayTypeLabel(getFactoryDayType(d))}<br>不需要维护计划</div>`;
+        }else{
+          html += `<div class="prod-empty-cell ${emptyRequired?'required':''}">${emptyRequired?'必填计划未维护':'可选未维护'}</div>`;
+        }
+        html += `</div>${isWorkday?`<button class="btn btn-sm btn-success" style="margin-top:8px;" onclick="openAddProductionPlanModal('${d}','${ws.id}')">+ 新增计划</button>`:`<button class="btn btn-sm" style="margin-top:8px;" onclick="currentMenu='factoryCalendar';renderSidebar();renderContent();">设置加班后排产</button>`}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    const el = document.getElementById('prePlanGrid');
+    if(el) el.innerHTML = html;
+  };
+
+
+</script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">
 
     /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
@@ -257,7 +334,84 @@
       return v42OriginalPublishDynamicSingle ? v42OriginalPublishDynamicSingle(id, fromLoc) : undefined;
     };
 
-  </script>
+  
+
+  /* ==================== V42.22 工厂日历联动生产计划维护 ====================
+     修复：生产计划维护必须先判断工厂日历。休息日/法定假日不再强制维护，默认不可新增排产；特殊加班按工作日处理。
+  */
+  function v4222IsProductionRequiredDate(date, idx){
+    return idx < 2 && isFactoryWorkday(date);
+  }
+  function v4222ProductionDayStatusText(date, idx){
+    if(!isFactoryWorkday(date)) return getFactoryDayTypeLabel(getFactoryDayType(date)) + '｜不排产';
+    if(idx === 0) return '今天 必填';
+    if(idx === 1) return '明天 必填';
+    return '后天 可选';
+  }
+  function v4222ProductionDayStatusColor(date, idx){
+    if(!isFactoryWorkday(date)) return '#f56c6c';
+    return idx < 2 ? '#f56c6c' : '#909399';
+  }
+  function v4222OpenAddProductionPlanModal(date, workshop){
+    if(date && !isFactoryWorkday(date)){
+      alert(`${fmtDate(date)} 是${getFactoryDayTypeLabel(getFactoryDayType(date))}，不能维护生产计划。如当天需要生产，请先到“工厂日历”设置为特殊加班。`);
+      return;
+    }
+    if(typeof window.__originalOpenAddProductionPlanModalV4222 === 'function'){
+      window.__originalOpenAddProductionPlanModalV4222(date, workshop);
+    }
+  }
+  if(typeof window.openAddProductionPlanModal === 'function' && !window.__originalOpenAddProductionPlanModalV4222){
+    window.__originalOpenAddProductionPlanModalV4222 = window.openAddProductionPlanModal;
+    window.openAddProductionPlanModal = v4222OpenAddProductionPlanModal;
+  }
+  // 覆盖必填缺失检查：仅今天/明天且为工作日/特殊加班时才强制维护。
+  getRequiredPlanMissingDates = function(baseDate){
+    const dates = productionPlanBaseDates(baseDate).slice(0,2);
+    return dates.filter((d,idx) => isFactoryWorkday(d) && getScheduleProductionPlans(d).length===0);
+  };
+  // 覆盖生产计划表格渲染：休息日/假日显示为灰红提示，不再标记“必填计划未维护”。
+  renderProductionPlanGrid = function(baseDate){
+    const dates = productionPlanBaseDates(baseDate);
+    const workshops = productionPlanWorkshops();
+    let html = '<div class="table-wrapper"><table class="data-table prod-plan-sheet"><thead><tr><th style="width:140px;">车间/产线</th>' + dates.map((d,i)=>{
+      const bs = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='welding') : productionPlanTotalsFor(d);
+      const gaB = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b') : productionPlanTotalsFor(d,'assembly_b');
+      const gaP = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_p') : productionPlanTotalsFor(d,'assembly_p');
+      const ga = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b' || p.workshop==='assembly_p') : {total:(gaB.total||0)+(gaP.total||0)};
+      return `<th>${fmtDate(d)}<br><span style="font-size:11px;color:${v4222ProductionDayStatusColor(d,i)};">${v4222ProductionDayStatusText(d,i)}</span><div class="prod-day-total" style="line-height:1.8;"><span class="prod-chip gray">BS ${bs.total||0}</span><span class="prod-chip gray">GA ${ga.total||0}</span><span class="prod-chip b">GA-B ${gaB.total||0}</span><span class="prod-chip p">GA-P ${gaP.total||0}</span></div></th>`;
+    }).join('') + '</tr></thead><tbody>';
+
+    workshops.forEach(ws=>{
+      const ws3 = typeof v428Totals === 'function' ? v428Totals(dates, p=>p.workshop===ws.id) : productionPlanTotalsForDates(dates,p=>p.workshop===ws.id);
+      html += `<tr><td class="prod-plan-workshop"><div>${ws.label}</div><div style="font-size:12px;color:#606266;margin-top:8px;line-height:1.8;"><span class="prod-chip gray">合计 ${ws3.total||0}</span><br><span class="prod-chip b">B ${ws3.b||0}</span><br><span class="prod-chip p">P ${ws3.p||0}</span>${ws3.other?`<br><span class="prod-chip gray">其他 ${ws3.other}</span>`:''}</div></td>`;
+      dates.forEach((d,idx)=>{
+        const plans = getProductionPlansForCell(d, ws.id);
+        const isWorkday = isFactoryWorkday(d);
+        const emptyRequired = v4222IsProductionRequiredDate(d,idx) && plans.length === 0;
+        const cellTotal = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop===ws.id) : productionPlanTotalsFor(d,ws.id);
+        html += `<td class="${!isWorkday?'prod-nonworkday-cell':''}"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><span style="font-size:12px;color:#606266;font-weight:700;">${ws.label}</span><span class="prod-chip gray">${cellTotal.total||0} 台</span></div><div class="prod-plan-list">`;
+        if(plans.length){
+          html += plans.map(p=>`<div class="prod-plan-item">
+            <div class="prod-plan-main"><span class="prod-order-badge">#${getProductionPlanOrder(p)===999999?'-':getProductionPlanOrder(p)}</span><span class="prod-batch-code">${p.batch||'-'}</span><span class="prod-qty">${Number(p.plannedQty||0)} 台</span><div class="prod-meta">${productionBatchSeries(p.batch)}系列｜实际 ${Number(p.actualQty||0)}｜${isProductionPlanConfirmed(p)?'已确认':'未确认'}${p.remark?'｜'+p.remark:''}</div></div>
+            <div class="prod-plan-actions"><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','up')">↑</button><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','down')">↓</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button><button class="btn btn-sm" onclick="copyProductionPlan('${p.id}')">复制</button><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan('${p.id}')">删除</button></div>
+          </div>`).join('');
+        }else if(!isWorkday){
+          html += `<div class="prod-empty-cell" style="border-color:#fbc4c4;background:#fef0f0;color:#9b1c1c;">${getFactoryDayTypeLabel(getFactoryDayType(d))}<br>不需要维护计划</div>`;
+        }else{
+          html += `<div class="prod-empty-cell ${emptyRequired?'required':''}">${emptyRequired?'必填计划未维护':'可选未维护'}</div>`;
+        }
+        html += `</div>${isWorkday?`<button class="btn btn-sm btn-success" style="margin-top:8px;" onclick="openAddProductionPlanModal('${d}','${ws.id}')">+ 新增计划</button>`:`<button class="btn btn-sm" style="margin-top:8px;" onclick="currentMenu='factoryCalendar';renderSidebar();renderContent();">设置加班后排产</button>`}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    const el = document.getElementById('prePlanGrid');
+    if(el) el.innerHTML = html;
+  };
+
+
+</script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; }
@@ -947,7 +1101,7 @@
     @media(max-width:768px){ .prod-plan-summary-grid{grid-template-columns:1fr!important;} .prod-plan-sheet{min-width:980px!important;} .prod-plan-item{grid-template-columns:1fr;} .prod-plan-actions{justify-content:flex-start;} }
 
 
-    /* ==================== V42.21 工厂日历 ==================== */
+    /* ==================== V42.22 工厂日历 ==================== */
     .factory-calendar-toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; background:#f5f7fa; border:1px solid #ebeef5; border-radius:12px; padding:12px; margin-bottom:14px; }
     .factory-calendar-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:14px; }
     .factory-calendar-summary .fc-stat { background:#fff; border:1px solid #ebeef5; border-radius:12px; padding:12px; text-align:center; }
@@ -1120,7 +1274,7 @@
       return {
         containers, blList, containerBlMap, transportTasks, locationStock, returnRecords,
         pickupPlans, productionRecords, productionPlans, factoryCalendar, nextIds, storageConfig, demurrageConfig, warningConfig,
-        version: 'V42.21 Factory Calendar',
+        version: 'V42.22 Factory Calendar',
         updatedAt: new Date().toISOString(),
         updatedBy: cloudUser?.email || currentUser?.email || currentUser?.name || ''
       };
@@ -4453,7 +4607,7 @@ let main=document.getElementById('mainContent');
 
 
 
-    // ==================== V42.21 工厂日历 / 工作日判断 ====================
+    // ==================== V42.22 工厂日历 / 工作日判断 ====================
     function getFactoryCalendarItem(date){
       return (factoryCalendar||[]).find(x=>String(x.date||'')===String(date||'')) || null;
     }
@@ -6198,7 +6352,84 @@ let main=document.getElementById('mainContent');
       }
     });
 
-  </script>
+  
+
+  /* ==================== V42.22 工厂日历联动生产计划维护 ====================
+     修复：生产计划维护必须先判断工厂日历。休息日/法定假日不再强制维护，默认不可新增排产；特殊加班按工作日处理。
+  */
+  function v4222IsProductionRequiredDate(date, idx){
+    return idx < 2 && isFactoryWorkday(date);
+  }
+  function v4222ProductionDayStatusText(date, idx){
+    if(!isFactoryWorkday(date)) return getFactoryDayTypeLabel(getFactoryDayType(date)) + '｜不排产';
+    if(idx === 0) return '今天 必填';
+    if(idx === 1) return '明天 必填';
+    return '后天 可选';
+  }
+  function v4222ProductionDayStatusColor(date, idx){
+    if(!isFactoryWorkday(date)) return '#f56c6c';
+    return idx < 2 ? '#f56c6c' : '#909399';
+  }
+  function v4222OpenAddProductionPlanModal(date, workshop){
+    if(date && !isFactoryWorkday(date)){
+      alert(`${fmtDate(date)} 是${getFactoryDayTypeLabel(getFactoryDayType(date))}，不能维护生产计划。如当天需要生产，请先到“工厂日历”设置为特殊加班。`);
+      return;
+    }
+    if(typeof window.__originalOpenAddProductionPlanModalV4222 === 'function'){
+      window.__originalOpenAddProductionPlanModalV4222(date, workshop);
+    }
+  }
+  if(typeof window.openAddProductionPlanModal === 'function' && !window.__originalOpenAddProductionPlanModalV4222){
+    window.__originalOpenAddProductionPlanModalV4222 = window.openAddProductionPlanModal;
+    window.openAddProductionPlanModal = v4222OpenAddProductionPlanModal;
+  }
+  // 覆盖必填缺失检查：仅今天/明天且为工作日/特殊加班时才强制维护。
+  getRequiredPlanMissingDates = function(baseDate){
+    const dates = productionPlanBaseDates(baseDate).slice(0,2);
+    return dates.filter((d,idx) => isFactoryWorkday(d) && getScheduleProductionPlans(d).length===0);
+  };
+  // 覆盖生产计划表格渲染：休息日/假日显示为灰红提示，不再标记“必填计划未维护”。
+  renderProductionPlanGrid = function(baseDate){
+    const dates = productionPlanBaseDates(baseDate);
+    const workshops = productionPlanWorkshops();
+    let html = '<div class="table-wrapper"><table class="data-table prod-plan-sheet"><thead><tr><th style="width:140px;">车间/产线</th>' + dates.map((d,i)=>{
+      const bs = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='welding') : productionPlanTotalsFor(d);
+      const gaB = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b') : productionPlanTotalsFor(d,'assembly_b');
+      const gaP = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_p') : productionPlanTotalsFor(d,'assembly_p');
+      const ga = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b' || p.workshop==='assembly_p') : {total:(gaB.total||0)+(gaP.total||0)};
+      return `<th>${fmtDate(d)}<br><span style="font-size:11px;color:${v4222ProductionDayStatusColor(d,i)};">${v4222ProductionDayStatusText(d,i)}</span><div class="prod-day-total" style="line-height:1.8;"><span class="prod-chip gray">BS ${bs.total||0}</span><span class="prod-chip gray">GA ${ga.total||0}</span><span class="prod-chip b">GA-B ${gaB.total||0}</span><span class="prod-chip p">GA-P ${gaP.total||0}</span></div></th>`;
+    }).join('') + '</tr></thead><tbody>';
+
+    workshops.forEach(ws=>{
+      const ws3 = typeof v428Totals === 'function' ? v428Totals(dates, p=>p.workshop===ws.id) : productionPlanTotalsForDates(dates,p=>p.workshop===ws.id);
+      html += `<tr><td class="prod-plan-workshop"><div>${ws.label}</div><div style="font-size:12px;color:#606266;margin-top:8px;line-height:1.8;"><span class="prod-chip gray">合计 ${ws3.total||0}</span><br><span class="prod-chip b">B ${ws3.b||0}</span><br><span class="prod-chip p">P ${ws3.p||0}</span>${ws3.other?`<br><span class="prod-chip gray">其他 ${ws3.other}</span>`:''}</div></td>`;
+      dates.forEach((d,idx)=>{
+        const plans = getProductionPlansForCell(d, ws.id);
+        const isWorkday = isFactoryWorkday(d);
+        const emptyRequired = v4222IsProductionRequiredDate(d,idx) && plans.length === 0;
+        const cellTotal = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop===ws.id) : productionPlanTotalsFor(d,ws.id);
+        html += `<td class="${!isWorkday?'prod-nonworkday-cell':''}"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><span style="font-size:12px;color:#606266;font-weight:700;">${ws.label}</span><span class="prod-chip gray">${cellTotal.total||0} 台</span></div><div class="prod-plan-list">`;
+        if(plans.length){
+          html += plans.map(p=>`<div class="prod-plan-item">
+            <div class="prod-plan-main"><span class="prod-order-badge">#${getProductionPlanOrder(p)===999999?'-':getProductionPlanOrder(p)}</span><span class="prod-batch-code">${p.batch||'-'}</span><span class="prod-qty">${Number(p.plannedQty||0)} 台</span><div class="prod-meta">${productionBatchSeries(p.batch)}系列｜实际 ${Number(p.actualQty||0)}｜${isProductionPlanConfirmed(p)?'已确认':'未确认'}${p.remark?'｜'+p.remark:''}</div></div>
+            <div class="prod-plan-actions"><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','up')">↑</button><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','down')">↓</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button><button class="btn btn-sm" onclick="copyProductionPlan('${p.id}')">复制</button><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan('${p.id}')">删除</button></div>
+          </div>`).join('');
+        }else if(!isWorkday){
+          html += `<div class="prod-empty-cell" style="border-color:#fbc4c4;background:#fef0f0;color:#9b1c1c;">${getFactoryDayTypeLabel(getFactoryDayType(d))}<br>不需要维护计划</div>`;
+        }else{
+          html += `<div class="prod-empty-cell ${emptyRequired?'required':''}">${emptyRequired?'必填计划未维护':'可选未维护'}</div>`;
+        }
+        html += `</div>${isWorkday?`<button class="btn btn-sm btn-success" style="margin-top:8px;" onclick="openAddProductionPlanModal('${d}','${ws.id}')">+ 新增计划</button>`:`<button class="btn btn-sm" style="margin-top:8px;" onclick="currentMenu='factoryCalendar';renderSidebar();renderContent();">设置加班后排产</button>`}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    const el = document.getElementById('prePlanGrid');
+    if(el) el.innerHTML = html;
+  };
+
+
+</script>
 
 <script>
 /* ==================== V42.9：生产计划统计与保供看板同步修复 ====================
@@ -6515,6 +6746,83 @@ let main=document.getElementById('mainContent');
   };
 
 })();
+
+
+  /* ==================== V42.22 工厂日历联动生产计划维护 ====================
+     修复：生产计划维护必须先判断工厂日历。休息日/法定假日不再强制维护，默认不可新增排产；特殊加班按工作日处理。
+  */
+  function v4222IsProductionRequiredDate(date, idx){
+    return idx < 2 && isFactoryWorkday(date);
+  }
+  function v4222ProductionDayStatusText(date, idx){
+    if(!isFactoryWorkday(date)) return getFactoryDayTypeLabel(getFactoryDayType(date)) + '｜不排产';
+    if(idx === 0) return '今天 必填';
+    if(idx === 1) return '明天 必填';
+    return '后天 可选';
+  }
+  function v4222ProductionDayStatusColor(date, idx){
+    if(!isFactoryWorkday(date)) return '#f56c6c';
+    return idx < 2 ? '#f56c6c' : '#909399';
+  }
+  function v4222OpenAddProductionPlanModal(date, workshop){
+    if(date && !isFactoryWorkday(date)){
+      alert(`${fmtDate(date)} 是${getFactoryDayTypeLabel(getFactoryDayType(date))}，不能维护生产计划。如当天需要生产，请先到“工厂日历”设置为特殊加班。`);
+      return;
+    }
+    if(typeof window.__originalOpenAddProductionPlanModalV4222 === 'function'){
+      window.__originalOpenAddProductionPlanModalV4222(date, workshop);
+    }
+  }
+  if(typeof window.openAddProductionPlanModal === 'function' && !window.__originalOpenAddProductionPlanModalV4222){
+    window.__originalOpenAddProductionPlanModalV4222 = window.openAddProductionPlanModal;
+    window.openAddProductionPlanModal = v4222OpenAddProductionPlanModal;
+  }
+  // 覆盖必填缺失检查：仅今天/明天且为工作日/特殊加班时才强制维护。
+  getRequiredPlanMissingDates = function(baseDate){
+    const dates = productionPlanBaseDates(baseDate).slice(0,2);
+    return dates.filter((d,idx) => isFactoryWorkday(d) && getScheduleProductionPlans(d).length===0);
+  };
+  // 覆盖生产计划表格渲染：休息日/假日显示为灰红提示，不再标记“必填计划未维护”。
+  renderProductionPlanGrid = function(baseDate){
+    const dates = productionPlanBaseDates(baseDate);
+    const workshops = productionPlanWorkshops();
+    let html = '<div class="table-wrapper"><table class="data-table prod-plan-sheet"><thead><tr><th style="width:140px;">车间/产线</th>' + dates.map((d,i)=>{
+      const bs = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='welding') : productionPlanTotalsFor(d);
+      const gaB = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b') : productionPlanTotalsFor(d,'assembly_b');
+      const gaP = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_p') : productionPlanTotalsFor(d,'assembly_p');
+      const ga = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b' || p.workshop==='assembly_p') : {total:(gaB.total||0)+(gaP.total||0)};
+      return `<th>${fmtDate(d)}<br><span style="font-size:11px;color:${v4222ProductionDayStatusColor(d,i)};">${v4222ProductionDayStatusText(d,i)}</span><div class="prod-day-total" style="line-height:1.8;"><span class="prod-chip gray">BS ${bs.total||0}</span><span class="prod-chip gray">GA ${ga.total||0}</span><span class="prod-chip b">GA-B ${gaB.total||0}</span><span class="prod-chip p">GA-P ${gaP.total||0}</span></div></th>`;
+    }).join('') + '</tr></thead><tbody>';
+
+    workshops.forEach(ws=>{
+      const ws3 = typeof v428Totals === 'function' ? v428Totals(dates, p=>p.workshop===ws.id) : productionPlanTotalsForDates(dates,p=>p.workshop===ws.id);
+      html += `<tr><td class="prod-plan-workshop"><div>${ws.label}</div><div style="font-size:12px;color:#606266;margin-top:8px;line-height:1.8;"><span class="prod-chip gray">合计 ${ws3.total||0}</span><br><span class="prod-chip b">B ${ws3.b||0}</span><br><span class="prod-chip p">P ${ws3.p||0}</span>${ws3.other?`<br><span class="prod-chip gray">其他 ${ws3.other}</span>`:''}</div></td>`;
+      dates.forEach((d,idx)=>{
+        const plans = getProductionPlansForCell(d, ws.id);
+        const isWorkday = isFactoryWorkday(d);
+        const emptyRequired = v4222IsProductionRequiredDate(d,idx) && plans.length === 0;
+        const cellTotal = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop===ws.id) : productionPlanTotalsFor(d,ws.id);
+        html += `<td class="${!isWorkday?'prod-nonworkday-cell':''}"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><span style="font-size:12px;color:#606266;font-weight:700;">${ws.label}</span><span class="prod-chip gray">${cellTotal.total||0} 台</span></div><div class="prod-plan-list">`;
+        if(plans.length){
+          html += plans.map(p=>`<div class="prod-plan-item">
+            <div class="prod-plan-main"><span class="prod-order-badge">#${getProductionPlanOrder(p)===999999?'-':getProductionPlanOrder(p)}</span><span class="prod-batch-code">${p.batch||'-'}</span><span class="prod-qty">${Number(p.plannedQty||0)} 台</span><div class="prod-meta">${productionBatchSeries(p.batch)}系列｜实际 ${Number(p.actualQty||0)}｜${isProductionPlanConfirmed(p)?'已确认':'未确认'}${p.remark?'｜'+p.remark:''}</div></div>
+            <div class="prod-plan-actions"><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','up')">↑</button><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','down')">↓</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button><button class="btn btn-sm" onclick="copyProductionPlan('${p.id}')">复制</button><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan('${p.id}')">删除</button></div>
+          </div>`).join('');
+        }else if(!isWorkday){
+          html += `<div class="prod-empty-cell" style="border-color:#fbc4c4;background:#fef0f0;color:#9b1c1c;">${getFactoryDayTypeLabel(getFactoryDayType(d))}<br>不需要维护计划</div>`;
+        }else{
+          html += `<div class="prod-empty-cell ${emptyRequired?'required':''}">${emptyRequired?'必填计划未维护':'可选未维护'}</div>`;
+        }
+        html += `</div>${isWorkday?`<button class="btn btn-sm btn-success" style="margin-top:8px;" onclick="openAddProductionPlanModal('${d}','${ws.id}')">+ 新增计划</button>`:`<button class="btn btn-sm" style="margin-top:8px;" onclick="currentMenu='factoryCalendar';renderSidebar();renderContent();">设置加班后排产</button>`}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    const el = document.getElementById('prePlanGrid');
+    if(el) el.innerHTML = html;
+  };
+
+
 </script>
 
 
@@ -7036,6 +7344,83 @@ let main=document.getElementById('mainContent');
     if(t.status === 'arrived' || t.status === 'completed' || t.status === 'cancelled') return false;
     return true;
   };
+
+
+
+  /* ==================== V42.22 工厂日历联动生产计划维护 ====================
+     修复：生产计划维护必须先判断工厂日历。休息日/法定假日不再强制维护，默认不可新增排产；特殊加班按工作日处理。
+  */
+  function v4222IsProductionRequiredDate(date, idx){
+    return idx < 2 && isFactoryWorkday(date);
+  }
+  function v4222ProductionDayStatusText(date, idx){
+    if(!isFactoryWorkday(date)) return getFactoryDayTypeLabel(getFactoryDayType(date)) + '｜不排产';
+    if(idx === 0) return '今天 必填';
+    if(idx === 1) return '明天 必填';
+    return '后天 可选';
+  }
+  function v4222ProductionDayStatusColor(date, idx){
+    if(!isFactoryWorkday(date)) return '#f56c6c';
+    return idx < 2 ? '#f56c6c' : '#909399';
+  }
+  function v4222OpenAddProductionPlanModal(date, workshop){
+    if(date && !isFactoryWorkday(date)){
+      alert(`${fmtDate(date)} 是${getFactoryDayTypeLabel(getFactoryDayType(date))}，不能维护生产计划。如当天需要生产，请先到“工厂日历”设置为特殊加班。`);
+      return;
+    }
+    if(typeof window.__originalOpenAddProductionPlanModalV4222 === 'function'){
+      window.__originalOpenAddProductionPlanModalV4222(date, workshop);
+    }
+  }
+  if(typeof window.openAddProductionPlanModal === 'function' && !window.__originalOpenAddProductionPlanModalV4222){
+    window.__originalOpenAddProductionPlanModalV4222 = window.openAddProductionPlanModal;
+    window.openAddProductionPlanModal = v4222OpenAddProductionPlanModal;
+  }
+  // 覆盖必填缺失检查：仅今天/明天且为工作日/特殊加班时才强制维护。
+  getRequiredPlanMissingDates = function(baseDate){
+    const dates = productionPlanBaseDates(baseDate).slice(0,2);
+    return dates.filter((d,idx) => isFactoryWorkday(d) && getScheduleProductionPlans(d).length===0);
+  };
+  // 覆盖生产计划表格渲染：休息日/假日显示为灰红提示，不再标记“必填计划未维护”。
+  renderProductionPlanGrid = function(baseDate){
+    const dates = productionPlanBaseDates(baseDate);
+    const workshops = productionPlanWorkshops();
+    let html = '<div class="table-wrapper"><table class="data-table prod-plan-sheet"><thead><tr><th style="width:140px;">车间/产线</th>' + dates.map((d,i)=>{
+      const bs = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='welding') : productionPlanTotalsFor(d);
+      const gaB = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b') : productionPlanTotalsFor(d,'assembly_b');
+      const gaP = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_p') : productionPlanTotalsFor(d,'assembly_p');
+      const ga = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b' || p.workshop==='assembly_p') : {total:(gaB.total||0)+(gaP.total||0)};
+      return `<th>${fmtDate(d)}<br><span style="font-size:11px;color:${v4222ProductionDayStatusColor(d,i)};">${v4222ProductionDayStatusText(d,i)}</span><div class="prod-day-total" style="line-height:1.8;"><span class="prod-chip gray">BS ${bs.total||0}</span><span class="prod-chip gray">GA ${ga.total||0}</span><span class="prod-chip b">GA-B ${gaB.total||0}</span><span class="prod-chip p">GA-P ${gaP.total||0}</span></div></th>`;
+    }).join('') + '</tr></thead><tbody>';
+
+    workshops.forEach(ws=>{
+      const ws3 = typeof v428Totals === 'function' ? v428Totals(dates, p=>p.workshop===ws.id) : productionPlanTotalsForDates(dates,p=>p.workshop===ws.id);
+      html += `<tr><td class="prod-plan-workshop"><div>${ws.label}</div><div style="font-size:12px;color:#606266;margin-top:8px;line-height:1.8;"><span class="prod-chip gray">合计 ${ws3.total||0}</span><br><span class="prod-chip b">B ${ws3.b||0}</span><br><span class="prod-chip p">P ${ws3.p||0}</span>${ws3.other?`<br><span class="prod-chip gray">其他 ${ws3.other}</span>`:''}</div></td>`;
+      dates.forEach((d,idx)=>{
+        const plans = getProductionPlansForCell(d, ws.id);
+        const isWorkday = isFactoryWorkday(d);
+        const emptyRequired = v4222IsProductionRequiredDate(d,idx) && plans.length === 0;
+        const cellTotal = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop===ws.id) : productionPlanTotalsFor(d,ws.id);
+        html += `<td class="${!isWorkday?'prod-nonworkday-cell':''}"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><span style="font-size:12px;color:#606266;font-weight:700;">${ws.label}</span><span class="prod-chip gray">${cellTotal.total||0} 台</span></div><div class="prod-plan-list">`;
+        if(plans.length){
+          html += plans.map(p=>`<div class="prod-plan-item">
+            <div class="prod-plan-main"><span class="prod-order-badge">#${getProductionPlanOrder(p)===999999?'-':getProductionPlanOrder(p)}</span><span class="prod-batch-code">${p.batch||'-'}</span><span class="prod-qty">${Number(p.plannedQty||0)} 台</span><div class="prod-meta">${productionBatchSeries(p.batch)}系列｜实际 ${Number(p.actualQty||0)}｜${isProductionPlanConfirmed(p)?'已确认':'未确认'}${p.remark?'｜'+p.remark:''}</div></div>
+            <div class="prod-plan-actions"><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','up')">↑</button><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','down')">↓</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button><button class="btn btn-sm" onclick="copyProductionPlan('${p.id}')">复制</button><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan('${p.id}')">删除</button></div>
+          </div>`).join('');
+        }else if(!isWorkday){
+          html += `<div class="prod-empty-cell" style="border-color:#fbc4c4;background:#fef0f0;color:#9b1c1c;">${getFactoryDayTypeLabel(getFactoryDayType(d))}<br>不需要维护计划</div>`;
+        }else{
+          html += `<div class="prod-empty-cell ${emptyRequired?'required':''}">${emptyRequired?'必填计划未维护':'可选未维护'}</div>`;
+        }
+        html += `</div>${isWorkday?`<button class="btn btn-sm btn-success" style="margin-top:8px;" onclick="openAddProductionPlanModal('${d}','${ws.id}')">+ 新增计划</button>`:`<button class="btn btn-sm" style="margin-top:8px;" onclick="currentMenu='factoryCalendar';renderSidebar();renderContent();">设置加班后排产</button>`}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    const el = document.getElementById('prePlanGrid');
+    if(el) el.innerHTML = html;
+  };
+
 
 </script>
 
