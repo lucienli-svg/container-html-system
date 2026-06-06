@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V42.18 Transport Split + Hover Container</title>
+  <title>集装箱智能监控管理系统 V42.15 Transport Split + Hover Container</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
     /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
@@ -1613,6 +1613,7 @@
    
     // 缓存费用计算结果
     let cachedFeeData = { date: null, fees: {}, totalStorage: 0, totalNormalStorage: 0, totalAbnormalStorage: 0, totalDemurrage: 0, storageWarningList: [], demurrageWarningList: [] };
+    const FEE_CACHE_VERSION = 'V42.19_RETURN_AWARE_WARNINGS';
     // 正常收费时长由堆存费配置中的 fixedDays 字段维护，不再固定为 15 天。
 
     // ==================== V40.4：取消一车一口计划，兼容旧数据 ====================
@@ -1916,8 +1917,23 @@ function getContainerLocation(cid){
       return overtimeDays * config.ratePerDay;
     }
     
+    function isContainerReturnConfirmed(containerId){
+      return returnRecords.some(r => String(r.containerId) === String(containerId) && r.isReturnConfirmed === true && r.type === 'return');
+    }
+
+    function getConfirmedReturnRecord(containerId){
+      return returnRecords.find(r => String(r.containerId) === String(containerId) && r.isReturnConfirmed === true && r.type === 'return') || null;
+    }
+
     function getRemainingFreeDays(container, currentDate, type) {
       if (!container.eta) return 999;
+
+      // V42.19：预警只针对“还未完成关键动作”的集装箱。
+      // 堆存费：已经实际提箱则不再预警；滞箱费：已经确认还箱则不再预警。
+      // 费用本身仍按实际提箱日/还箱日计算，用于历史报表追溯。
+      if (type === 'storage' && container.actualPickupTime) return 999;
+      if (type === 'demurrage' && isContainerReturnConfirmed(container.id)) return 999;
+
       let etaDate = container.eta.replace(/\//g, '-');
       let daysFromEta = getDaysDiff(etaDate, currentDate);
       if (type === 'storage') {
@@ -1951,7 +1967,7 @@ function getContainerLocation(cid){
       let lastUpdate = localStorage.getItem('cc_lastFeeUpdate');
       if (lastUpdate === today && localStorage.getItem('cc_cachedFees')) {
         let parsedCache = JSON.parse(localStorage.getItem('cc_cachedFees'));
-        if (parsedCache && Object.prototype.hasOwnProperty.call(parsedCache, 'totalAbnormalStorage')) {
+        if (parsedCache && parsedCache.cacheVersion === FEE_CACHE_VERSION && Object.prototype.hasOwnProperty.call(parsedCache, 'totalAbnormalStorage')) {
           cachedFeeData = parsedCache;
           return;
         }
@@ -1982,7 +1998,7 @@ function getContainerLocation(cid){
           });
         }
       }
-      cachedFeeData = { date: today, fees, totalStorage, totalNormalStorage, totalAbnormalStorage, totalDemurrage, storageWarningList, demurrageWarningList };
+      cachedFeeData = { cacheVersion: FEE_CACHE_VERSION, date: today, fees, totalStorage, totalNormalStorage, totalAbnormalStorage, totalDemurrage, storageWarningList, demurrageWarningList };
       localStorage.setItem('cc_lastFeeUpdate', today);
       localStorage.setItem('cc_cachedFees', JSON.stringify(cachedFeeData));
     }
@@ -6138,7 +6154,7 @@ let main=document.getElementById('mainContent');
     }
   });
 
-  // ==================== V42.18 修复：提箱计划到工厂同步进入工厂到货监控 ====================
+  // ==================== V42.19 修复：提箱计划到工厂同步进入工厂到货监控 ====================
   function v4217IsFactoryDestination(dest){
     const d = String(dest || '').trim();
     return d === '工厂' || d.toLowerCase() === 'factory' || d.toUpperCase() === 'GWM';
@@ -6575,7 +6591,7 @@ let main=document.getElementById('mainContent');
     window.renderTransportTasks(document.getElementById('mainContent'));
   };
 
-  // ==================== V42.18 修复：提箱计划到工厂同步进入工厂到货监控 ====================
+  // ==================== V42.19 修复：提箱计划到工厂同步进入工厂到货监控 ====================
   function v4217IsFactoryDestination(dest){
     const d = String(dest || '').trim();
     return d === '工厂' || d.toLowerCase() === 'factory' || d.toUpperCase() === 'GWM';
@@ -6748,7 +6764,7 @@ let main=document.getElementById('mainContent');
 })();
 
 
-  // ==================== V42.18 修复：工厂完成卸货后运输任务结束并进入待还箱 ====================
+  // ==================== V42.19 修复：工厂完成卸货后运输任务结束并进入待还箱 ====================
   function v4218NeedReturnAfterFactoryUnload(task){
     if(!task) return false;
     const from = String(task.from || '').trim();
