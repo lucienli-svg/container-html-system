@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V42.15 Transport Split + Hover Container</title>
+  <title>集装箱智能监控管理系统 V42.18 Transport Split + Hover Container</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
     /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
@@ -3559,7 +3559,7 @@ let main=document.getElementById('mainContent');
       plan.status = 'confirmed';
       plan.actualPickupTime = actualTime;
       plan.needReconfirm = false;
-      transportTasks.push({id:nextIds.task++,containerId:plan.containerId,containerNo:plan.containerNo,batch:plan.batch,blNo:getTaskBlText(plan),iraNo:getIraList(plan.containerId),from:'港口',to:plan.destination,carrier:plan.carrier,status:'in_transit',estimatedArrival:plan.arrivalDate,unloadingDock:plan.unloadingDock||''});
+      transportTasks.push({id:nextIds.task++,containerId:plan.containerId,containerNo:plan.containerNo,containerSeq:(cont?.containerSeq || plan.containerSeq || ''),batch:plan.batch,blNo:getTaskBlText(plan),iraNo:getIraList(plan.containerId),from:'港口',to:plan.destination,carrier:plan.carrier,status:'in_transit',operationStatus:plan.destination==='工厂'?'not_arrived':'',estimatedArrival:plan.arrivalDate,unloadingDock:plan.unloadingDock||'',source:'pickupPlan',createdAt:new Date().toISOString(),publishedAt:new Date().toISOString(),gateArrivalTime:'',gateReleaseTime:'',waitingAreaTime:'',unloadStartTime:'',unloadFinishTime:''});
       saveData();
       // 保持当前运输任务日期页签，不再自动跳回第一个日期
       let activeTab = document.querySelector('.date-tab.active');
@@ -4344,7 +4344,7 @@ let main=document.getElementById('mainContent');
       renderTable('operationDashTable',['计划到达','批次','集装箱号','卸货口','车牌','司机','电话','状态','厂外等待分钟','厂内等待分钟','卸货分钟'],tasks,(t)=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${fmtDateTime(t.estimatedArrival)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td>${t.driverPhone||'-'}</td><td>${getOpStatusText(t)}</td><td>${minutesBetween(t.gateArrivalTime,t.gateReleaseTime)}</td><td>${minutesBetween(t.waitingAreaTime,t.unloadStartTime)}</td><td>${minutesBetween(t.unloadStartTime,t.unloadFinishTime)}</td>`;return tr;});
     }
     window.exportFactoryOperationTasks=function(){
-      let rows=getFactoryOperationTasks('').map(t=>({批次:t.batch,集装箱号:t.containerNo,卸货口:t.unloadingDock,计划到达:fmtDateTime(t.estimatedArrival),车牌:t.truckPlate,司机:t.driverName,电话:t.driverPhone,门岗到达:fmtDateTime(t.gateArrivalTime),门岗放行:fmtDateTime(t.gateReleaseTime),等待区:t.waitingAreaTime,卸货开始:t.unloadStartTime,卸货完成:t.unloadFinishTime,状态:getOpStatusText(t)}));
+      let rows=getFactoryOperationTasks('').map(t=>({批次:t.batch,序号:getTaskContainerSeqDisplay(t),集装箱号:t.containerNo,卸货口:t.unloadingDock,计划到达:fmtDateTime(t.estimatedArrival),车牌:t.truckPlate,司机:t.driverName,电话:t.driverPhone,门岗到达:fmtDateTime(t.gateArrivalTime),门岗放行:fmtDateTime(t.gateReleaseTime),等待区:t.waitingAreaTime,卸货开始:t.unloadStartTime,卸货完成:t.unloadFinishTime,状态:getOpStatusText(t)}));
       if(typeof XLSX==='undefined'){alert('XLSX组件未加载');return;} let ws=XLSX.utils.json_to_sheet(rows); let wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Operation'); XLSX.writeFile(wb,`factory_operation_${getTodayStr()}.xlsx`);
     };
 
@@ -4778,12 +4778,34 @@ let main=document.getElementById('mainContent');
         unloaded:'已完成卸货'
       }[st] || '未到工厂';
     }
+    function getTaskContainerMaster(t){
+      if(!t) return null;
+      return containers.find(c =>
+        (t.containerId && c.id === t.containerId) ||
+        (t.containerNo && String(c.containerNo||'').trim().toUpperCase() === String(t.containerNo||'').trim().toUpperCase())
+      ) || null;
+    }
+    function getTaskContainerSeqDisplay(t){
+      if(!t) return '-';
+      if(t.containerSeq !== undefined && t.containerSeq !== null && String(t.containerSeq).trim() !== '') return t.containerSeq;
+      const c = getTaskContainerMaster(t);
+      if(c && c.containerSeq !== undefined && c.containerSeq !== null && String(c.containerSeq).trim() !== '') return c.containerSeq;
+      return '-';
+    }
+    function syncTaskContainerSeqFromMaster(t){
+      if(!t) return t;
+      if(!(t.containerSeq !== undefined && t.containerSeq !== null && String(t.containerSeq).trim() !== '')){
+        const c = getTaskContainerMaster(t);
+        if(c && c.containerSeq !== undefined && c.containerSeq !== null && String(c.containerSeq).trim() !== '') t.containerSeq = c.containerSeq;
+      }
+      return t;
+    }
     function getFactoryReceivingTasksV41(date){
       let tasks = transportTasks.filter(t => t && t.to === '工厂' && isOperationalVisibleTask(t) && !t.cancelled && t.status !== 'completed');
       if(date){
         tasks = tasks.filter(t => getDatePart(t.estimatedArrival || t.plannedDate || '') === date || getDatePart(t.gateArrivalTime || '') === date || getDatePart(t.waitingAreaTime || '') === date || getDatePart(t.unloadStartTime || '') === date || getDatePart(t.unloadFinishTime || '') === date);
       }
-      tasks.forEach(t => sanitizeFactoryTaskState(t));
+      tasks.forEach(t => { syncTaskContainerSeqFromMaster(t); sanitizeFactoryTaskState(t); });
       tasks = tasks.filter(t => canViewDock(t.unloadingDock || ''));
       return tasks.sort((a,b)=> String(a.estimatedArrival||'').localeCompare(String(b.estimatedArrival||'')) || String(a.unloadingDock||'').localeCompare(String(b.unloadingDock||''),'zh-CN',{numeric:true}) || compareProductionSequence(a,b));
     }
@@ -4853,7 +4875,7 @@ let main=document.getElementById('mainContent');
       renderTable('factoryGateSection',['计划到达','序号','批次','集装箱号','卸货口','车牌','司机','电话','门口到达','状态','操作'],list,(t)=>{
         let st=getFactoryReceivingStatus(t); let tr=document.createElement('tr');
         const disabled = canOperateGate() ? '' : 'disabled';
-        tr.innerHTML=`<td>${fmtDateTime(t.estimatedArrival)}</td><td>${t.containerSeq||'-'}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td>
+        tr.innerHTML=`<td>${fmtDateTime(t.estimatedArrival)}</td><td>${getTaskContainerSeqDisplay(t)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td>
           <td><input id="gatePlate_${t.id}" class="form-control" value="${t.truckPlate||''}" placeholder="车牌" style="width:95px" ${disabled}></td>
           <td><input id="gateDriver_${t.id}" class="form-control" value="${t.driverName||''}" placeholder="司机" style="width:90px" ${disabled}></td>
           <td><input id="gatePhone_${t.id}" class="form-control" value="${t.driverPhone||''}" placeholder="电话" style="width:105px" ${disabled}></td>
@@ -4866,7 +4888,7 @@ let main=document.getElementById('mainContent');
       const list = rows.filter(t => getFactoryReceivingStatus(t)==='inside_waiting');
       if(!document.getElementById('factoryWaitingSection')) return;
       if(list.length===0){document.getElementById('factoryWaitingSection').innerHTML='<div class="table-wrapper"><div style="padding:16px;text-align:center">暂无工厂内等待集装箱</div></div>'; return;}
-      renderTable('factoryWaitingSection',['进入工厂时间','等待分钟','序号','批次','集装箱号','卸货口','车牌','司机','电话'],list,(t)=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${fmtDateTime(t.waitingAreaTime || t.gateReleaseTime)}</td><td>${minutesBetween(t.waitingAreaTime || t.gateReleaseTime,nowLocalInput())}</td><td>${t.containerSeq||'-'}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td>${t.driverPhone||'-'}</td>`;return tr;});
+      renderTable('factoryWaitingSection',['进入工厂时间','等待分钟','序号','批次','集装箱号','卸货口','车牌','司机','电话'],list,(t)=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${fmtDateTime(t.waitingAreaTime || t.gateReleaseTime)}</td><td>${minutesBetween(t.waitingAreaTime || t.gateReleaseTime,nowLocalInput())}</td><td>${getTaskContainerSeqDisplay(t)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td>${t.driverPhone||'-'}</td>`;return tr;});
     }
     function renderFactoryDockSection(rows){
       const list = rows.filter(t => ['inside_waiting','unloading','unloaded'].includes(getFactoryReceivingStatus(t)));
@@ -4874,7 +4896,7 @@ let main=document.getElementById('mainContent');
       if(list.length===0){document.getElementById('factoryDockSection').innerHTML='<div class="table-wrapper"><div style="padding:16px;text-align:center">暂无卸货口收货数据</div></div>'; return;}
       renderTable('factoryDockSection',['卸货口','状态','序号','批次','集装箱号','车牌','进厂时间','开始卸货','完成掏箱','操作'],list,(t)=>{
         let tr=document.createElement('tr'); let st=getFactoryReceivingStatus(t); const dock=t.unloadingDock||''; const disabled=canOperateDock(dock)?'':'disabled';
-        tr.innerHTML=`<td>${dock||'-'}</td><td>${renderStatusBadgeV41(st)}</td><td>${t.containerSeq||'-'}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime||t.gateReleaseTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})" ${disabled}>确认到达卸货口/开始卸货</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading(${t.id})" ${disabled}>确认掏箱完成</button>`:'-'}</td>`;
+        tr.innerHTML=`<td>${dock||'-'}</td><td>${renderStatusBadgeV41(st)}</td><td>${getTaskContainerSeqDisplay(t)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime||t.gateReleaseTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})" ${disabled}>确认到达卸货口/开始卸货</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading(${t.id})" ${disabled}>确认掏箱完成</button>`:'-'}</td>`;
         return tr;
       });
     }
@@ -6115,6 +6137,177 @@ let main=document.getElementById('mainContent');
       window[fn] = wrapped;
     }
   });
+
+  // ==================== V42.18 修复：提箱计划到工厂同步进入工厂到货监控 ====================
+  function v4217IsFactoryDestination(dest){
+    const d = String(dest || '').trim();
+    return d === '工厂' || d.toLowerCase() === 'factory' || d.toUpperCase() === 'GWM';
+  }
+
+  function v4217FindExistingFactoryTaskByPickupPlan(plan){
+    if(!plan) return null;
+    return transportTasks.find(t =>
+      t &&
+      t.to === '工厂' &&
+      !t.cancelled &&
+      t.source === 'pickupPlan' &&
+      (String(t.sourcePlanId || '') === String(plan.id || '') ||
+       (!t.sourcePlanId && String(t.containerId || '') === String(plan.containerId || '') && String(t.estimatedArrival || '') === String(plan.arrivalDate || '')))
+    ) || null;
+  }
+
+  function v4217EnsureFactoryReceivingTaskFromPickupPlan(plan){
+    if(!plan || !v4217IsFactoryDestination(plan.destination) || plan.status === 'cancelled') return null;
+    let cont = containers.find(c => String(c.id) === String(plan.containerId)) || {};
+    let task = v4217FindExistingFactoryTaskByPickupPlan(plan);
+    if(!task){
+      task = {
+        id: nextIds.task++,
+        containerId: plan.containerId,
+        containerNo: plan.containerNo || cont.containerNo || '',
+        containerSeq: cont.containerSeq || plan.containerSeq || '',
+        batch: plan.batch || cont.batch || '',
+        blNo: getTaskBlText(plan),
+        iraNo: getIraList(plan.containerId),
+        from: '港口',
+        to: '工厂',
+        carrier: plan.carrier || 'RG',
+        status: plan.status === 'confirmed' ? 'in_transit' : 'planned',
+        operationStatus: 'not_arrived',
+        estimatedArrival: plan.arrivalDate || '',
+        unloadingDock: plan.unloadingDock || '',
+        source: 'pickupPlan',
+        sourcePlanId: plan.id,
+        createdAt: new Date().toISOString(),
+        publishedAt: new Date().toISOString(),
+        gateArrivalTime:'', gateReleaseTime:'', waitingAreaTime:'', unloadStartTime:'', unloadFinishTime:''
+      };
+      transportTasks.push(task);
+    }else{
+      task.sourcePlanId = task.sourcePlanId || plan.id;
+      task.containerId = plan.containerId;
+      task.containerNo = plan.containerNo || task.containerNo || cont.containerNo || '';
+      task.containerSeq = cont.containerSeq || plan.containerSeq || task.containerSeq || '';
+      task.batch = plan.batch || task.batch || cont.batch || '';
+      task.blNo = getTaskBlText(plan);
+      task.iraNo = getIraList(plan.containerId) || task.iraNo || '';
+      task.from = '港口';
+      task.to = '工厂';
+      task.carrier = plan.carrier || task.carrier || 'RG';
+      task.estimatedArrival = plan.arrivalDate || task.estimatedArrival || '';
+      task.unloadingDock = plan.unloadingDock || task.unloadingDock || '';
+      task.status = plan.status === 'confirmed' ? 'in_transit' : (task.status || 'planned');
+      if(!task.operationStatus) task.operationStatus = 'not_arrived';
+    }
+    sanitizeFactoryTaskState(task);
+    return task;
+  }
+
+  function v4217SyncFactoryTasksFromPickupPlans(){
+    let changed = false;
+    pickupPlans.forEach(plan => {
+      if(plan && v4217IsFactoryDestination(plan.destination) && plan.status !== 'cancelled'){
+        const beforeCount = transportTasks.length;
+        v4217EnsureFactoryReceivingTaskFromPickupPlan(plan);
+        if(transportTasks.length !== beforeCount) changed = true;
+      }
+    });
+    return changed;
+  }
+
+  // 重新覆盖提箱计划发布：目的地=工厂时，发布后立即生成工厂到货监控任务，初始状态=未到工厂。
+  window.publishSingle = function(id){
+    let v=validatePickupInput(id);
+    if(!v.ok){alert(v.msg);return;}
+    let cont=containers.find(c=>c.id===id);
+    if(!cont)return;
+    if(pickupPlans.some(p=>p.containerId===id&&p.status!=='cancelled')){alert('已有待确认计划');return;}
+    let plan={id:nextIds.plan++,containerId:id,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,arrivalDate:v.arrival,carrier:v.carrier,destination:v.dest,unloadingDock:v.dock,status:'pending',needReconfirm:false};
+    pickupPlans.push(plan);
+    if(v4217IsFactoryDestination(v.dest)) v4217EnsureFactoryReceivingTaskFromPickupPlan(plan);
+    const viewState=capturePickupPlanViewState();
+    saveData();
+    refreshPickupPlanTablesKeepState(viewState);
+    alert('计划已发布');
+  };
+
+  window.batchPublish = function(){
+    let selected=document.querySelectorAll('.pickup-checkbox:checked');
+    if(selected.length===0){alert('请先选择');return;}
+    let count=0;
+    for(let cb of selected){
+      let id=parseInt(cb.dataset.id);
+      let v=validatePickupInput(id);
+      if(!v.ok){alert(`集装箱 ${containers.find(c=>c.id===id)?.containerNo||id}: ${v.msg}`);return;}
+      let cont=containers.find(c=>c.id===id);
+      if(cont&&!pickupPlans.some(p=>p.containerId===id&&p.status!=='cancelled')){
+        let plan={id:nextIds.plan++,containerId:id,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,arrivalDate:v.arrival,carrier:v.carrier,destination:v.dest,unloadingDock:v.dock,status:'pending',needReconfirm:false};
+        pickupPlans.push(plan);
+        if(v4217IsFactoryDestination(v.dest)) v4217EnsureFactoryReceivingTaskFromPickupPlan(plan);
+        count++;
+      }
+    }
+    if(count>0){
+      const viewState=capturePickupPlanViewState();
+      saveData();
+      refreshPickupPlanTablesKeepState(viewState);
+      alert(`成功发布 ${count} 个计划`);
+    } else alert('没有可发布的计划');
+  };
+
+  // 重新覆盖运输公司确认提箱：如果发布时已生成工厂监控任务，则更新该任务，不再重复生成。
+  window.confirmPickupTask = function(planId){
+    let plan = pickupPlans.find(p => p.id === planId);
+    if(!plan){alert('找不到计划');return;}
+    let actualTime = document.getElementById(`pickupTime_${planId}`)?.value;
+    if(!actualTime){alert('请填写实际提箱日期');return;}
+    let cont = containers.find(c => c.id === plan.containerId);
+    if(cont) cont.actualPickupTime = actualTime;
+    plan.status = 'confirmed';
+    plan.actualPickupTime = actualTime;
+    plan.needReconfirm = false;
+    let task = null;
+    if(v4217IsFactoryDestination(plan.destination)){
+      task = v4217EnsureFactoryReceivingTaskFromPickupPlan(plan);
+      if(task){ task.status='in_transit'; task.actualPickupTime=actualTime; }
+    }else{
+      transportTasks.push({id:nextIds.task++,containerId:plan.containerId,containerNo:plan.containerNo,containerSeq:(cont?.containerSeq || plan.containerSeq || ''),batch:plan.batch,blNo:getTaskBlText(plan),iraNo:getIraList(plan.containerId),from:'港口',to:plan.destination,carrier:plan.carrier,status:'in_transit',operationStatus:'',estimatedArrival:plan.arrivalDate,unloadingDock:plan.unloadingDock||'',source:'pickupPlan',sourcePlanId:plan.id,createdAt:new Date().toISOString(),publishedAt:new Date().toISOString(),gateArrivalTime:'',gateReleaseTime:'',waitingAreaTime:'',unloadStartTime:'',unloadFinishTime:''});
+    }
+    saveData();
+    let activeTab = document.querySelector('.date-tab.active');
+    let keepDate = activeTab?.dataset?.date || getDatePart(plan.arrivalDate);
+    let main = document.getElementById('mainContent');
+    if (main && keepDate) window.renderTransportTasksWithDate(main, keepDate); else renderContent();
+    alert(`已确认提箱 ${plan.containerNo}`);
+  };
+
+  // 重新覆盖撤回：提箱计划撤回时同步撤回尚未开始门岗/卸货流程的工厂监控任务。
+  window.cancelPlan = function(planId){
+    if(confirm('确定取消？')){
+      let plan=pickupPlans.find(p=>p.id===planId);
+      if(plan){
+        let task = v4217FindExistingFactoryTaskByPickupPlan(plan);
+        if(task && hasFactoryExecutionStarted(task)){
+          alert('该计划已进入门岗/工厂收货执行环节，不允许在提箱计划中取消。');
+          return;
+        }
+        plan.status='cancelled';
+        if(task){ task.cancelled = true; task.status = 'cancelled'; task.operationStatus = 'cancelled'; }
+        const viewState=capturePickupPlanViewState();
+        saveData();
+        refreshPickupPlanTablesKeepState(viewState);
+        alert('已取消');
+      }
+    }
+  };
+
+  // 重新覆盖工厂监控取数：进入页面时自动补齐历史“提箱计划→工厂”但未生成监控任务的数据。
+  const v4217OriginalGetFactoryReceivingTasksV41 = getFactoryReceivingTasksV41;
+  getFactoryReceivingTasksV41 = function(date){
+    v4217SyncFactoryTasksFromPickupPlans();
+    return v4217OriginalGetFactoryReceivingTasksV41(date);
+  };
+
 })();
 </script>
 
@@ -6381,7 +6574,263 @@ let main=document.getElementById('mainContent');
   window.resetTransportPlanDate = function(){
     window.renderTransportTasks(document.getElementById('mainContent'));
   };
+
+  // ==================== V42.18 修复：提箱计划到工厂同步进入工厂到货监控 ====================
+  function v4217IsFactoryDestination(dest){
+    const d = String(dest || '').trim();
+    return d === '工厂' || d.toLowerCase() === 'factory' || d.toUpperCase() === 'GWM';
+  }
+
+  function v4217FindExistingFactoryTaskByPickupPlan(plan){
+    if(!plan) return null;
+    return transportTasks.find(t =>
+      t &&
+      t.to === '工厂' &&
+      !t.cancelled &&
+      t.source === 'pickupPlan' &&
+      (String(t.sourcePlanId || '') === String(plan.id || '') ||
+       (!t.sourcePlanId && String(t.containerId || '') === String(plan.containerId || '') && String(t.estimatedArrival || '') === String(plan.arrivalDate || '')))
+    ) || null;
+  }
+
+  function v4217EnsureFactoryReceivingTaskFromPickupPlan(plan){
+    if(!plan || !v4217IsFactoryDestination(plan.destination) || plan.status === 'cancelled') return null;
+    let cont = containers.find(c => String(c.id) === String(plan.containerId)) || {};
+    let task = v4217FindExistingFactoryTaskByPickupPlan(plan);
+    if(!task){
+      task = {
+        id: nextIds.task++,
+        containerId: plan.containerId,
+        containerNo: plan.containerNo || cont.containerNo || '',
+        containerSeq: cont.containerSeq || plan.containerSeq || '',
+        batch: plan.batch || cont.batch || '',
+        blNo: getTaskBlText(plan),
+        iraNo: getIraList(plan.containerId),
+        from: '港口',
+        to: '工厂',
+        carrier: plan.carrier || 'RG',
+        status: plan.status === 'confirmed' ? 'in_transit' : 'planned',
+        operationStatus: 'not_arrived',
+        estimatedArrival: plan.arrivalDate || '',
+        unloadingDock: plan.unloadingDock || '',
+        source: 'pickupPlan',
+        sourcePlanId: plan.id,
+        createdAt: new Date().toISOString(),
+        publishedAt: new Date().toISOString(),
+        gateArrivalTime:'', gateReleaseTime:'', waitingAreaTime:'', unloadStartTime:'', unloadFinishTime:''
+      };
+      transportTasks.push(task);
+    }else{
+      task.sourcePlanId = task.sourcePlanId || plan.id;
+      task.containerId = plan.containerId;
+      task.containerNo = plan.containerNo || task.containerNo || cont.containerNo || '';
+      task.containerSeq = cont.containerSeq || plan.containerSeq || task.containerSeq || '';
+      task.batch = plan.batch || task.batch || cont.batch || '';
+      task.blNo = getTaskBlText(plan);
+      task.iraNo = getIraList(plan.containerId) || task.iraNo || '';
+      task.from = '港口';
+      task.to = '工厂';
+      task.carrier = plan.carrier || task.carrier || 'RG';
+      task.estimatedArrival = plan.arrivalDate || task.estimatedArrival || '';
+      task.unloadingDock = plan.unloadingDock || task.unloadingDock || '';
+      task.status = plan.status === 'confirmed' ? 'in_transit' : (task.status || 'planned');
+      if(!task.operationStatus) task.operationStatus = 'not_arrived';
+    }
+    sanitizeFactoryTaskState(task);
+    return task;
+  }
+
+  function v4217SyncFactoryTasksFromPickupPlans(){
+    let changed = false;
+    pickupPlans.forEach(plan => {
+      if(plan && v4217IsFactoryDestination(plan.destination) && plan.status !== 'cancelled'){
+        const beforeCount = transportTasks.length;
+        v4217EnsureFactoryReceivingTaskFromPickupPlan(plan);
+        if(transportTasks.length !== beforeCount) changed = true;
+      }
+    });
+    return changed;
+  }
+
+  // 重新覆盖提箱计划发布：目的地=工厂时，发布后立即生成工厂到货监控任务，初始状态=未到工厂。
+  window.publishSingle = function(id){
+    let v=validatePickupInput(id);
+    if(!v.ok){alert(v.msg);return;}
+    let cont=containers.find(c=>c.id===id);
+    if(!cont)return;
+    if(pickupPlans.some(p=>p.containerId===id&&p.status!=='cancelled')){alert('已有待确认计划');return;}
+    let plan={id:nextIds.plan++,containerId:id,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,arrivalDate:v.arrival,carrier:v.carrier,destination:v.dest,unloadingDock:v.dock,status:'pending',needReconfirm:false};
+    pickupPlans.push(plan);
+    if(v4217IsFactoryDestination(v.dest)) v4217EnsureFactoryReceivingTaskFromPickupPlan(plan);
+    const viewState=capturePickupPlanViewState();
+    saveData();
+    refreshPickupPlanTablesKeepState(viewState);
+    alert('计划已发布');
+  };
+
+  window.batchPublish = function(){
+    let selected=document.querySelectorAll('.pickup-checkbox:checked');
+    if(selected.length===0){alert('请先选择');return;}
+    let count=0;
+    for(let cb of selected){
+      let id=parseInt(cb.dataset.id);
+      let v=validatePickupInput(id);
+      if(!v.ok){alert(`集装箱 ${containers.find(c=>c.id===id)?.containerNo||id}: ${v.msg}`);return;}
+      let cont=containers.find(c=>c.id===id);
+      if(cont&&!pickupPlans.some(p=>p.containerId===id&&p.status!=='cancelled')){
+        let plan={id:nextIds.plan++,containerId:id,containerNo:cont.containerNo,containerSeq:cont.containerSeq||'',batch:cont.batch,arrivalDate:v.arrival,carrier:v.carrier,destination:v.dest,unloadingDock:v.dock,status:'pending',needReconfirm:false};
+        pickupPlans.push(plan);
+        if(v4217IsFactoryDestination(v.dest)) v4217EnsureFactoryReceivingTaskFromPickupPlan(plan);
+        count++;
+      }
+    }
+    if(count>0){
+      const viewState=capturePickupPlanViewState();
+      saveData();
+      refreshPickupPlanTablesKeepState(viewState);
+      alert(`成功发布 ${count} 个计划`);
+    } else alert('没有可发布的计划');
+  };
+
+  // 重新覆盖运输公司确认提箱：如果发布时已生成工厂监控任务，则更新该任务，不再重复生成。
+  window.confirmPickupTask = function(planId){
+    let plan = pickupPlans.find(p => p.id === planId);
+    if(!plan){alert('找不到计划');return;}
+    let actualTime = document.getElementById(`pickupTime_${planId}`)?.value;
+    if(!actualTime){alert('请填写实际提箱日期');return;}
+    let cont = containers.find(c => c.id === plan.containerId);
+    if(cont) cont.actualPickupTime = actualTime;
+    plan.status = 'confirmed';
+    plan.actualPickupTime = actualTime;
+    plan.needReconfirm = false;
+    let task = null;
+    if(v4217IsFactoryDestination(plan.destination)){
+      task = v4217EnsureFactoryReceivingTaskFromPickupPlan(plan);
+      if(task){ task.status='in_transit'; task.actualPickupTime=actualTime; }
+    }else{
+      transportTasks.push({id:nextIds.task++,containerId:plan.containerId,containerNo:plan.containerNo,containerSeq:(cont?.containerSeq || plan.containerSeq || ''),batch:plan.batch,blNo:getTaskBlText(plan),iraNo:getIraList(plan.containerId),from:'港口',to:plan.destination,carrier:plan.carrier,status:'in_transit',operationStatus:'',estimatedArrival:plan.arrivalDate,unloadingDock:plan.unloadingDock||'',source:'pickupPlan',sourcePlanId:plan.id,createdAt:new Date().toISOString(),publishedAt:new Date().toISOString(),gateArrivalTime:'',gateReleaseTime:'',waitingAreaTime:'',unloadStartTime:'',unloadFinishTime:''});
+    }
+    saveData();
+    let activeTab = document.querySelector('.date-tab.active');
+    let keepDate = activeTab?.dataset?.date || getDatePart(plan.arrivalDate);
+    let main = document.getElementById('mainContent');
+    if (main && keepDate) window.renderTransportTasksWithDate(main, keepDate); else renderContent();
+    alert(`已确认提箱 ${plan.containerNo}`);
+  };
+
+  // 重新覆盖撤回：提箱计划撤回时同步撤回尚未开始门岗/卸货流程的工厂监控任务。
+  window.cancelPlan = function(planId){
+    if(confirm('确定取消？')){
+      let plan=pickupPlans.find(p=>p.id===planId);
+      if(plan){
+        let task = v4217FindExistingFactoryTaskByPickupPlan(plan);
+        if(task && hasFactoryExecutionStarted(task)){
+          alert('该计划已进入门岗/工厂收货执行环节，不允许在提箱计划中取消。');
+          return;
+        }
+        plan.status='cancelled';
+        if(task){ task.cancelled = true; task.status = 'cancelled'; task.operationStatus = 'cancelled'; }
+        const viewState=capturePickupPlanViewState();
+        saveData();
+        refreshPickupPlanTablesKeepState(viewState);
+        alert('已取消');
+      }
+    }
+  };
+
+  // 重新覆盖工厂监控取数：进入页面时自动补齐历史“提箱计划→工厂”但未生成监控任务的数据。
+  const v4217OriginalGetFactoryReceivingTasksV41 = getFactoryReceivingTasksV41;
+  getFactoryReceivingTasksV41 = function(date){
+    v4217SyncFactoryTasksFromPickupPlans();
+    return v4217OriginalGetFactoryReceivingTasksV41(date);
+  };
+
 })();
+
+
+  // ==================== V42.18 修复：工厂完成卸货后运输任务结束并进入待还箱 ====================
+  function v4218NeedReturnAfterFactoryUnload(task){
+    if(!task) return false;
+    const from = String(task.from || '').trim();
+    const to = String(task.to || '').trim();
+    return to === '工厂' && (from === '港口' || from === 'RG堆场');
+  }
+
+  function v4218EnsureReturnRecordAfterFactoryUnload(task){
+    if(!task || !task.containerId) return;
+    const cid = task.containerId;
+    const loc = task.to || '工厂';
+    const today = fmtDate(new Date().toISOString().split('T')[0]);
+
+    // 港口 / RG堆场 → 工厂：完成卸货后必须进入待还箱。
+    if(v4218NeedReturnAfterFactoryUnload(task)){
+      const exists = returnRecords.some(r =>
+        String(r.containerId) === String(cid) &&
+        r.location === loc &&
+        (r.type === 'return_needed' || r.type === 'return')
+      );
+      if(!exists){
+        returnRecords.push({
+          containerId: cid,
+          location: loc,
+          type: 'return_needed',
+          unpackDate: today,
+          isReturnConfirmed: false,
+          fromLocation: task.from || '',
+          createdBy: currentUser?.name || currentUser?.email || '',
+          createdAt: new Date().toISOString()
+        });
+      }
+    }else{
+      // Rio Claro / IRA → 工厂：属于 Sider 二次配送，不进入还箱确认，仅保留卸货完成记录。
+      const exists = returnRecords.some(r =>
+        String(r.containerId) === String(cid) &&
+        r.location === loc &&
+        r.type === 'unpack'
+      );
+      if(!exists){
+        returnRecords.push({
+          containerId: cid,
+          location: loc,
+          type: 'unpack',
+          unpackDate: today,
+          isReturnConfirmed: true,
+          fromLocation: task.from || '',
+          createdBy: currentUser?.name || currentUser?.email || '',
+          createdAt: new Date().toISOString()
+        });
+      }
+    }
+  }
+
+  // 覆盖卸货完成：不能继续停留在运输中；按来源自动判断是否进入待还箱。
+  window.finishUnloading = function(taskId){
+    let t = transportTasks.find(x => x.id === taskId);
+    if(!t) return;
+    t.unloadFinishTime = t.unloadFinishTime || nowLocalInput();
+    t.operationStatus = 'unloaded';
+    t.status = 'arrived'; // 从运输公司“运输中”移除，但仍保留工厂收货已完成状态
+    t.actualArrival = t.actualArrival || t.gateArrivalTime || t.waitingAreaTime || t.unloadFinishTime;
+    if(t.containerId) addStock(t.containerId, '工厂');
+    v4218EnsureReturnRecordAfterFactoryUnload(t);
+    saveAndRenderContentKeepState();
+    if(v4218NeedReturnAfterFactoryUnload(t)){
+      alert('已确认掏箱完成，运输任务已结束，并已生成待还箱任务。');
+    }else{
+      alert('已确认掏箱完成，运输任务已结束。');
+    }
+  };
+
+  // 运输公司任务只显示未完成执行任务；已完成卸货/已取消/已到厂完成的任务不再显示在运输中。
+  isTransportCompanyVisibleTask = function(t){
+    if(!t || !isOperationalVisibleTask(t)) return false;
+    if(t.cancelled) return false;
+    if(t.operationStatus === 'unloaded') return false;
+    if(t.unloadFinishTime) return false;
+    if(t.status === 'arrived' || t.status === 'completed' || t.status === 'cancelled') return false;
+    return true;
+  };
+
 </script>
 
 </body>
