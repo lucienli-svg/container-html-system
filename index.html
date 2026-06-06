@@ -946,6 +946,19 @@
     .prod-empty-cell.required { color:#b26b00; background:#fffaf0; border-color:#f3d19e; }
     @media(max-width:768px){ .prod-plan-summary-grid{grid-template-columns:1fr!important;} .prod-plan-sheet{min-width:980px!important;} .prod-plan-item{grid-template-columns:1fr;} .prod-plan-actions{justify-content:flex-start;} }
 
+
+    /* ==================== V42.20 工厂日历 ==================== */
+    .factory-calendar-grid { display:grid; grid-template-columns: repeat(7, minmax(110px,1fr)); gap:10px; }
+    .factory-day-card { border:1px solid #e4e7ed; border-radius:12px; padding:12px; background:#fff; min-height:96px; box-shadow:0 1px 3px rgba(0,0,0,0.03); }
+    .factory-day-card.workday { border-left:4px solid #67c23a; }
+    .factory-day-card.rest { border-left:4px solid #f56c6c; background:#fffafa; }
+    .factory-day-card.holiday { border-left:4px solid #e6a23c; background:#fffaf0; }
+    .factory-day-card.overtime { border-left:4px solid #409eff; background:#f0f7ff; }
+    .factory-day-date { font-weight:700; color:#303133; margin-bottom:6px; }
+    .factory-day-type { font-size:12px; padding:2px 8px; border-radius:999px; display:inline-block; background:#f4f4f5; margin-bottom:8px; }
+    .factory-day-note { font-size:12px; color:#606266; line-height:1.5; min-height:18px; }
+    .factory-calendar-alert { background:#fff7e6; border-left:4px solid #e6a23c; border-radius:8px; padding:10px 12px; margin-bottom:12px; color:#8a5a00; font-size:13px; }
+
   </style>
 </head>
 <body>
@@ -1096,8 +1109,8 @@
       compactLargeStorageFields();
       return {
         containers, blList, containerBlMap, transportTasks, locationStock, returnRecords,
-        pickupPlans, productionRecords, productionPlans, nextIds, storageConfig, demurrageConfig, warningConfig,
-        version: 'V40.2 Andon Sequence',
+        pickupPlans, productionRecords, productionPlans, factoryCalendar, nextIds, storageConfig, demurrageConfig, warningConfig,
+        version: 'V42.20 Factory Calendar',
         updatedAt: new Date().toISOString(),
         updatedBy: cloudUser?.email || currentUser?.email || currentUser?.name || ''
       };
@@ -1114,6 +1127,7 @@
       pickupPlans = Array.isArray(data.pickupPlans) ? data.pickupPlans : [];
       productionRecords = Array.isArray(data.productionRecords) ? data.productionRecords : [];
       productionPlans = Array.isArray(data.productionPlans) ? data.productionPlans : [];
+      factoryCalendar = Array.isArray(data.factoryCalendar) ? data.factoryCalendar : [];
       nextIds = data.nextIds || {container:1, task:1, plan:1, production:1};
       storageConfig = Array.isArray(data.storageConfig) ? data.storageConfig : [];
       demurrageConfig = Array.isArray(data.demurrageConfig) ? data.demurrageConfig : [];
@@ -1546,6 +1560,7 @@
     const allMenus = [
       { id:'dashboard', name:'工作台', icon:'📊', roles:['订购科'] },
       { id:'productionPlan', name:'生产计划维护', icon:'🗓️', roles:['订购科','工厂管理员'] },
+      { id:'factoryCalendar', name:'工厂日历', icon:'📅', roles:['订购科','工厂管理员'] },
       { id:'containers', name:'基础数据', icon:'📦', roles:['订购科'] },
       { id:'blIra', name:'提单/IRA管理', icon:'📋', roles:['订购科','关务'] },
       { id:'customs', name:'清关维护', icon:'🛃', roles:['订购科','关务'] },
@@ -1566,7 +1581,7 @@
     ];
 
     const permissionModules = [
-      {id:'dashboard', name:'工作台'}, {id:'productionPlan', name:'生产计划维护'}, {id:'containers', name:'基础数据'},
+      {id:'dashboard', name:'工作台'}, {id:'productionPlan', name:'生产计划维护'}, {id:'factoryCalendar', name:'工厂日历'}, {id:'containers', name:'基础数据'},
       {id:'blIra', name:'提单/IRA管理'}, {id:'customs', name:'清关维护'},
       {id:'pickupPlan', name:'提箱计划'}, {id:'dynamicPlan', name:'动态运输计划'},
       {id:'transportTasks', name:'运输任务'}, {id:'factoryReceiving', name:'工厂到货监控'},
@@ -1589,7 +1604,7 @@
     }
 
     // ==================== 全局变量 ====================
-    let containers=[], blList=[], containerBlMap=[], transportTasks=[], locationStock=[], returnRecords=[], pickupPlans=[], productionRecords=[], productionPlans=[];
+    let containers=[], blList=[], containerBlMap=[], transportTasks=[], locationStock=[], returnRecords=[], pickupPlans=[], productionRecords=[], productionPlans=[], factoryCalendar=[];
     let currentUser=null, currentMenu='dashboard';
     // ==================== V39.6 当前页面操作锁 ====================
     // 目的：用户在筛选/确认/编辑当前页面时，不让实时同步重绘当前页面，避免筛选条件和表格状态被清空。
@@ -2044,6 +2059,7 @@ function getContainerLocation(cid){
       localStorage.setItem('cc_pickupPlans',JSON.stringify(pickupPlans));
       localStorage.setItem('cc_productionRecords',JSON.stringify(productionRecords));
       localStorage.setItem('cc_productionPlans',JSON.stringify(productionPlans));
+      localStorage.setItem('cc_factoryCalendar',JSON.stringify(factoryCalendar));
       localStorage.setItem('cc_nextIds',JSON.stringify(nextIds));
       localStorage.setItem('cc_storageConfig',JSON.stringify(storageConfig));
       localStorage.setItem('cc_demurrageConfig',JSON.stringify(demurrageConfig));
@@ -2064,6 +2080,7 @@ function getContainerLocation(cid){
         pickupPlans = JSON.parse(localStorage.getItem('cc_pickupPlans') || '[]');
         productionRecords = JSON.parse(localStorage.getItem('cc_productionRecords') || '[]');
         productionPlans = JSON.parse(localStorage.getItem('cc_productionPlans') || '[]');
+        factoryCalendar = JSON.parse(localStorage.getItem('cc_factoryCalendar') || '[]');
         nextIds = JSON.parse(localStorage.getItem('cc_nextIds') || '{"container":1,"task":1,"plan":1,"production":1}');
         
         let savedStorage = localStorage.getItem('cc_storageConfig');
@@ -2086,6 +2103,7 @@ function getContainerLocation(cid){
         pickupPlans = [];
         productionRecords = [];
         productionPlans = [];
+        factoryCalendar = [];
         nextIds = {container: 1, task: 1, plan: 1, production: 1};
         storageConfig = [];
         demurrageConfig = [];
@@ -2196,6 +2214,7 @@ let main=document.getElementById('mainContent');
       switch(currentMenu){
         case'dashboard':renderDashboard(main);break;
         case'productionPlan':renderProductionPlan(main);break;
+        case'factoryCalendar':renderFactoryCalendar(main);break;
         case'containers':renderContainers(main);break;
         case'blIra':renderBlIra(main);break;
         case'customs':renderCustoms(main);break;
@@ -4422,6 +4441,104 @@ let main=document.getElementById('mainContent');
       return productionPlans.filter(p => p.date===date && (!dock || p.dock===dock) && parseInt(p.seq||999999)<doneMax && !existingNos.has(String(p.containerNo||'').trim().toUpperCase()));
     }
 
+
+
+    // ==================== V42.20 工厂日历 / 工作日判断 ====================
+    function getFactoryCalendarItem(date){
+      return (factoryCalendar||[]).find(x=>String(x.date||'')===String(date||'')) || null;
+    }
+    function getFactoryDayType(date){
+      const item=getFactoryCalendarItem(date);
+      if(item && item.type) return item.type;
+      const d=new Date(String(date||'')+'T00:00:00');
+      if(!isNaN(d.getTime())){
+        const day=d.getDay();
+        if(day===0 || day===6) return 'rest';
+      }
+      return 'workday';
+    }
+    function getFactoryDayTypeLabel(type){
+      const map={workday:'工作日',rest:'休息日',holiday:'法定假日',overtime:'特殊加班'};
+      return map[type]||type||'工作日';
+    }
+    function isFactoryWorkday(date){
+      const type=getFactoryDayType(date);
+      return type==='workday' || type==='overtime';
+    }
+    function getPreviousFactoryWorkday(date){
+      let d=String(date||getTodayStr());
+      for(let i=0;i<30;i++){
+        d=addDaysToDateStr(d,-1);
+        if(isFactoryWorkday(d)) return d;
+      }
+      return addDaysToDateStr(String(date||getTodayStr()),-1);
+    }
+    function getNextFactoryWorkday(date){
+      let d=String(date||getTodayStr());
+      for(let i=0;i<30;i++){
+        d=addDaysToDateStr(d,1);
+        if(isFactoryWorkday(d)) return d;
+      }
+      return addDaysToDateStr(String(date||getTodayStr()),1);
+    }
+    function factoryCalendarBaseDates(baseDate, days){
+      const arr=[]; let d=baseDate||getTodayStr();
+      for(let i=0;i<(days||14);i++){ arr.push(d); d=addDaysToDateStr(d,1); }
+      return arr;
+    }
+    function warnIfProductionPlanOnRestDay(date){
+      if(!date) return false;
+      if(!isFactoryWorkday(date)){
+        alert(`${fmtDate(date)} 是${getFactoryDayTypeLabel(getFactoryDayType(date))}，不建议/不允许维护生产计划。如需排产，请先在“工厂日历”中设置为特殊加班。`);
+        return true;
+      }
+      return false;
+    }
+    function productionRequiredArrivalDate(productionDate){
+      return getPreviousFactoryWorkday(productionDate);
+    }
+    function renderFactoryCalendar(container){
+      const base=document.getElementById('factoryCalendarBaseDate')?.value || getTodayStr();
+      const dates=factoryCalendarBaseDates(base,21);
+      const restCount=dates.filter(d=>!isFactoryWorkday(d)).length;
+      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📅 工厂日历</span><button class="btn btn-primary" onclick="currentMenu='productionPlan';renderSidebar();renderContent();">返回生产计划</button></div>
+        <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:12px;">维护工厂工作日、休息日、法定假日和特殊加班。生产计划默认不允许排在休息日/假日；如周末需要生产，请设置为“特殊加班”。后续自动到箱计划会按“提前1个工作日”计算。</div>
+        <div class="factory-calendar-alert">当前显示 ${fmtDate(dates[0])} - ${fmtDate(dates[dates.length-1])}，其中非工作日 ${restCount} 天。</div>
+        <div class="search-bar"><span>起始日期</span><input type="date" id="factoryCalendarBaseDate" value="${base}" onchange="renderFactoryCalendar(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderFactoryCalendar(document.getElementById('mainContent'))">刷新</button><button class="btn btn-success" onclick="openFactoryCalendarBatchModal('${base}')">批量维护</button></div>
+        <div class="factory-calendar-grid">${dates.map(d=>renderFactoryCalendarDayCard(d)).join('')}</div></div>`;
+    }
+    function renderFactoryCalendarDayCard(date){
+      const item=getFactoryCalendarItem(date)||{};
+      const type=getFactoryDayType(date);
+      const note=item.note||'';
+      return `<div class="factory-day-card ${type}"><div class="factory-day-date">${fmtDate(date)}</div><div class="factory-day-type">${getFactoryDayTypeLabel(type)}</div><div class="factory-day-note">${note||'&nbsp;'}</div><div style="margin-top:8px;"><select class="form-control" style="height:30px;margin-bottom:6px;" onchange="setFactoryCalendarDay('${date}',this.value,document.getElementById('fc_note_${date}').value)"><option value="workday" ${type==='workday'?'selected':''}>工作日</option><option value="rest" ${type==='rest'?'selected':''}>休息日</option><option value="holiday" ${type==='holiday'?'selected':''}>法定假日</option><option value="overtime" ${type==='overtime'?'selected':''}>特殊加班</option></select><input id="fc_note_${date}" class="form-control" style="height:30px;margin-bottom:6px;" value="${note}" placeholder="备注"><button class="btn btn-sm" onclick="setFactoryCalendarDay('${date}',this.parentNode.querySelector('select').value,document.getElementById('fc_note_${date}').value)">保存</button></div></div>`;
+    }
+    window.setFactoryCalendarDay=function(date,type,note){
+      let item=getFactoryCalendarItem(date);
+      if(!item){ item={date}; factoryCalendar.push(item); }
+      item.type=type||'workday'; item.note=note||''; item.updatedAt=new Date().toISOString(); item.updatedBy=currentUser?.name||currentUser?.email||'';
+      saveAndRenderContentKeepState();
+    };
+    window.openFactoryCalendarBatchModal=function(base){
+      document.getElementById('modalTitle').innerText='批量维护工厂日历';
+      document.getElementById('modalBody').innerHTML=`<div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:10px;">粘贴格式：日期、类型、备注。类型可写：工作日/休息日/法定假日/特殊加班，或 workday/rest/holiday/overtime。</div><textarea id="factoryCalendarPaste" class="form-control" style="height:160px" placeholder="2026-06-06	休息日
+2026-06-07	休息日
+2026-06-13	特殊加班"></textarea><button class="btn btn-success" onclick="importFactoryCalendarPaste()">导入</button>`;
+      openModal();
+    };
+    function normalizeFactoryDayType(v){
+      const s=String(v||'').trim().toLowerCase();
+      if(['休息','休息日','rest','off'].includes(s)) return 'rest';
+      if(['假日','法定假日','holiday'].includes(s)) return 'holiday';
+      if(['加班','特殊加班','overtime','work overtime'].includes(s)) return 'overtime';
+      return 'workday';
+    }
+    window.importFactoryCalendarPaste=function(){
+      const text=document.getElementById('factoryCalendarPaste')?.value||''; if(!text.trim()){alert('请先粘贴工厂日历内容');return;}
+      let count=0; text.split(/\r?\n/).forEach((line,i)=>{ const parts=line.split(/\t|,|;/).map(x=>x.trim()); if(parts.length<2) return; if(i===0 && /日期|date|类型|type/i.test(line)) return; const d=normalizeDateOnly(parts[0]); if(!d) return; const type=normalizeFactoryDayType(parts[1]); const note=parts[2]||''; let item=getFactoryCalendarItem(d); if(!item){ item={date:d}; factoryCalendar.push(item); } item.type=type; item.note=note; item.updatedAt=new Date().toISOString(); item.updatedBy=currentUser?.name||currentUser?.email||''; count++; });
+      closeModal(); saveAndRenderContentKeepState(); alert(`已导入 ${count} 条工厂日历`);
+    };
+
     function productionPlanAreaFromWorkshop(workshop){
       const w=String(workshop||'').toLowerCase();
       if(w.includes('weld') || w.includes('焊')) return 'Welding';
@@ -4489,7 +4606,7 @@ let main=document.getElementById('mainContent');
         .sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')) || String(a.workshop||'').localeCompare(String(b.workshop||'')) || getProductionPlanOrder(a)-getProductionPlanOrder(b) || String(a.batch||'').localeCompare(String(b.batch||''),'zh-CN',{numeric:true}));
     }
     function getRequiredPlanMissingDates(baseDate){
-      const dates = productionPlanBaseDates(baseDate).slice(0,2);
+      const dates = productionPlanBaseDates(baseDate).slice(0,2).filter(isFactoryWorkday);
       return dates.filter(d => getScheduleProductionPlans(d).length===0);
     }
     function renderProductionPlan(container){
@@ -4498,10 +4615,10 @@ let main=document.getElementById('mainContent');
       const missing=getRequiredPlanMissingDates(baseDate);
       const unconfirmed=getUnconfirmedProductionPlans();
       container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🗓️ 生产计划维护</span><button class="btn btn-primary" onclick="currentMenu='dashboard';renderSidebar();renderContent();">返回工作台</button></div>
-        <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:14px;">本模块按照计划科排产表格式维护。预排产只显示三天：今天、明天、后天；其中今天和明天必须维护，后天可选。每条计划维护批次顺序，用于后续到箱顺序和收货优先级。生产计划确认会显示所有历史未确认计划，并支持已确认计划修正。</div>
+        <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:14px;">本模块按照计划科排产表格式维护。预排产只显示三天：今天、明天、后天；其中今天和明天的工作日必须维护，后天可选；休息日/假日禁止排产，特殊加班可排产。每条计划维护批次顺序，用于后续到箱顺序和收货优先级。生产计划确认会显示所有历史未确认计划，并支持已确认计划修正。</div>
         ${missing.length?`<div style="background:#fff7e6;border-left:4px solid #e6a23c;border-radius:8px;padding:10px 12px;margin-bottom:10px;color:#8a5a00;">⚠ 必填计划日期尚未维护：${missing.map(fmtDate).join('、')}</div>`:''}
         ${unconfirmed.length?`<div style="background:#fef0f0;border-left:4px solid #f56c6c;border-radius:8px;padding:10px 12px;margin-bottom:10px;color:#9b1c1c;">⚠ 有 ${unconfirmed.length} 条历史生产计划未确认实际完成数量，请在下方“生产计划确认”处理。</div>`:''}
-        <div class="search-bar"><span>计划起始日期</span><input type="date" id="prodPlanBaseDate" value="${baseDate}" onchange="renderProductionPlan(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderProductionPlan(document.getElementById('mainContent'))">刷新</button><button class="btn btn-success" onclick="openAddProductionPlanModal('${baseDate}')">新增计划</button></div>
+        <div class="search-bar"><span>计划起始日期</span><input type="date" id="prodPlanBaseDate" value="${baseDate}" onchange="renderProductionPlan(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderProductionPlan(document.getElementById('mainContent'))">刷新</button><button class="btn btn-success" onclick="openAddProductionPlanModal('${baseDate}')">新增计划</button><button class="btn btn-warning" onclick="currentMenu='factoryCalendar';renderSidebar();renderContent();">工厂日历</button></div>
         ${renderProductionPlanSummary(baseDate)}
       </div>
       <div class="card"><div class="card-header"><span class="card-title">① 预排产（三天滚动表）</span><span style="font-size:12px;color:#909399;">${fmtDate(dates[0])} - ${fmtDate(dates[2])}</span></div>
@@ -4557,7 +4674,7 @@ let main=document.getElementById('mainContent');
     function renderProductionPlanGrid(baseDate){
       const dates=productionPlanBaseDates(baseDate);
       const workshops=productionPlanWorkshops();
-      let html='<div class="table-wrapper"><table class="data-table prod-plan-sheet"><thead><tr><th style="width:140px;">车间/产线</th>'+dates.map((d,i)=>{ const t=productionPlanTotalsFor(d); return `<th>${fmtDate(d)}<br><span style="font-size:11px;color:${i<2?'#f56c6c':'#909399'};">${i===0?'今天 必填':i===1?'明天 必填':'后天 可选'}</span><div class="prod-day-total"><span class="prod-chip gray">合计 ${t.total}</span><span class="prod-chip b">B ${t.b}</span><span class="prod-chip p">P ${t.p}</span></div></th>`; }).join('')+'</tr></thead><tbody>';
+      let html='<div class="table-wrapper"><table class="data-table prod-plan-sheet"><thead><tr><th style="width:140px;">车间/产线</th>'+dates.map((d,i)=>{ const t=productionPlanTotalsFor(d); return `<th>${fmtDate(d)}<br><span style="font-size:11px;color:${!isFactoryWorkday(d)?'#f56c6c':(i<2?'#f56c6c':'#909399')};">${!isFactoryWorkday(d)?getFactoryDayTypeLabel(getFactoryDayType(d)):(i===0?'今天 必填':i===1?'明天 必填':'后天 可选')}</span><div class="prod-day-total"><span class="prod-chip gray">合计 ${t.total}</span><span class="prod-chip b">B ${t.b}</span><span class="prod-chip p">P ${t.p}</span></div></th>`; }).join('')+'</tr></thead><tbody>';
       workshops.forEach(ws=>{
         const ws3=productionPlanTotalsForDates(dates,p=>p.workshop===ws.id);
         html+=`<tr><td class="prod-plan-workshop"><div>${ws.label}</div><div style="font-size:12px;color:#606266;margin-top:8px;line-height:1.8;"><span class="prod-chip gray">总 ${ws3.total}</span><br><span class="prod-chip b">B ${ws3.b}</span><br><span class="prod-chip p">P ${ws3.p}</span></div></td>`;
@@ -4616,6 +4733,7 @@ let main=document.getElementById('mainContent');
       const planOrder=Number(document.getElementById('prePlanOrder')?.value||nextProductionPlanOrder(date,workshop));
       const remark=(document.getElementById('prePlanRemark')?.value||'').trim();
       if(!date || !batch || plannedQty<=0){alert('请填写日期、批次号和计划台数');return;}
+      if(warnIfProductionPlanOnRestDay(date)) return;
       productionPlans.push({id:String(Date.now()+Math.random()),planMode:'schedule',date,area:productionPlanAreaFromWorkshop(workshop),workshop,batch,plannedQty,actualQty:0,planOrder,remark,createdAt:new Date().toISOString(),createdBy:currentUser?.name||currentUser?.email||''});
       normalizeProductionPlanOrders(date,workshop);
       closeModal(); saveAndRenderContentKeepState();
@@ -4627,7 +4745,7 @@ let main=document.getElementById('mainContent');
         let date,workshop,planOrder,batch,plannedQty,remark='';
         if(/^\d{4}-\d{1,2}-\d{1,2}/.test(parts[0])){date=parts[0]; workshop=parts[1]; if(/^\d+$/.test(parts[2]||'')){planOrder=Number(parts[2]); batch=parts[3]; plannedQty=parts[4]; remark=parts[5]||'';} else {batch=parts[2]; plannedQty=parts[3]; remark=parts[4]||'';}}
         else {date=document.getElementById('prodPlanBaseDate')?.value||getTodayStr(); workshop=parts[0]; if(/^\d+$/.test(parts[1]||'')){planOrder=Number(parts[1]); batch=parts[2]; plannedQty=parts[3]; remark=parts[4]||'';} else {batch=parts[1]; plannedQty=parts[2]; remark=parts[3]||'';}}
-        if(date && workshop && batch && Number(plannedQty)>0){const ws=normalizeWorkshopText(workshop); const d=normalizeDateOnly(date); const order=planOrder||nextProductionPlanOrder(d,ws); productionPlans.push({id:String(Date.now()+Math.random()+count),planMode:'schedule',date:d,area:productionPlanAreaFromWorkshop(ws),workshop:ws,batch:String(batch).toUpperCase(),plannedQty:Number(plannedQty),actualQty:0,planOrder:order,remark:remark||'',createdAt:new Date().toISOString(),createdBy:currentUser?.name||currentUser?.email||''}); count++;}
+        if(date && workshop && batch && Number(plannedQty)>0){const ws=normalizeWorkshopText(workshop); const d=normalizeDateOnly(date); if(!isFactoryWorkday(d)) return; const order=planOrder||nextProductionPlanOrder(d,ws); productionPlans.push({id:String(Date.now()+Math.random()+count),planMode:'schedule',date:d,area:productionPlanAreaFromWorkshop(ws),workshop:ws,batch:String(batch).toUpperCase(),plannedQty:Number(plannedQty),actualQty:0,planOrder:order,remark:remark||'',createdAt:new Date().toISOString(),createdBy:currentUser?.name||currentUser?.email||''}); count++;}
       });
       [...new Set(productionPlans.filter(p=>p.planMode==='schedule').map(p=>`${p.date}||${p.workshop}`))].forEach(k=>{const [d,w]=k.split('||'); normalizeProductionPlanOrders(d,w);});
       saveAndRenderContentKeepState(); alert(`已导入 ${count} 条预排产计划`);
@@ -4654,7 +4772,7 @@ let main=document.getElementById('mainContent');
       const p=productionPlans.find(x=>String(x.id)===String(id)); if(!p)return;
       const before={date:p.date,workshop:p.workshop,batch:p.batch,planOrder:p.planOrder,plannedQty:p.plannedQty,actualQty:p.actualQty,remark:p.remark};
       const ws=document.getElementById('editPreWorkshop')?.value||'welding';
-      const oldDate=p.date, oldWorkshop=p.workshop; p.date=document.getElementById('editPreDate')?.value||p.date; p.workshop=ws; p.area=productionPlanAreaFromWorkshop(ws); p.planOrder=Number(document.getElementById('editPreOrder')?.value||getProductionPlanOrder(p)); p.batch=(document.getElementById('editPreBatch')?.value||'').trim().toUpperCase(); p.plannedQty=Number(document.getElementById('editPreQty')?.value||0); p.actualQty=Number(document.getElementById('editPreActual')?.value||0); p.remark=(document.getElementById('editPreRemark')?.value||'').trim();
+      const oldDate=p.date, oldWorkshop=p.workshop; p.date=document.getElementById('editPreDate')?.value||p.date; if(warnIfProductionPlanOnRestDay(p.date)){p.date=oldDate;return;} p.workshop=ws; p.area=productionPlanAreaFromWorkshop(ws); p.planOrder=Number(document.getElementById('editPreOrder')?.value||getProductionPlanOrder(p)); p.batch=(document.getElementById('editPreBatch')?.value||'').trim().toUpperCase(); p.plannedQty=Number(document.getElementById('editPreQty')?.value||0); p.actualQty=Number(document.getElementById('editPreActual')?.value||0); p.remark=(document.getElementById('editPreRemark')?.value||'').trim();
       if(!p.batch || p.plannedQty<=0){alert('请填写批次和计划台数');return;}
       normalizeProductionPlanOrders(oldDate,oldWorkshop); normalizeProductionPlanOrders(p.date,p.workshop);
       p.updatedAt=new Date().toISOString(); p.updatedBy=currentUser?.name||currentUser?.email||''; pushProductionPlanHistory(p,'edit_plan',{before,after:{date:p.date,workshop:p.workshop,batch:p.batch,planOrder:p.planOrder,plannedQty:p.plannedQty,actualQty:p.actualQty,remark:p.remark}});
