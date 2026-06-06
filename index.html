@@ -947,17 +947,27 @@
     @media(max-width:768px){ .prod-plan-summary-grid{grid-template-columns:1fr!important;} .prod-plan-sheet{min-width:980px!important;} .prod-plan-item{grid-template-columns:1fr;} .prod-plan-actions{justify-content:flex-start;} }
 
 
-    /* ==================== V42.20 工厂日历 ==================== */
-    .factory-calendar-grid { display:grid; grid-template-columns: repeat(7, minmax(110px,1fr)); gap:10px; }
-    .factory-day-card { border:1px solid #e4e7ed; border-radius:12px; padding:12px; background:#fff; min-height:96px; box-shadow:0 1px 3px rgba(0,0,0,0.03); }
-    .factory-day-card.workday { border-left:4px solid #67c23a; }
-    .factory-day-card.rest { border-left:4px solid #f56c6c; background:#fffafa; }
-    .factory-day-card.holiday { border-left:4px solid #e6a23c; background:#fffaf0; }
-    .factory-day-card.overtime { border-left:4px solid #409eff; background:#f0f7ff; }
-    .factory-day-date { font-weight:700; color:#303133; margin-bottom:6px; }
-    .factory-day-type { font-size:12px; padding:2px 8px; border-radius:999px; display:inline-block; background:#f4f4f5; margin-bottom:8px; }
-    .factory-day-note { font-size:12px; color:#606266; line-height:1.5; min-height:18px; }
-    .factory-calendar-alert { background:#fff7e6; border-left:4px solid #e6a23c; border-radius:8px; padding:10px 12px; margin-bottom:12px; color:#8a5a00; font-size:13px; }
+    /* ==================== V42.21 工厂日历 ==================== */
+    .factory-calendar-toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; background:#f5f7fa; border:1px solid #ebeef5; border-radius:12px; padding:12px; margin-bottom:14px; }
+    .factory-calendar-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:14px; }
+    .factory-calendar-summary .fc-stat { background:#fff; border:1px solid #ebeef5; border-radius:12px; padding:12px; text-align:center; }
+    .factory-calendar-summary .fc-num { font-size:24px; font-weight:900; color:#2a5298; line-height:28px; }
+    .factory-calendar-summary .fc-label { font-size:12px; color:#909399; margin-top:4px; }
+    .factory-calendar-grid { display:grid; grid-template-columns: repeat(7, minmax(128px,1fr)); gap:10px; }
+    .factory-day-card { border:1px solid #e4e7ed; border-radius:14px; padding:12px; background:#fff; min-height:128px; box-shadow:0 1px 4px rgba(0,0,0,0.04); transition:.15s; }
+    .factory-day-card:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(0,0,0,0.08); }
+    .factory-day-card.workday { border-top:4px solid #67c23a; }
+    .factory-day-card.rest { border-top:4px solid #f56c6c; background:#fffafa; }
+    .factory-day-card.holiday { border-top:4px solid #e6a23c; background:#fffaf0; }
+    .factory-day-card.overtime { border-top:4px solid #409eff; background:#f0f7ff; }
+    .factory-day-date { font-weight:800; color:#303133; margin-bottom:2px; }
+    .factory-day-week { font-size:12px; color:#909399; margin-bottom:8px; }
+    .factory-day-type { font-size:12px; padding:3px 9px; border-radius:999px; display:inline-block; background:#f4f4f5; margin-bottom:8px; font-weight:700; }
+    .factory-day-note { font-size:12px; color:#606266; line-height:1.5; min-height:18px; margin-bottom:8px; }
+    .factory-day-actions { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
+    .factory-day-actions .btn { padding:5px 6px!important; font-size:11px!important; margin:0!important; }
+    .factory-calendar-alert { background:#fff7e6; border-left:4px solid #e6a23c; border-radius:10px; padding:11px 13px; margin-bottom:12px; color:#8a5a00; font-size:13px; line-height:1.7; }
+    @media(max-width:768px){ .factory-calendar-grid{grid-template-columns:1fr!important;} }
 
   </style>
 </head>
@@ -1110,7 +1120,7 @@
       return {
         containers, blList, containerBlMap, transportTasks, locationStock, returnRecords,
         pickupPlans, productionRecords, productionPlans, factoryCalendar, nextIds, storageConfig, demurrageConfig, warningConfig,
-        version: 'V42.20 Factory Calendar',
+        version: 'V42.21 Factory Calendar',
         updatedAt: new Date().toISOString(),
         updatedBy: cloudUser?.email || currentUser?.email || currentUser?.name || ''
       };
@@ -4443,7 +4453,7 @@ let main=document.getElementById('mainContent');
 
 
 
-    // ==================== V42.20 工厂日历 / 工作日判断 ====================
+    // ==================== V42.21 工厂日历 / 工作日判断 ====================
     function getFactoryCalendarItem(date){
       return (factoryCalendar||[]).find(x=>String(x.date||'')===String(date||'')) || null;
     }
@@ -4497,27 +4507,89 @@ let main=document.getElementById('mainContent');
     function productionRequiredArrivalDate(productionDate){
       return getPreviousFactoryWorkday(productionDate);
     }
+    function getFactoryWeekdayLabel(date){
+      const d=new Date(String(date||'')+'T00:00:00');
+      const labels=['周日','周一','周二','周三','周四','周五','周六'];
+      if(isNaN(d.getTime())) return '';
+      return labels[d.getDay()] || '';
+    }
+    function factoryCalendarRangeLabel(dates){
+      if(!dates || !dates.length) return '';
+      return `${fmtDate(dates[0])} - ${fmtDate(dates[dates.length-1])}`;
+    }
     function renderFactoryCalendar(container){
       const base=document.getElementById('factoryCalendarBaseDate')?.value || getTodayStr();
-      const dates=factoryCalendarBaseDates(base,21);
-      const restCount=dates.filter(d=>!isFactoryWorkday(d)).length;
-      container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📅 工厂日历</span><button class="btn btn-primary" onclick="currentMenu='productionPlan';renderSidebar();renderContent();">返回生产计划</button></div>
-        <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:12px;">维护工厂工作日、休息日、法定假日和特殊加班。生产计划默认不允许排在休息日/假日；如周末需要生产，请设置为“特殊加班”。后续自动到箱计划会按“提前1个工作日”计算。</div>
-        <div class="factory-calendar-alert">当前显示 ${fmtDate(dates[0])} - ${fmtDate(dates[dates.length-1])}，其中非工作日 ${restCount} 天。</div>
-        <div class="search-bar"><span>起始日期</span><input type="date" id="factoryCalendarBaseDate" value="${base}" onchange="renderFactoryCalendar(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderFactoryCalendar(document.getElementById('mainContent'))">刷新</button><button class="btn btn-success" onclick="openFactoryCalendarBatchModal('${base}')">批量维护</button></div>
-        <div class="factory-calendar-grid">${dates.map(d=>renderFactoryCalendarDayCard(d)).join('')}</div></div>`;
+      const dates=factoryCalendarBaseDates(base,14);
+      const workCount=dates.filter(d=>getFactoryDayType(d)==='workday').length;
+      const restCount=dates.filter(d=>getFactoryDayType(d)==='rest').length;
+      const holidayCount=dates.filter(d=>getFactoryDayType(d)==='holiday').length;
+      const overtimeCount=dates.filter(d=>getFactoryDayType(d)==='overtime').length;
+      const today=getTodayStr();
+      const prev=addDaysToDateStr(base,-14);
+      const next=addDaysToDateStr(base,14);
+      container.innerHTML=`<div class="card">
+        <div class="card-header">
+          <span class="card-title">📅 工厂日历</span>
+          <button class="btn btn-primary" onclick="currentMenu='productionPlan';renderSidebar();renderContent();">返回生产计划</button>
+        </div>
+        <div class="factory-calendar-alert">
+          使用方法：系统默认 <b>周一至周五为工作日、周六周日为休息日</b>。你只需要维护例外日期，例如法定假日、公司放假、周末加班。生产计划会根据这里判断能否排产。
+        </div>
+        <div class="factory-calendar-toolbar">
+          <button class="btn" onclick="document.getElementById('factoryCalendarBaseDate').value='${prev}';renderFactoryCalendar(document.getElementById('mainContent'))">上一段</button>
+          <span>起始日期</span>
+          <input type="date" id="factoryCalendarBaseDate" value="${base}" onchange="renderFactoryCalendar(document.getElementById('mainContent'))">
+          <button class="btn" onclick="document.getElementById('factoryCalendarBaseDate').value='${today}';renderFactoryCalendar(document.getElementById('mainContent'))">回到今天</button>
+          <button class="btn" onclick="document.getElementById('factoryCalendarBaseDate').value='${next}';renderFactoryCalendar(document.getElementById('mainContent'))">下一段</button>
+          <button class="btn btn-success" onclick="openFactoryCalendarBatchModal('${base}')">批量维护</button>
+        </div>
+        <div class="factory-calendar-summary">
+          <div class="fc-stat"><div class="fc-num">${workCount}</div><div class="fc-label">工作日</div></div>
+          <div class="fc-stat"><div class="fc-num">${restCount}</div><div class="fc-label">休息日</div></div>
+          <div class="fc-stat"><div class="fc-num">${holidayCount}</div><div class="fc-label">法定假日</div></div>
+          <div class="fc-stat"><div class="fc-num">${overtimeCount}</div><div class="fc-label">特殊加班</div></div>
+        </div>
+        <div style="font-size:13px;color:#606266;margin-bottom:10px;">当前显示：${factoryCalendarRangeLabel(dates)}</div>
+        <div class="factory-calendar-grid">${dates.map(d=>renderFactoryCalendarDayCard(d)).join('')}</div>
+      </div>`;
     }
     function renderFactoryCalendarDayCard(date){
       const item=getFactoryCalendarItem(date)||{};
       const type=getFactoryDayType(date);
       const note=item.note||'';
-      return `<div class="factory-day-card ${type}"><div class="factory-day-date">${fmtDate(date)}</div><div class="factory-day-type">${getFactoryDayTypeLabel(type)}</div><div class="factory-day-note">${note||'&nbsp;'}</div><div style="margin-top:8px;"><select class="form-control" style="height:30px;margin-bottom:6px;" onchange="setFactoryCalendarDay('${date}',this.value,document.getElementById('fc_note_${date}').value)"><option value="workday" ${type==='workday'?'selected':''}>工作日</option><option value="rest" ${type==='rest'?'selected':''}>休息日</option><option value="holiday" ${type==='holiday'?'selected':''}>法定假日</option><option value="overtime" ${type==='overtime'?'selected':''}>特殊加班</option></select><input id="fc_note_${date}" class="form-control" style="height:30px;margin-bottom:6px;" value="${note}" placeholder="备注"><button class="btn btn-sm" onclick="setFactoryCalendarDay('${date}',this.parentNode.querySelector('select').value,document.getElementById('fc_note_${date}').value)">保存</button></div></div>`;
+      const typeLabel=getFactoryDayTypeLabel(type);
+      return `<div class="factory-day-card ${type}">
+        <div class="factory-day-date">${fmtDate(date)}</div>
+        <div class="factory-day-week">${getFactoryWeekdayLabel(date)}</div>
+        <div class="factory-day-type">${typeLabel}</div>
+        <div class="factory-day-note">${note ? '备注：'+note : '&nbsp;'}</div>
+        <div class="factory-day-actions">
+          <button class="btn btn-success" onclick="setFactoryCalendarDay('${date}','workday','')">工作</button>
+          <button class="btn btn-danger" onclick="setFactoryCalendarDay('${date}','rest','')">休息</button>
+          <button class="btn btn-warning" onclick="setFactoryCalendarDayWithPrompt('${date}','holiday')">假日</button>
+          <button class="btn btn-primary" onclick="setFactoryCalendarDayWithPrompt('${date}','overtime')">加班</button>
+        </div>
+        <div style="margin-top:7px;text-align:center;"><button class="btn btn-sm" onclick="setFactoryCalendarNote('${date}')">备注</button></div>
+      </div>`;
     }
     window.setFactoryCalendarDay=function(date,type,note){
       let item=getFactoryCalendarItem(date);
       if(!item){ item={date}; factoryCalendar.push(item); }
       item.type=type||'workday'; item.note=note||''; item.updatedAt=new Date().toISOString(); item.updatedBy=currentUser?.name||currentUser?.email||'';
       saveAndRenderContentKeepState();
+    };
+    window.setFactoryCalendarDayWithPrompt=function(date,type){
+      const old=getFactoryCalendarItem(date)?.note || '';
+      const label=getFactoryDayTypeLabel(type);
+      const note=prompt(`设置 ${fmtDate(date)} 为${label}，可填写备注：`, old);
+      if(note===null) return;
+      setFactoryCalendarDay(date,type,note||'');
+    };
+    window.setFactoryCalendarNote=function(date){
+      const item=getFactoryCalendarItem(date)||{};
+      const note=prompt(`维护 ${fmtDate(date)} 的备注：`, item.note||'');
+      if(note===null) return;
+      setFactoryCalendarDay(date,getFactoryDayType(date),note||'');
     };
     window.openFactoryCalendarBatchModal=function(base){
       document.getElementById('modalTitle').innerText='批量维护工厂日历';
