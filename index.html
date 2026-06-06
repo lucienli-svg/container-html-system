@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V42.23 3 Workdays Plan</title>
+  <title>集装箱智能监控管理系统 V42.24 Dashboard Workday Sync</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
     /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
@@ -1274,7 +1274,7 @@
       return {
         containers, blList, containerBlMap, transportTasks, locationStock, returnRecords,
         pickupPlans, productionRecords, productionPlans, factoryCalendar, nextIds, storageConfig, demurrageConfig, warningConfig,
-        version: 'V42.23 3 Workdays Plan',
+        version: 'V42.24 Dashboard Workday Sync',
         updatedAt: new Date().toISOString(),
         updatedBy: cloudUser?.email || currentUser?.email || currentUser?.name || ''
       };
@@ -7486,6 +7486,80 @@ let main=document.getElementById('mainContent');
     const d = productionPlanBaseDates(baseDate || getTodayStr())[0];
     if(typeof openAddProductionPlanModal === 'function') openAddProductionPlanModal(d);
   };
+</script>
+
+
+<script>
+  /* ==================== V42.24 工作台保供看板：同步工厂日历有效生产日 ====================
+     目的：工作台生产保供看板与生产计划维护使用同一套“未来有效生产日”逻辑。
+     - 自动跳过休息日 / 法定假日
+     - 工作日 / 特殊加班日才显示
+     - 工作台只显示前2个有效生产日
+     - 生产计划维护继续显示前3个有效生产日
+  */
+  (function(){
+    function v424AddDays(dateStr, days){
+      if(typeof addDaysToDateStr === 'function') return addDaysToDateStr(dateStr, days);
+      const d = new Date(String(dateStr || new Date().toISOString().slice(0,10)) + 'T00:00:00');
+      d.setDate(d.getDate() + days);
+      return d.toISOString().slice(0,10);
+    }
+    function v424Today(){
+      return (typeof getTodayStr === 'function') ? getTodayStr() : new Date().toISOString().slice(0,10);
+    }
+    function v424IsFactoryWorkday(date){
+      if(typeof isFactoryWorkday === 'function') return isFactoryWorkday(date);
+      const d = new Date(String(date||'') + 'T00:00:00');
+      if(isNaN(d.getTime())) return true;
+      const day = d.getDay();
+      return day !== 0 && day !== 6;
+    }
+    function v424EffectiveProductionDays(baseDate, count){
+      const result = [];
+      let d = baseDate || v424Today();
+      let guard = 0;
+      while(result.length < (count || 3) && guard < 90){
+        if(v424IsFactoryWorkday(d)) result.push(d);
+        d = v424AddDays(d, 1);
+        guard++;
+      }
+      return result;
+    }
+    window.v424EffectiveProductionDays = v424EffectiveProductionDays;
+
+    // 生产计划维护：3个有效生产日
+    window.productionPlanBaseDates = function(baseDate){
+      return v424EffectiveProductionDays(baseDate || v424Today(), 3);
+    };
+    try { productionPlanBaseDates = window.productionPlanBaseDates; } catch(e) {}
+
+    // 工作台生产保供看板：只显示前2个有效生产日
+    window.v42GetBoardDates = function(){
+      return v424EffectiveProductionDays(v424Today(), 2);
+    };
+    try { v42GetBoardDates = window.v42GetBoardDates; } catch(e) {}
+
+    window.v42DateLabel = function(d, i){
+      const typeLabel = (typeof getFactoryDayTypeLabel === 'function' && typeof getFactoryDayType === 'function') ? getFactoryDayTypeLabel(getFactoryDayType(d)) : '生产日';
+      const label = i === 0 ? '第1生产日' : (i === 1 ? '第2生产日' : `第${i+1}生产日`);
+      return `${typeof fmtDate === 'function' ? fmtDate(d) : d} ${label}｜${typeLabel}`;
+    };
+    try { v42DateLabel = window.v42DateLabel; } catch(e) {}
+
+    // 工厂日历修改后，如当前在工作台或生产计划维护，立即按最新日历重绘。
+    const originalSetFactoryCalendarDay = window.setFactoryCalendarDay;
+    if(typeof originalSetFactoryCalendarDay === 'function'){
+      window.setFactoryCalendarDay = function(date, type, note){
+        const ret = originalSetFactoryCalendarDay(date, type, note);
+        try{
+          if(currentMenu === 'dashboard' || currentMenu === 'productionPlan'){
+            renderContent();
+          }
+        }catch(e){ console.warn('V42.24 refresh skipped', e); }
+        return ret;
+      };
+    }
+  })();
 </script>
 
 </body>
