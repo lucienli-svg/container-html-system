@@ -208,7 +208,7 @@
 
 
 
-  /* ==================== V42.27 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
+  /* ==================== V43.0 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
      问题：提箱计划从“港口→工厂”改为“港口→RG堆场/Rio Claro/IRA”后，旧工厂到货监控任务没有同步撤回，导致动态运输计划发布时提示“已有未完成工厂到货计划”。
      修复：编辑提箱计划时，如目的地从工厂改为非工厂，且门岗/卸货口尚未开始操作，则自动取消旧工厂监控任务；如已开始门岗/卸货执行，则禁止改为非工厂。
   */
@@ -355,14 +355,14 @@
     const oldRenderGateOnly = window.renderFactoryGateOnly;
     if(typeof oldRenderGateOnly === 'function'){
       window.renderFactoryGateOnly = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before gate skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before gate skipped', e); }
         return oldRenderGateOnly.apply(this, arguments);
       };
     }
     const oldRenderDock = window.renderDockMonitoring;
     if(typeof oldRenderDock === 'function'){
       window.renderDockMonitoring = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dock skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dock skipped', e); }
         return oldRenderDock.apply(this, arguments);
       };
     }
@@ -371,14 +371,14 @@
     const oldPublishDynamicSingle = window.publishDynamicSingle;
     if(typeof oldPublishDynamicSingle === 'function'){
       window.publishDynamicSingle = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dynamic publish skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic publish skipped', e); }
         return oldPublishDynamicSingle.apply(this, arguments);
       };
     }
     const oldBatchPublishDynamic = window.batchPublishDynamic;
     if(typeof oldBatchPublishDynamic === 'function'){
       window.batchPublishDynamic = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dynamic batch skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic batch skipped', e); }
         return oldBatchPublishDynamic.apply(this, arguments);
       };
     }
@@ -589,7 +589,7 @@
 
 
 
-  /* ==================== V42.27 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
+  /* ==================== V43.0 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
      问题：提箱计划从“港口→工厂”改为“港口→RG堆场/Rio Claro/IRA”后，旧工厂到货监控任务没有同步撤回，导致动态运输计划发布时提示“已有未完成工厂到货计划”。
      修复：编辑提箱计划时，如目的地从工厂改为非工厂，且门岗/卸货口尚未开始操作，则自动取消旧工厂监控任务；如已开始门岗/卸货执行，则禁止改为非工厂。
   */
@@ -736,14 +736,14 @@
     const oldRenderGateOnly = window.renderFactoryGateOnly;
     if(typeof oldRenderGateOnly === 'function'){
       window.renderFactoryGateOnly = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before gate skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before gate skipped', e); }
         return oldRenderGateOnly.apply(this, arguments);
       };
     }
     const oldRenderDock = window.renderDockMonitoring;
     if(typeof oldRenderDock === 'function'){
       window.renderDockMonitoring = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dock skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dock skipped', e); }
         return oldRenderDock.apply(this, arguments);
       };
     }
@@ -752,14 +752,14 @@
     const oldPublishDynamicSingle = window.publishDynamicSingle;
     if(typeof oldPublishDynamicSingle === 'function'){
       window.publishDynamicSingle = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dynamic publish skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic publish skipped', e); }
         return oldPublishDynamicSingle.apply(this, arguments);
       };
     }
     const oldBatchPublishDynamic = window.batchPublishDynamic;
     if(typeof oldBatchPublishDynamic === 'function'){
       window.batchPublishDynamic = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dynamic batch skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic batch skipped', e); }
         return oldBatchPublishDynamic.apply(this, arguments);
       };
     }
@@ -6748,7 +6748,7 @@ let main=document.getElementById('mainContent');
 
 
 
-  /* ==================== V42.27 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
+  /* ==================== V43.0 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
      问题：提箱计划从“港口→工厂”改为“港口→RG堆场/Rio Claro/IRA”后，旧工厂到货监控任务没有同步撤回，导致动态运输计划发布时提示“已有未完成工厂到货计划”。
      修复：编辑提箱计划时，如目的地从工厂改为非工厂，且门岗/卸货口尚未开始操作，则自动取消旧工厂监控任务；如已开始门岗/卸货执行，则禁止改为非工厂。
   */
@@ -6895,14 +6895,14 @@ let main=document.getElementById('mainContent');
     const oldRenderGateOnly = window.renderFactoryGateOnly;
     if(typeof oldRenderGateOnly === 'function'){
       window.renderFactoryGateOnly = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before gate skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before gate skipped', e); }
         return oldRenderGateOnly.apply(this, arguments);
       };
     }
     const oldRenderDock = window.renderDockMonitoring;
     if(typeof oldRenderDock === 'function'){
       window.renderDockMonitoring = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dock skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dock skipped', e); }
         return oldRenderDock.apply(this, arguments);
       };
     }
@@ -6911,14 +6911,14 @@ let main=document.getElementById('mainContent');
     const oldPublishDynamicSingle = window.publishDynamicSingle;
     if(typeof oldPublishDynamicSingle === 'function'){
       window.publishDynamicSingle = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dynamic publish skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic publish skipped', e); }
         return oldPublishDynamicSingle.apply(this, arguments);
       };
     }
     const oldBatchPublishDynamic = window.batchPublishDynamic;
     if(typeof oldBatchPublishDynamic === 'function'){
       window.batchPublishDynamic = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dynamic batch skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic batch skipped', e); }
         return oldBatchPublishDynamic.apply(this, arguments);
       };
     }
@@ -7318,7 +7318,7 @@ let main=document.getElementById('mainContent');
 
 
 
-  /* ==================== V42.27 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
+  /* ==================== V43.0 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
      问题：提箱计划从“港口→工厂”改为“港口→RG堆场/Rio Claro/IRA”后，旧工厂到货监控任务没有同步撤回，导致动态运输计划发布时提示“已有未完成工厂到货计划”。
      修复：编辑提箱计划时，如目的地从工厂改为非工厂，且门岗/卸货口尚未开始操作，则自动取消旧工厂监控任务；如已开始门岗/卸货执行，则禁止改为非工厂。
   */
@@ -7465,14 +7465,14 @@ let main=document.getElementById('mainContent');
     const oldRenderGateOnly = window.renderFactoryGateOnly;
     if(typeof oldRenderGateOnly === 'function'){
       window.renderFactoryGateOnly = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before gate skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before gate skipped', e); }
         return oldRenderGateOnly.apply(this, arguments);
       };
     }
     const oldRenderDock = window.renderDockMonitoring;
     if(typeof oldRenderDock === 'function'){
       window.renderDockMonitoring = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dock skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dock skipped', e); }
         return oldRenderDock.apply(this, arguments);
       };
     }
@@ -7481,14 +7481,14 @@ let main=document.getElementById('mainContent');
     const oldPublishDynamicSingle = window.publishDynamicSingle;
     if(typeof oldPublishDynamicSingle === 'function'){
       window.publishDynamicSingle = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dynamic publish skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic publish skipped', e); }
         return oldPublishDynamicSingle.apply(this, arguments);
       };
     }
     const oldBatchPublishDynamic = window.batchPublishDynamic;
     if(typeof oldBatchPublishDynamic === 'function'){
       window.batchPublishDynamic = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dynamic batch skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic batch skipped', e); }
         return oldBatchPublishDynamic.apply(this, arguments);
       };
     }
@@ -8089,7 +8089,7 @@ let main=document.getElementById('mainContent');
 
 
 
-  /* ==================== V42.27 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
+  /* ==================== V43.0 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
      问题：提箱计划从“港口→工厂”改为“港口→RG堆场/Rio Claro/IRA”后，旧工厂到货监控任务没有同步撤回，导致动态运输计划发布时提示“已有未完成工厂到货计划”。
      修复：编辑提箱计划时，如目的地从工厂改为非工厂，且门岗/卸货口尚未开始操作，则自动取消旧工厂监控任务；如已开始门岗/卸货执行，则禁止改为非工厂。
   */
@@ -8236,14 +8236,14 @@ let main=document.getElementById('mainContent');
     const oldRenderGateOnly = window.renderFactoryGateOnly;
     if(typeof oldRenderGateOnly === 'function'){
       window.renderFactoryGateOnly = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before gate skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before gate skipped', e); }
         return oldRenderGateOnly.apply(this, arguments);
       };
     }
     const oldRenderDock = window.renderDockMonitoring;
     if(typeof oldRenderDock === 'function'){
       window.renderDockMonitoring = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dock skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dock skipped', e); }
         return oldRenderDock.apply(this, arguments);
       };
     }
@@ -8252,14 +8252,14 @@ let main=document.getElementById('mainContent');
     const oldPublishDynamicSingle = window.publishDynamicSingle;
     if(typeof oldPublishDynamicSingle === 'function'){
       window.publishDynamicSingle = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dynamic publish skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic publish skipped', e); }
         return oldPublishDynamicSingle.apply(this, arguments);
       };
     }
     const oldBatchPublishDynamic = window.batchPublishDynamic;
     if(typeof oldBatchPublishDynamic === 'function'){
       window.batchPublishDynamic = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dynamic batch skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic batch skipped', e); }
         return oldBatchPublishDynamic.apply(this, arguments);
       };
     }
@@ -8330,7 +8330,7 @@ let main=document.getElementById('mainContent');
   };
 
 
-  /* ==================== V42.27 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
+  /* ==================== V43.0 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
      问题：提箱计划从“港口→工厂”改为“港口→RG堆场/Rio Claro/IRA”后，旧工厂到货监控任务没有同步撤回，导致动态运输计划发布时提示“已有未完成工厂到货计划”。
      修复：编辑提箱计划时，如目的地从工厂改为非工厂，且门岗/卸货口尚未开始操作，则自动取消旧工厂监控任务；如已开始门岗/卸货执行，则禁止改为非工厂。
   */
@@ -8477,14 +8477,14 @@ let main=document.getElementById('mainContent');
     const oldRenderGateOnly = window.renderFactoryGateOnly;
     if(typeof oldRenderGateOnly === 'function'){
       window.renderFactoryGateOnly = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before gate skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before gate skipped', e); }
         return oldRenderGateOnly.apply(this, arguments);
       };
     }
     const oldRenderDock = window.renderDockMonitoring;
     if(typeof oldRenderDock === 'function'){
       window.renderDockMonitoring = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dock skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dock skipped', e); }
         return oldRenderDock.apply(this, arguments);
       };
     }
@@ -8493,14 +8493,14 @@ let main=document.getElementById('mainContent');
     const oldPublishDynamicSingle = window.publishDynamicSingle;
     if(typeof oldPublishDynamicSingle === 'function'){
       window.publishDynamicSingle = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dynamic publish skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic publish skipped', e); }
         return oldPublishDynamicSingle.apply(this, arguments);
       };
     }
     const oldBatchPublishDynamic = window.batchPublishDynamic;
     if(typeof oldBatchPublishDynamic === 'function'){
       window.batchPublishDynamic = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dynamic batch skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic batch skipped', e); }
         return oldBatchPublishDynamic.apply(this, arguments);
       };
     }
@@ -8581,7 +8581,7 @@ let main=document.getElementById('mainContent');
   })();
 
 
-  /* ==================== V42.27 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
+  /* ==================== V43.0 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
      问题：提箱计划从“港口→工厂”改为“港口→RG堆场/Rio Claro/IRA”后，旧工厂到货监控任务没有同步撤回，导致动态运输计划发布时提示“已有未完成工厂到货计划”。
      修复：编辑提箱计划时，如目的地从工厂改为非工厂，且门岗/卸货口尚未开始操作，则自动取消旧工厂监控任务；如已开始门岗/卸货执行，则禁止改为非工厂。
   */
@@ -8728,14 +8728,14 @@ let main=document.getElementById('mainContent');
     const oldRenderGateOnly = window.renderFactoryGateOnly;
     if(typeof oldRenderGateOnly === 'function'){
       window.renderFactoryGateOnly = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before gate skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before gate skipped', e); }
         return oldRenderGateOnly.apply(this, arguments);
       };
     }
     const oldRenderDock = window.renderDockMonitoring;
     if(typeof oldRenderDock === 'function'){
       window.renderDockMonitoring = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dock skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dock skipped', e); }
         return oldRenderDock.apply(this, arguments);
       };
     }
@@ -8744,14 +8744,14 @@ let main=document.getElementById('mainContent');
     const oldPublishDynamicSingle = window.publishDynamicSingle;
     if(typeof oldPublishDynamicSingle === 'function'){
       window.publishDynamicSingle = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dynamic publish skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic publish skipped', e); }
         return oldPublishDynamicSingle.apply(this, arguments);
       };
     }
     const oldBatchPublishDynamic = window.batchPublishDynamic;
     if(typeof oldBatchPublishDynamic === 'function'){
       window.batchPublishDynamic = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dynamic batch skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic batch skipped', e); }
         return oldBatchPublishDynamic.apply(this, arguments);
       };
     }
@@ -8761,7 +8761,7 @@ let main=document.getElementById('mainContent');
 
 
 <script>
-  /* ==================== V42.27 工作台保供看板最终修复：只显示未来2个有效生产日 ====================
+  /* ==================== V43.0 工作台保供看板最终修复：只显示未来2个有效生产日 ====================
      修复V42.25中看板仍显示休息日的问题：
      1）不再使用旧的 today/tomorrow 自然日函数；
      2）看板渲染函数内部直接调用最新工厂日历有效生产日函数；
@@ -8847,14 +8847,14 @@ let main=document.getElementById('mainContent');
         const ret = oldSetFactoryCalendarDay(date, type, note);
         try{
           if(currentMenu === 'dashboard' || currentMenu === 'productionPlan') renderContent();
-        }catch(e){ console.warn('V42.27 calendar refresh skipped', e); }
+        }catch(e){ console.warn('V43.0 calendar refresh skipped', e); }
         return ret;
       };
     }
   })();
 
 
-  /* ==================== V42.27 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
+  /* ==================== V43.0 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
      问题：提箱计划从“港口→工厂”改为“港口→RG堆场/Rio Claro/IRA”后，旧工厂到货监控任务没有同步撤回，导致动态运输计划发布时提示“已有未完成工厂到货计划”。
      修复：编辑提箱计划时，如目的地从工厂改为非工厂，且门岗/卸货口尚未开始操作，则自动取消旧工厂监控任务；如已开始门岗/卸货执行，则禁止改为非工厂。
   */
@@ -9001,14 +9001,14 @@ let main=document.getElementById('mainContent');
     const oldRenderGateOnly = window.renderFactoryGateOnly;
     if(typeof oldRenderGateOnly === 'function'){
       window.renderFactoryGateOnly = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before gate skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before gate skipped', e); }
         return oldRenderGateOnly.apply(this, arguments);
       };
     }
     const oldRenderDock = window.renderDockMonitoring;
     if(typeof oldRenderDock === 'function'){
       window.renderDockMonitoring = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dock skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dock skipped', e); }
         return oldRenderDock.apply(this, arguments);
       };
     }
@@ -9017,19 +9017,302 @@ let main=document.getElementById('mainContent');
     const oldPublishDynamicSingle = window.publishDynamicSingle;
     if(typeof oldPublishDynamicSingle === 'function'){
       window.publishDynamicSingle = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dynamic publish skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic publish skipped', e); }
         return oldPublishDynamicSingle.apply(this, arguments);
       };
     }
     const oldBatchPublishDynamic = window.batchPublishDynamic;
     if(typeof oldBatchPublishDynamic === 'function'){
       window.batchPublishDynamic = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V42.27 cleanup before dynamic batch skipped', e); }
+        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic batch skipped', e); }
         return oldBatchPublishDynamic.apply(this, arguments);
       };
     }
   })();
 
+</script>
+
+
+<script>
+/* ==================== V43.0 稳定联动版：统一目的地变更与工厂门岗/卸货口状态机 ====================
+   重点：
+   1）动态运输计划目的地从工厂改为其他库房/堆场时，同步撤回未开始的门岗/卸货口计划；
+   2）动态运输计划目的地从其他地点改为工厂时，自动进入门岗/卸货口流程，初始状态=未到工厂；
+   3）如果已经门岗登记/进厂/卸货，不允许改成非工厂或撤回，避免状态混乱；
+   4）门岗/卸货口页面渲染前自动清理残留工厂计划。
+*/
+(function(){
+  function isFactoryDestV43(dest){
+    const d = String(dest || '').trim();
+    return d === '工厂' || d.toLowerCase() === 'factory' || d.toUpperCase() === 'GWM';
+  }
+
+  function isTaskCancelledV43(t){
+    return !t || t.cancelled || t.status === 'cancelled' || t.operationStatus === 'cancelled';
+  }
+
+  function hasFactoryExecutionStartedV43(t){
+    if(!t) return false;
+    try{
+      if(typeof window.hasFactoryExecutionStarted === 'function' && window.hasFactoryExecutionStarted(t)) return true;
+    }catch(e){}
+    const op = String(t.operationStatus || '');
+    return !!(
+      t.gateArrivalTime || t.gateReleaseTime || t.waitingAreaTime ||
+      t.unloadStartTime || t.unloadFinishTime ||
+      ['outside_parking','inside_waiting','unloading','unloaded'].includes(op)
+    );
+  }
+
+  function hydrateTaskMasterFieldsV43(t){
+    if(!t) return t;
+    const c = (containers || []).find(x => String(x.id) === String(t.containerId) || String(x.containerNo) === String(t.containerNo));
+    if(c){
+      t.containerId = t.containerId || c.id;
+      t.containerNo = t.containerNo || c.containerNo;
+      t.containerSeq = t.containerSeq || c.containerSeq || '';
+      t.batch = t.batch || c.batch || '';
+    }
+    if(typeof getTaskBlText === 'function') t.blNo = t.blNo || getTaskBlText(t) || '';
+    if(typeof getIraList === 'function' && t.containerId) t.iraNo = t.iraNo || getIraList(t.containerId) || '';
+    return t;
+  }
+
+  function resetFactoryFlowV43(t){
+    if(!t) return;
+    t.operationStatus = 'not_arrived';
+    t.gateArrivalTime = '';
+    t.gateReleaseTime = '';
+    t.waitingAreaTime = '';
+    t.unloadStartTime = '';
+    t.unloadFinishTime = '';
+    if(t.status === 'cancelled' || t.status === 'completed') t.status = 'in_transit';
+    if(!t.status) t.status = 'in_transit';
+  }
+
+  function detachFactoryFlowV43(t, reason){
+    if(!t) return true;
+    if(hasFactoryExecutionStartedV43(t)) return false;
+    if(isFactoryDestV43(t.to)) return false;
+    t.operationStatus = '';
+    t.gateArrivalTime = '';
+    t.gateReleaseTime = '';
+    t.waitingAreaTime = '';
+    t.unloadStartTime = '';
+    t.unloadFinishTime = '';
+    t.factorySyncRemark = reason || '目的地不是工厂，已移出门岗/卸货口流程';
+    return true;
+  }
+
+  function cancelStaleFactoryTaskV43(task, reason){
+    if(!task || hasFactoryExecutionStartedV43(task)) return false;
+    task.cancelled = true;
+    task.status = 'cancelled';
+    task.operationStatus = 'cancelled';
+    task.cancelReason = reason || '目的地变更，自动撤回残留工厂到货计划';
+    task.cancelTime = new Date().toISOString();
+    task.cancelUser = (currentUser && (currentUser.name || currentUser.email)) || '';
+    return true;
+  }
+
+  function cleanupFactoryTasksV43(options){
+    options = options || {};
+    let changed = false;
+
+    // 1. 非工厂任务本身不应进入门岗/卸货口流程。
+    (transportTasks || []).forEach(t => {
+      if(!t || isTaskCancelledV43(t)) return;
+      if(!isFactoryDestV43(t.to)){
+        const before = JSON.stringify([t.operationStatus,t.gateArrivalTime,t.gateReleaseTime,t.waitingAreaTime,t.unloadStartTime,t.unloadFinishTime]);
+        detachFactoryFlowV43(t, '运输计划目的地不是工厂，自动移出工厂收货流程');
+        const after = JSON.stringify([t.operationStatus,t.gateArrivalTime,t.gateReleaseTime,t.waitingAreaTime,t.unloadStartTime,t.unloadFinishTime]);
+        if(before !== after) changed = true;
+      }
+    });
+
+    // 2. 如果同一集装箱存在非工厂有效计划，则撤回未开始的残留工厂计划。
+    (transportTasks || []).forEach(nonFactory => {
+      if(!nonFactory || isTaskCancelledV43(nonFactory) || isFactoryDestV43(nonFactory.to)) return;
+      (transportTasks || []).forEach(factoryTask => {
+        if(!factoryTask || factoryTask.id === nonFactory.id || isTaskCancelledV43(factoryTask)) return;
+        if(!isFactoryDestV43(factoryTask.to)) return;
+        const sameContainer = String(factoryTask.containerId || '') === String(nonFactory.containerId || '') ||
+                              String(factoryTask.containerNo || '') === String(nonFactory.containerNo || '');
+        if(sameContainer && !hasFactoryExecutionStartedV43(factoryTask)){
+          if(cancelStaleFactoryTaskV43(factoryTask, '同一集装箱运输目的地已改为' + (nonFactory.to || '非工厂') + '，自动撤回残留工厂计划')) changed = true;
+        }
+      });
+    });
+
+    // 3. 工厂有效任务必须有明确初始状态和关键主数据。
+    (transportTasks || []).forEach(t => {
+      if(!t || isTaskCancelledV43(t) || !isFactoryDestV43(t.to)) return;
+      hydrateTaskMasterFieldsV43(t);
+      if(!t.operationStatus || t.operationStatus === 'cancelled'){
+        t.operationStatus = 'not_arrived';
+        changed = true;
+      }
+    });
+
+    if(changed && !options.noSave){
+      try{ saveData(); }catch(e){ console.warn('V43 cleanup save skipped', e); }
+    }
+    return changed;
+  }
+
+  window.v430CleanupFactoryTaskLinks = cleanupFactoryTasksV43;
+
+  // 覆盖动态运输计划编辑：补齐“目的地变更 ↔ 门岗/卸货口计划”的双向联动。
+  window.editDynamicTask = function(taskId){
+    let task = (transportTasks || []).find(t => t.id === taskId);
+    if(!task){ alert('未找到运输任务'); return; }
+    if(isTaskCancelledV43(task)){ alert('已撤回计划不可编辑，可使用复制功能重新生成计划'); return; }
+
+    const oldTo = task.to || '';
+    const oldIsFactory = isFactoryDestV43(oldTo);
+    const oldSnapshot = JSON.parse(JSON.stringify(task));
+
+    let newEta = prompt('修改预计到达时间（必填，格式：YYYY-MM-DDTHH:mm 或 YYYY/MM/DD HH:mm）', task.estimatedArrival || '');
+    if(newEta === null) return;
+    let newDest = prompt('修改目的地（RG堆场/Rio Claro/IRA库房/工厂）', task.to || '工厂');
+    if(newDest === null) return;
+    newDest = String(newDest || '').trim();
+    if(!['RG堆场','Rio Claro','IRA库房','工厂'].includes(newDest)){
+      alert('目的地只能选择：RG堆场、Rio Claro、IRA库房、工厂');
+      return;
+    }
+    let newDock = prompt('修改卸货口（目的地为工厂时必填）', task.unloadingDock || '');
+    if(newDock === null) return;
+    let newCarrier = prompt('修改运输公司（RG/JSL）', task.carrier || 'RG');
+    if(newCarrier === null) return;
+
+    let err = typeof validateDynamicPlanFields === 'function' ? validateDynamicPlanFields(newDest, newEta, newDock) : '';
+    if(err){ alert(err); return; }
+
+    const newIsFactory = isFactoryDestV43(newDest);
+    if(oldIsFactory && !newIsFactory && hasFactoryExecutionStartedV43(task)){
+      alert('该集装箱已经进入门岗/卸货口执行流程，不能把目的地从工厂改为其他地点。');
+      return;
+    }
+
+    task.estimatedArrival = String(newEta || '').trim();
+    task.to = newDest;
+    task.unloadingDock = newIsFactory ? String(newDock || '').trim() : String(newDock || '').trim();
+    task.carrier = (String(newCarrier || '').trim() || 'RG');
+    task.lastEditedAt = new Date().toISOString();
+    task.lastEditedBy = (currentUser && (currentUser.name || currentUser.email)) || '';
+
+    delete task.oneDockReviewStatus;
+    delete task.oneDockOrder;
+    delete task.oneDockPlan;
+    if(task.source === 'oneDockPlan') task.source = 'dynamic';
+
+    if(newIsFactory){
+      hydrateTaskMasterFieldsV43(task);
+      if(!oldIsFactory) resetFactoryFlowV43(task);
+      else if(!task.operationStatus) task.operationStatus = 'not_arrived';
+    }else{
+      detachFactoryFlowV43(task, '动态运输计划目的地从工厂改为' + newDest);
+    }
+
+    try{ cleanupFactoryTasksV43({noSave:true}); }catch(e){
+      console.warn('V43 cleanup after dynamic edit failed', e);
+      Object.assign(task, oldSnapshot);
+      alert('计划联动校验失败，已恢复原状态。');
+      return;
+    }
+
+    try{ saveAndRenderContentKeepState(); }catch(e){ saveData(); renderContent(); }
+    alert('已发布运输计划已更新，门岗/卸货口计划已同步调整。');
+  };
+
+  // 覆盖撤回：进入门岗/卸货口流程后禁止撤回；未开始则同步清理工厂状态。
+  window.withdrawDynamicTask = function(taskId){
+    let task = (transportTasks || []).find(t => t.id === taskId);
+    if(!task){ alert('未找到运输任务'); return; }
+    if(isTaskCancelledV43(task)){ alert('该计划已撤回'); return; }
+    if(isFactoryDestV43(task.to) && hasFactoryExecutionStartedV43(task)){
+      alert('该集装箱已进入门岗/工厂收货执行环节，不允许撤回计划');
+      return;
+    }
+    let reason = prompt('请输入撤回原因：工厂计划变更 / 清关异常 / 运输异常 / 库存调整 / 供应商原因 / 其他', '工厂计划变更');
+    if(reason === null) return;
+    reason = String(reason || '').trim();
+    if(!reason){ alert('撤回原因不能为空'); return; }
+    if(!confirm(`确认撤回 ${task.containerNo || ''} 的动态运输计划吗？`)) return;
+    task.status = 'cancelled';
+    task.cancelled = true;
+    task.cancelReason = reason;
+    task.cancelTime = new Date().toISOString();
+    task.cancelUser = (currentUser && (currentUser.name || currentUser.email)) || '';
+    task.operationStatus = 'cancelled';
+    cleanupFactoryTasksV43({noSave:true});
+    try{ saveAndRenderContentKeepState(); }catch(e){ saveData(); renderContent(); }
+    alert('计划已撤回。该集装箱会重新回到动态运输计划待发布列表，可重新发布。');
+  };
+
+  // 发布前后清理残留任务，避免误提示“已有未完成工厂到货计划”。
+  const basePublishDynamicSingleV43 = window.publishDynamicSingle;
+  if(typeof basePublishDynamicSingleV43 === 'function'){
+    window.publishDynamicSingle = function(){
+      cleanupFactoryTasksV43({noSave:true});
+      const ret = basePublishDynamicSingleV43.apply(this, arguments);
+      cleanupFactoryTasksV43();
+      return ret;
+    };
+  }
+  const baseBatchPublishDynamicV43 = window.batchPublishDynamic;
+  if(typeof baseBatchPublishDynamicV43 === 'function'){
+    window.batchPublishDynamic = function(){
+      cleanupFactoryTasksV43({noSave:true});
+      const ret = baseBatchPublishDynamicV43.apply(this, arguments);
+      cleanupFactoryTasksV43();
+      return ret;
+    };
+  }
+
+  // 门岗和卸货口渲染前统一清理，避免残留计划显示。
+  const baseRenderGateV43 = window.renderFactoryGateOnly;
+  if(typeof baseRenderGateV43 === 'function'){
+    window.renderFactoryGateOnly = function(){
+      cleanupFactoryTasksV43();
+      return baseRenderGateV43.apply(this, arguments);
+    };
+  }
+  const baseRenderDockV43 = window.renderDockMonitoring;
+  if(typeof baseRenderDockV43 === 'function'){
+    window.renderDockMonitoring = function(){
+      cleanupFactoryTasksV43();
+      return baseRenderDockV43.apply(this, arguments);
+    };
+  }
+
+  // 工厂任务列表只读有效目的地=工厂的任务，不显示已取消/已完结/残留非工厂任务。
+  window.getFactoryOperationTasks = function(date){
+    cleanupFactoryTasksV43({noSave:true});
+    let tasks = (transportTasks || []).filter(t =>
+      t && isFactoryDestV43(t.to) && !isTaskCancelledV43(t) &&
+      (typeof isOperationalVisibleTask !== 'function' || isOperationalVisibleTask(t)) &&
+      t.status !== 'completed' && t.operationStatus !== 'unloaded'
+    );
+    if(date){
+      tasks = tasks.filter(t =>
+        getDatePart(t.estimatedArrival || t.plannedDate || '') === date ||
+        getDatePart(t.gateArrivalTime || '') === date ||
+        getDatePart(t.unloadStartTime || '') === date ||
+        getDatePart(t.unloadFinishTime || '') === date
+      );
+    }
+    return tasks.sort((a,b)=>
+      String(a.estimatedArrival||'').localeCompare(String(b.estimatedArrival||'')) ||
+      String(a.unloadingDock||'').localeCompare(String(b.unloadingDock||''),'zh-CN',{numeric:true}) ||
+      (typeof compareProductionSequence === 'function' ? compareProductionSequence(a,b) : 0)
+    );
+  };
+
+  // 首次打开时清理一次历史残留。
+  setTimeout(()=>{ try{ cleanupFactoryTasksV43(); }catch(e){ console.warn('V43 initial cleanup skipped', e); } }, 800);
+})();
 </script>
 
 </body>
