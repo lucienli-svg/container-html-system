@@ -9325,6 +9325,243 @@ let main=document.getElementById('mainContent');
   // 首次打开时清理一次历史残留。
   setTimeout(()=>{ try{ cleanupFactoryTasksV43(); }catch(e){ console.warn('V43 initial cleanup skipped', e); } }, 800);
 })();
+
+
+/* ==================== V43.2 提箱计划/动态运输计划收货链路统一联动修复 ====================
+   目标：当提箱计划或动态运输计划重新编辑目的地/到货时间/卸货口时，
+   同步更新门岗登记、卸货口收货、到货确认及运输任务，避免同一集装箱在两个收货地址重复出现。 */
+(function(){
+  function isFactoryDest432(dest){
+    const d = String(dest || '').trim();
+    return d === '工厂' || d.toLowerCase() === 'factory' || d.toUpperCase() === 'GWM';
+  }
+  function isCancelled432(t){
+    return !t || t.cancelled || t.status === 'cancelled' || t.operationStatus === 'cancelled';
+  }
+  function factoryStarted432(t){
+    if(!t) return false;
+    try{
+      if(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(t)) return true;
+    }catch(e){}
+    const op = String(t.operationStatus || '');
+    return !!(t.gateArrivalTime || t.gateReleaseTime || t.waitingAreaTime || t.unloadStartTime || t.unloadFinishTime ||
+      ['outside_parking','inside_waiting','unloading','unloaded'].includes(op));
+  }
+  function hydrate432(task, plan){
+    const cont = containers.find(c => String(c.id) === String(plan.containerId)) || {};
+    task.containerId = plan.containerId;
+    task.containerNo = plan.containerNo || cont.containerNo || task.containerNo || '';
+    task.containerSeq = plan.containerSeq || cont.containerSeq || task.containerSeq || '';
+    task.batch = plan.batch || cont.batch || task.batch || '';
+    try{ task.blNo = getTaskBlText(plan); }catch(e){ task.blNo = task.blNo || ''; }
+    try{ task.iraNo = getIraList(plan.containerId) || task.iraNo || ''; }catch(e){ task.iraNo = task.iraNo || ''; }
+    task.source = 'pickupPlan';
+    task.sourcePlanId = plan.id;
+    task.from = task.from || '港口';
+    task.to = plan.destination;
+    task.carrier = plan.carrier || task.carrier || 'RG';
+    task.estimatedArrival = plan.arrivalDate || task.estimatedArrival || '';
+    task.unloadingDock = plan.unloadingDock || '';
+  }
+  function clearFactoryFields432(task){
+    task.operationStatus = '';
+    task.gateArrivalTime = '';
+    task.gateReleaseTime = '';
+    task.waitingAreaTime = '';
+    task.unloadStartTime = '';
+    task.unloadFinishTime = '';
+    task.truckPlate = task.truckPlate || '';
+    task.driverName = task.driverName || '';
+    task.driverPhone = task.driverPhone || '';
+  }
+  function resetFactoryFields432(task){
+    task.operationStatus = 'not_arrived';
+    task.gateArrivalTime = '';
+    task.gateReleaseTime = '';
+    task.waitingAreaTime = '';
+    task.unloadStartTime = '';
+    task.unloadFinishTime = '';
+  }
+  function activePickupTaskForPlan432(plan){
+    return (transportTasks || []).find(t => !isCancelled432(t) && (
+      String(t.sourcePlanId || '') === String(plan.id) ||
+      (t.source === 'pickupPlan' && String(t.containerId || '') === String(plan.containerId))
+    ));
+  }
+  function allRelatedPickupTasks432(plan){
+    return (transportTasks || []).filter(t => !isCancelled432(t) && (
+      String(t.sourcePlanId || '') === String(plan.id) ||
+      (t.source === 'pickupPlan' && String(t.containerId || '') === String(plan.containerId)) ||
+      (plan.containerNo && String(t.containerNo || '') === String(plan.containerNo))
+    ));
+  }
+  function cancelDuplicate432(t, reason){
+    if(!t || isCancelled432(t)) return false;
+    if(isFactoryDest432(t.to) && factoryStarted432(t)) return false;
+    t.cancelled = true;
+    t.status = 'cancelled';
+    t.operationStatus = 'cancelled';
+    t.cancelReason = reason || '计划重新编辑，自动撤回旧收货计划';
+    t.cancelTime = new Date().toISOString();
+    t.cancelUser = (currentUser && (currentUser.name || currentUser.email)) || '';
+    return true;
+  }
+  function syncPickupPlanTransportLink432(plan, options){
+    options = options || {};
+    if(!plan || plan.status === 'cancelled') return null;
+    const newIsFactory = isFactoryDest432(plan.destination);
+    const related = allRelatedPickupTasks432(plan);
+    const primary = activePickupTaskForPlan432(plan) || related[0] || null;
+
+    if(!newIsFactory){
+      for(const t of related){
+        if(isFactoryDest432(t.to) && factoryStarted432(t)){
+          alert('该集装箱已经进入门岗/卸货口执行流程，不能把目的地从工厂改为其他地点。');
+          return null;
+        }
+      }
+    }
+
+    let task = primary;
+    if(!task && options.createIfMissing){
+      task = { id: nextIds.task++, createdAt: new Date().toISOString(), publishedAt: new Date().toISOString(), status: 'in_transit', source: 'pickupPlan' };
+      transportTasks.push(task);
+    }
+    if(task){
+      hydrate432(task, plan);
+      task.status = plan.status === 'confirmed' ? 'in_transit' : (task.status || 'in_transit');
+      if(plan.actualPickupTime) task.actualPickupTime = plan.actualPickupTime;
+      if(newIsFactory){
+        if(!factoryStarted432(task)) resetFactoryFields432(task);
+        else if(!task.operationStatus) task.operationStatus = 'not_arrived';
+      }else{
+        clearFactoryFields432(task);
+      }
+      task.lastPlanSyncAt = new Date().toISOString();
+    }
+    // 同一计划/同一箱残留的其他任务全部撤回，避免两个收货地址同时出现。
+    for(const t of related){
+      if(task && t.id === task.id) continue;
+      if(isFactoryDest432(t.to) && factoryStarted432(t)) continue;
+      cancelDuplicate432(t, '提箱计划重新编辑后自动撤回重复/旧收货计划');
+    }
+    return task;
+  }
+  window.v432SyncPickupPlanTransportLink = syncPickupPlanTransportLink432;
+
+  window.modifyPlan = function(planId){
+    let plan = pickupPlans.find(p => p.id === planId);
+    if(!plan) return;
+    const oldPlan = JSON.parse(JSON.stringify(plan));
+    const oldRelated = allRelatedPickupTasks432(plan).map(t => JSON.parse(JSON.stringify(t)));
+
+    let newArrival = prompt('修改到货时间（格式：YYYY-MM-DDTHH:mm 或 YYYY/MM/DD HH:mm）', plan.arrivalDate || '');
+    if(newArrival === null) return;
+    let newCarrier = prompt('修改运输公司(RG/JSL)', plan.carrier || 'RG');
+    if(newCarrier === null) return;
+    let newDest = prompt('修改目的地（RG堆场/Rio Claro/IRA库房/工厂）', plan.destination || '');
+    if(newDest === null) return;
+    newDest = String(newDest || '').trim();
+    if(!['RG堆场','Rio Claro','IRA库房','工厂'].includes(newDest)){
+      alert('目的地只能选择：RG堆场、Rio Claro、IRA库房、工厂');
+      return;
+    }
+    let newDock = prompt('修改卸货口（目的地为工厂时必填）', plan.unloadingDock || '');
+    if(newDock === null) return;
+    if(isFactoryDest432(newDest) && !String(newDock || '').trim()){
+      alert('目的地为工厂时，卸货口必填');
+      return;
+    }
+
+    // 已经开始门岗/卸货流程的工厂任务，不允许改为非工厂。
+    const related = allRelatedPickupTasks432(plan);
+    if(!isFactoryDest432(newDest) && related.some(t => isFactoryDest432(t.to) && factoryStarted432(t))){
+      alert('该集装箱已经进入门岗/卸货口执行流程，不能把目的地从工厂改为其他地点。');
+      return;
+    }
+
+    plan.arrivalDate = String(newArrival || '').trim();
+    plan.carrier = (String(newCarrier || '').trim() === 'JSL') ? 'JSL' : 'RG';
+    plan.destination = newDest;
+    plan.unloadingDock = String(newDock || '').trim();
+    plan.needReconfirm = true;
+    if(plan.status === 'confirmed'){
+      // 已确认提箱后的计划允许修正，但运输任务同步更新，不再重复生成第二条收货计划。
+      plan.status = 'pending';
+    }
+    plan.lastEditedAt = new Date().toISOString();
+    plan.lastEditedBy = (currentUser && (currentUser.name || currentUser.email)) || '';
+
+    const synced = syncPickupPlanTransportLink432(plan, {createIfMissing: !!plan.actualPickupTime});
+    if(!synced && !isFactoryDest432(newDest)){
+      Object.assign(plan, oldPlan);
+      // 尽量恢复关联任务
+      oldRelated.forEach(old => { const t=transportTasks.find(x=>x.id===old.id); if(t) Object.assign(t, old); });
+      return;
+    }
+
+    const viewState = typeof capturePickupPlanViewState === 'function' ? capturePickupPlanViewState() : null;
+    try{ saveData(); }catch(e){ console.warn(e); }
+    try{ if(typeof refreshPickupPlanTablesKeepState === 'function') refreshPickupPlanTablesKeepState(viewState); else renderContent(); }catch(e){ renderContent(); }
+    alert('计划已修改，运输任务、门岗/卸货口和到货确认计划已同步调整。');
+  };
+
+  window.confirmPickupTask = function(planId){
+    let plan = pickupPlans.find(p => p.id === planId);
+    if(!plan){ alert('找不到计划'); return; }
+    let actualTime = document.getElementById(`pickupTime_${planId}`)?.value;
+    if(!actualTime){ alert('请填写实际提箱日期'); return; }
+    let cont = containers.find(c => c.id === plan.containerId);
+    if(cont) cont.actualPickupTime = actualTime;
+    plan.status = 'confirmed';
+    plan.actualPickupTime = actualTime;
+    plan.needReconfirm = false;
+    syncPickupPlanTransportLink432(plan, {createIfMissing:true});
+    try{ cleanupFactoryTasksV43 && cleanupFactoryTasksV43({noSave:true}); }catch(e){}
+    saveData();
+    let activeTab = document.querySelector('.date-tab.active');
+    let keepDate = activeTab?.dataset?.date || getDatePart(plan.arrivalDate);
+    let main = document.getElementById('mainContent');
+    if(main && keepDate && typeof window.renderTransportTasksWithDate === 'function') window.renderTransportTasksWithDate(main, keepDate); else renderContent();
+    alert(`已确认提箱 ${plan.containerNo}`);
+  };
+
+  // 加强动态运输计划编辑：目的地/时间/卸货口改变后，同步清理同一箱旧工厂残留任务。
+  const baseEditDynamic432 = window.editDynamicTask;
+  window.editDynamicTask = function(taskId){
+    const before = (transportTasks || []).map(t => JSON.stringify(t));
+    const ret = baseEditDynamic432 ? baseEditDynamic432.apply(this, arguments) : undefined;
+    try{
+      const task = (transportTasks || []).find(t => t.id === taskId);
+      if(task){
+        // 同一箱如果因为历史编辑残留了其他未开始的工厂/非工厂计划，自动撤回重复任务。
+        const same = (transportTasks || []).filter(t => !isCancelled432(t) && t.id !== task.id && (
+          String(t.containerId || '') === String(task.containerId || '') ||
+          (task.containerNo && String(t.containerNo || '') === String(task.containerNo || ''))
+        ));
+        same.forEach(t => {
+          if(factoryStarted432(t)) return;
+          // 如果当前任务是最新编辑任务，则其他未开始任务都视为旧残留。
+          cancelDuplicate432(t, '动态运输计划重新编辑后自动撤回同箱旧收货计划');
+        });
+        if(isFactoryDest432(task.to) && !factoryStarted432(task) && !task.operationStatus) resetFactoryFields432(task);
+        if(!isFactoryDest432(task.to)) clearFactoryFields432(task);
+        saveData();
+      }
+    }catch(e){ console.warn('V43.2 dynamic sync cleanup skipped', e); }
+    return ret;
+  };
+
+  setTimeout(()=>{
+    try{
+      // 打开系统时同步一次所有已发布提箱计划，修复历史重复到货确认残留。
+      (pickupPlans || []).forEach(p => {
+        if(p && p.status !== 'cancelled') syncPickupPlanTransportLink432(p, {createIfMissing: !!p.actualPickupTime});
+      });
+      saveData();
+    }catch(e){ console.warn('V43.2 initial pickup sync skipped', e); }
+  }, 900);
+})();
 </script>
 
 </body>
