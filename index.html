@@ -9562,6 +9562,345 @@ let main=document.getElementById('mainContent');
     }catch(e){ console.warn('V43.2 initial pickup sync skipped', e); }
   }, 900);
 })();
+
+
+/* ==================== V43.3 数据保护版：防止空数据覆盖 + JSON恢复中心 ==================== */
+(function(){
+  const V433_VERSION = 'V43.3 Data Protection';
+  window.__allowEmptyCloudOverwrite = false;
+  window.__forceCloudSaveOnce = false;
+  window.__lastCloudStateRaw = null;
+  window.__lastCloudStateCounts = null;
+
+  function arrLen(v){ return Array.isArray(v) ? v.length : 0; }
+  function getStateCounts(state){
+    state = state || {};
+    return {
+      containers: arrLen(state.containers),
+      blList: arrLen(state.blList),
+      containerBlMap: arrLen(state.containerBlMap),
+      pickupPlans: arrLen(state.pickupPlans),
+      transportTasks: arrLen(state.transportTasks),
+      locationStock: arrLen(state.locationStock),
+      returnRecords: arrLen(state.returnRecords),
+      productionRecords: arrLen(state.productionRecords),
+      productionPlans: arrLen(state.productionPlans),
+      factoryCalendar: arrLen(state.factoryCalendar),
+      storageConfig: arrLen(state.storageConfig),
+      demurrageConfig: arrLen(state.demurrageConfig)
+    };
+  }
+  window.getStateCountsV433 = getStateCounts;
+
+  function stateBusinessScore(state){
+    const c = getStateCounts(state);
+    return c.containers + c.blList + c.containerBlMap + c.pickupPlans + c.transportTasks + c.locationStock + c.returnRecords + c.productionRecords + c.productionPlans;
+  }
+  function isStateEmptyV433(state){
+    if(!state || typeof state !== 'object') return true;
+    return stateBusinessScore(state) === 0;
+  }
+  window.isStateEmptyV433 = isStateEmptyV433;
+
+  function localStatePayloadV433(){
+    try{ return getCloudStatePayload(); }catch(e){
+      return {containers, blList, containerBlMap, transportTasks, locationStock, returnRecords, pickupPlans, productionRecords, productionPlans, factoryCalendar, nextIds, storageConfig, demurrageConfig, warningConfig};
+    }
+  }
+
+  function localStateEmptyV433(){ return isStateEmptyV433(localStatePayloadV433()); }
+
+  async function createRecoveryPointV433(reason, state){
+    try{
+      const sb = initSupabaseClient();
+      if(!sb) return false;
+      state = state || window.__lastCloudStateRaw;
+      if(!state || isStateEmptyV433(state)) return false;
+      const stamp = new Date().toISOString().replace(/[-:.TZ]/g,'').slice(0,14);
+      const id = `${CLOUD_STATE_ID}-recovery-${stamp}`;
+      const payload = JSON.parse(JSON.stringify(state));
+      payload.recoveryMeta = { reason: reason || 'auto', createdAt: new Date().toISOString(), createdBy: cloudUser?.email || currentUser?.email || '' };
+      const { error } = await sb.from('app_state').upsert({
+        id,
+        data: payload,
+        updated_by: cloudUser?.email || '',
+        updated_at: new Date().toISOString()
+      });
+      if(error){ console.warn('创建恢复点失败', error); return false; }
+      return true;
+    }catch(e){ console.warn('创建恢复点异常', e); return false; }
+  }
+  window.createRecoveryPointV433 = createRecoveryPointV433;
+
+  // 覆盖云端读取：云端为空时不覆盖当前内存；返回 false，提示恢复。
+  window.loadCloudState = loadCloudState = async function(){
+    const sb = initSupabaseClient();
+    if(!sb) return false;
+    const { data, error } = await sb.from('app_state').select('data, updated_at, updated_by').eq('id', CLOUD_STATE_ID).maybeSingle();
+    if(error){
+      console.error('loadCloudState error', error);
+      alert('云端数据读取失败：' + error.message);
+      return false;
+    }
+    if(data && data.data){
+      window.__lastCloudStateRaw = data.data;
+      window.__lastCloudStateCounts = getStateCounts(data.data);
+      if(data.updated_at) lastCloudUpdatedAt = data.updated_at;
+      if(isStateEmptyV433(data.data)){
+        console.warn('V43.3保护：检测到云端主数据为空，未应用空数据。', window.__lastCloudStateCounts);
+        return false;
+      }
+      applyCloudState(data.data);
+      return true;
+    }
+    return false;
+  };
+
+  // 覆盖云端保存：本地为空时禁止保存；覆盖前自动创建恢复点。
+  window.saveCloudState = saveCloudState = async function(){
+    const sb = initSupabaseClient();
+    if(!sb || isCloudSaving) return;
+    const payload = localStatePayloadV433();
+    payload.version = V433_VERSION;
+    payload.updatedAt = new Date().toISOString();
+    payload.updatedBy = cloudUser?.email || currentUser?.email || currentUser?.name || '';
+
+    if(isStateEmptyV433(payload) && !window.__forceCloudSaveOnce && !window.__allowEmptyCloudOverwrite){
+      console.error('V43.3保护：阻止空数据覆盖云端。', getStateCounts(payload));
+      showRealtimeSyncHint && showRealtimeSyncHint('已阻止空数据覆盖云端');
+      return;
+    }
+
+    isCloudSaving = true;
+    try{
+      if(!isStateEmptyV433(payload)) await createRecoveryPointV433('before_saveCloudState', window.__lastCloudStateRaw);
+      const nowIso = new Date().toISOString();
+      lastSelfSaveAt = Date.now();
+      lastCloudUpdatedAt = nowIso;
+      const { error } = await sb.from('app_state').upsert({
+        id: CLOUD_STATE_ID,
+        data: payload,
+        updated_by: cloudUser?.email || '',
+        updated_at: nowIso
+      });
+      if(error) throw error;
+      window.__lastCloudStateRaw = JSON.parse(JSON.stringify(payload));
+      window.__lastCloudStateCounts = getStateCounts(payload);
+      window.__forceCloudSaveOnce = false;
+    }catch(err){
+      console.error('saveCloudState error', err);
+      alert('云端保存失败：' + (err.message || err));
+    }finally{
+      isCloudSaving = false;
+    }
+  };
+
+  // 覆盖登录后初始化：云端为空时进入数据恢复中心，不再把本地空数据保存到云端。
+  window.ensureCloudSession = ensureCloudSession = async function(){
+    const sb = initSupabaseClient();
+    if(!sb) return false;
+    const { data, error: sessionError } = await sb.auth.getSession();
+    if(sessionError){ alert('读取登录会话失败：' + sessionError.message); return false; }
+    const session = data && data.session ? data.session : null;
+    if(!session || !session.user) return false;
+    cloudUser = session.user;
+
+    const { data: profile, error } = await sb.from('user_profiles').select('*').ilike('email', cloudUser.email).maybeSingle();
+    if(error){ alert('读取用户权限失败：' + error.message); return false; }
+    if(!profile || profile.is_active === false){
+      document.getElementById('loginPage').style.display='none';
+      document.getElementById('mainApp').style.display='block';
+      document.getElementById('sidebar').innerHTML='';
+      document.getElementById('mainContent').innerHTML=`<div class="card"><div class="card-header"><span class="card-title">⏳ 等待管理员授权</span></div><p>当前账号：<b>${cloudUser.email}</b></p><p style="margin-top:10px;color:#606266;">该账号尚未在 user_profiles 中分配角色，请联系系统管理员添加权限。</p><button class="btn btn-primary" onclick="logoutCloud()">退出</button></div>`;
+      return false;
+    }
+    cloudProfile = profile;
+    currentUser = mapProfileToCurrentUser(profile, cloudUser);
+    currentMenu = (currentUser.role === '订购科' || isAdminUser()) ? 'dashboard' : (allMenus.find(m => canAccessMenu(m))?.id || 'containers');
+
+    let hasCloud = await loadCloudState();
+    document.getElementById('loginPage').style.display='none';
+    document.getElementById('mainApp').style.display='block';
+    document.getElementById('currentRole').innerText = currentUser.role;
+    document.getElementById('currentUser').innerText = currentUser.name;
+
+    if(!hasCloud){
+      // 尝试读取本地，但绝不自动保存到云端。
+      loadLocalDataOnly();
+      if(localStateEmptyV433()) currentMenu = 'dataRecovery';
+      else currentMenu = 'dataRecovery';
+      renderSidebar();
+      renderContent();
+      applyLanguage();
+      startRealtimeSync();
+      showRealtimeSyncHint('云端为空：请先恢复数据');
+      setTimeout(()=>alert('检测到云端主数据为空。系统已进入数据恢复中心；请导入备份JSON恢复数据。'), 300);
+      return true;
+    }
+
+    renderSidebar();
+    renderContent();
+    applyLanguage();
+    startRealtimeSync();
+    return true;
+  };
+
+  // 覆盖实时拉取：远端为空时不应用。
+  window.pullCloudStateAndRefresh = pullCloudStateAndRefresh = async function(reason){
+    const sb = initSupabaseClient();
+    if(!sb || isCloudSaving) return;
+    try{
+      const { data, error } = await sb.from('app_state').select('data, updated_at, updated_by').eq('id', CLOUD_STATE_ID).maybeSingle();
+      if(error) throw error;
+      if(!data || !data.data) return;
+      if(data.updated_at && lastCloudUpdatedAt && data.updated_at === lastCloudUpdatedAt) return;
+      window.__lastCloudStateRaw = data.data;
+      window.__lastCloudStateCounts = getStateCounts(data.data);
+      if(data.updated_at) lastCloudUpdatedAt = data.updated_at;
+      if(isStateEmptyV433(data.data)){
+        showRealtimeSyncHint('云端为空：已阻止刷新覆盖');
+        console.warn('V43.3保护：实时同步检测到空数据，未应用。');
+        return;
+      }
+      applyCloudState(data.data);
+      if(currentUser){
+        const uiState = captureCurrentUiState();
+        if(isCurrentPageRefreshLocked() || isModalOpen() || isUserActivelyEditing()){
+          renderSidebar();
+          showRealtimeSyncHint('已同步云端数据（当前页面未刷新）');
+        }else{
+          renderSidebar(); renderContent(); applyLanguage(); restoreCurrentUiState(uiState); showRealtimeSyncHint('已同步最新数据');
+        }
+      }
+    }catch(err){ console.error('pullCloudStateAndRefresh error', err); showRealtimeSyncHint('同步失败'); }
+  };
+
+  // 危险按钮降级：本地→云端必须非空且二次确认。
+  window.migrateLocalToCloud = async function(){
+    loadLocalDataOnly();
+    const payload = localStatePayloadV433();
+    const c = getStateCounts(payload);
+    if(isStateEmptyV433(payload)){ alert('本地数据为空，已禁止上传覆盖云端。'); return; }
+    if(!confirm(`确认将本地数据覆盖上传到云端？\n基础数据：${c.containers}\n提箱计划：${c.pickupPlans}\n运输任务：${c.transportTasks}\n此操作会覆盖云端主数据。`)) return;
+    await createRecoveryPointV433('before_manual_local_to_cloud', window.__lastCloudStateRaw);
+    await saveCloudState();
+    alert('本地数据已上传到云端。');
+    renderContent();
+  };
+
+  window.downloadCloudBackup = function(){
+    const payload = localStatePayloadV433();
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `container_cloud_backup_${getTodayStr()}_${new Date().toISOString().slice(11,19).replace(/:/g,'')}.json`;
+    a.click();
+  };
+
+  function countsTableHtmlV433(counts){
+    return `<table class="data-table" style="min-width:720px!important"><thead><tr><th>数据类型</th><th>数量</th></tr></thead><tbody>
+      <tr><td>基础数据 containers</td><td>${counts.containers}</td></tr>
+      <tr><td>提单 blList</td><td>${counts.blList}</td></tr>
+      <tr><td>提单-集装箱映射</td><td>${counts.containerBlMap}</td></tr>
+      <tr><td>提箱计划 pickupPlans</td><td>${counts.pickupPlans}</td></tr>
+      <tr><td>运输任务 transportTasks</td><td>${counts.transportTasks}</td></tr>
+      <tr><td>库存 locationStock</td><td>${counts.locationStock}</td></tr>
+      <tr><td>还箱记录 returnRecords</td><td>${counts.returnRecords}</td></tr>
+      <tr><td>生产记录 productionRecords</td><td>${counts.productionRecords}</td></tr>
+      <tr><td>生产计划 productionPlans</td><td>${counts.productionPlans}</td></tr>
+      <tr><td>工厂日历 factoryCalendar</td><td>${counts.factoryCalendar}</td></tr>
+    </tbody></table>`;
+  }
+
+  window.renderDataRecovery = function(container){
+    const localCounts = getStateCounts(localStatePayloadV433());
+    const cloudCounts = window.__lastCloudStateCounts || {};
+    container.innerHTML = `<div class="card">
+      <div class="card-header"><span class="card-title">🛡️ 数据恢复中心 V43.3</span><span class="status-badge status-warning">数据保护已开启</span></div>
+      <div style="line-height:1.9;color:#606266;margin-bottom:14px;">
+        本页面用于从 JSON 备份恢复系统数据，并防止空数据覆盖云端。恢复前会自动创建恢复点。
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-number">${localCounts.containers}</div><div class="stat-label">当前本地基础数据</div></div>
+        <div class="stat-card"><div class="stat-number">${cloudCounts.containers||0}</div><div class="stat-label">最近读取云端基础数据</div></div>
+        <div class="stat-card"><div class="stat-number">${localCounts.transportTasks}</div><div class="stat-label">当前运输任务</div></div>
+      </div>
+      <div class="card" style="background:#f8f9fc;box-shadow:none;border:1px solid #ebeef5;">
+        <div class="card-title" style="font-size:16px;margin-bottom:12px;">① 选择备份 JSON</div>
+        <input type="file" id="restoreJsonFile" accept=".json,application/json" class="form-control" onchange="previewRestoreJsonV433()">
+        <div id="restorePreview" style="margin-top:12px;color:#606266;">请选择你找到的 <b>container_system_backup数据备份.json</b> 文件。</div>
+      </div>
+      <div class="card" style="background:#fff7e6;box-shadow:none;border:1px solid #ffd591;">
+        <b>注意：</b>恢复会把备份内容写入云端主数据。请确认预览数量正常后再点击恢复。
+      </div>
+    </div>`;
+  };
+
+  window.previewRestoreJsonV433 = async function(){
+    const file = document.getElementById('restoreJsonFile')?.files?.[0];
+    const box = document.getElementById('restorePreview');
+    if(!file){ box.innerHTML = '未选择文件'; return; }
+    try{
+      const text = await file.text();
+      const json = JSON.parse(text);
+      window.__pendingRestoreJsonV433 = json;
+      const counts = getStateCounts(json);
+      box.innerHTML = `<div class="section-label">备份文件：${file.name}</div>${countsTableHtmlV433(counts)}<div style="margin-top:12px;"><button class="btn btn-danger" onclick="confirmRestoreJsonV433()">确认恢复到云端</button></div>`;
+    }catch(e){
+      window.__pendingRestoreJsonV433 = null;
+      box.innerHTML = `<span style="color:#f56c6c;">JSON读取失败：${e.message}</span>`;
+    }
+  };
+
+  window.confirmRestoreJsonV433 = async function(){
+    const json = window.__pendingRestoreJsonV433;
+    if(!json){ alert('请先选择并预览备份JSON。'); return; }
+    const counts = getStateCounts(json);
+    if(isStateEmptyV433(json)){ alert('备份文件为空，禁止恢复。'); return; }
+    if(!confirm(`确认恢复该备份到云端？\n基础数据：${counts.containers}\n提箱计划：${counts.pickupPlans}\n运输任务：${counts.transportTasks}\n生产计划：${counts.productionPlans}`)) return;
+    await createRecoveryPointV433('before_restore_json', window.__lastCloudStateRaw);
+    applyCloudState(json);
+    // 写入本地，避免刷新后丢失
+    localStorage.setItem('cc_containers',JSON.stringify(containers));
+    localStorage.setItem('cc_blList',JSON.stringify(blList));
+    localStorage.setItem('cc_containerBlMap',JSON.stringify(containerBlMap));
+    localStorage.setItem('cc_transportTasks',JSON.stringify(transportTasks));
+    localStorage.setItem('cc_locationStock',JSON.stringify(locationStock));
+    localStorage.setItem('cc_returnRecords',JSON.stringify(returnRecords));
+    localStorage.setItem('cc_pickupPlans',JSON.stringify(pickupPlans));
+    localStorage.setItem('cc_productionRecords',JSON.stringify(productionRecords));
+    localStorage.setItem('cc_productionPlans',JSON.stringify(productionPlans));
+    localStorage.setItem('cc_factoryCalendar',JSON.stringify(factoryCalendar));
+    localStorage.setItem('cc_nextIds',JSON.stringify(nextIds));
+    localStorage.setItem('cc_storageConfig',JSON.stringify(storageConfig));
+    localStorage.setItem('cc_demurrageConfig',JSON.stringify(demurrageConfig));
+    localStorage.setItem('cc_warningConfig',JSON.stringify(warningConfig));
+    window.__forceCloudSaveOnce = true;
+    await saveCloudState();
+    alert('数据恢复完成。系统将返回工作台，请检查基础数据和提箱计划。');
+    currentMenu = 'dashboard'; renderSidebar(); renderContent();
+  };
+
+  try{
+    if(Array.isArray(allMenus) && !allMenus.some(m=>m.id==='dataRecovery')) allMenus.push({id:'dataRecovery', name:'数据恢复中心', icon:'🛡️', roles:['Admin','订购科']});
+    if(Array.isArray(permissionModules) && !permissionModules.some(m=>m.id==='dataRecovery')) permissionModules.push({id:'dataRecovery', name:'数据恢复中心'});
+  }catch(e){ console.warn(e); }
+
+  const originalRenderContentV433 = renderContent;
+  window.renderContent = renderContent = function(){
+    if(currentMenu === 'dataRecovery'){
+      bindCurrentPageOperationLock();
+      const main = document.getElementById('mainContent');
+      renderDataRecovery(main);
+      applyLanguage();
+      return;
+    }
+    return originalRenderContentV433.apply(this, arguments);
+  };
+
+  console.log('V43.3 Data Protection loaded');
+})();
+
 </script>
 
 </body>
