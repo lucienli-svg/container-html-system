@@ -1472,7 +1472,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V42.25 Slim：移除旧工厂到货监控入口，保留门岗登记与卸货口收货核心流程。
+        V43.1 Stable：修复动态运输计划发布后被历史非工厂任务误撤回的问题。
       </div>
       <button class="login-btn" onclick="loginWithGoogle()" style="width:100%;margin-bottom:14px;">使用 Google 登录</button>
 
@@ -9130,16 +9130,28 @@ let main=document.getElementById('mainContent');
       }
     });
 
-    // 2. 如果同一集装箱存在非工厂有效计划，则撤回未开始的残留工厂计划。
+    // 2. 如果同一集装箱存在“当前仍在执行中的非工厂计划”，才撤回未开始的残留工厂计划。
+    // V43.1 修复：历史已到达/已完成的港口→RG堆场/Rio Claro/IRA任务，只代表该箱当前位置，
+    // 不应阻止后续 RG堆场/Rio Claro/IRA→工厂 的动态运输计划。
+    function isActiveNonFactoryConflictV431(task){
+      if(!task || isTaskCancelledV43(task) || isFactoryDestV43(task.to)) return false;
+      const st = String(task.status || '').toLowerCase();
+      const op = String(task.operationStatus || '').toLowerCase();
+      if(['arrived','completed','unloaded','done','cancelled'].includes(st)) return false;
+      if(['unloaded','cancelled','done'].includes(op)) return false;
+      // 只有仍在计划/运输执行中的非工厂任务才代表“目的地仍被其他计划占用”。
+      return ['planned','pending','pending_pickup','in_transit'].includes(st) ||
+             ['not_arrived','outside_parking','inside_waiting','unloading'].includes(op);
+    }
     (transportTasks || []).forEach(nonFactory => {
-      if(!nonFactory || isTaskCancelledV43(nonFactory) || isFactoryDestV43(nonFactory.to)) return;
+      if(!isActiveNonFactoryConflictV431(nonFactory)) return;
       (transportTasks || []).forEach(factoryTask => {
         if(!factoryTask || factoryTask.id === nonFactory.id || isTaskCancelledV43(factoryTask)) return;
         if(!isFactoryDestV43(factoryTask.to)) return;
         const sameContainer = String(factoryTask.containerId || '') === String(nonFactory.containerId || '') ||
                               String(factoryTask.containerNo || '') === String(nonFactory.containerNo || '');
         if(sameContainer && !hasFactoryExecutionStartedV43(factoryTask)){
-          if(cancelStaleFactoryTaskV43(factoryTask, '同一集装箱运输目的地已改为' + (nonFactory.to || '非工厂') + '，自动撤回残留工厂计划')) changed = true;
+          if(cancelStaleFactoryTaskV43(factoryTask, '同一集装箱仍存在未完成的非工厂运输计划：' + (nonFactory.to || '非工厂') + '，自动撤回残留工厂计划')) changed = true;
         }
       });
     });
