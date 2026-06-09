@@ -384,6 +384,236 @@
     }
   })();
 
+
+
+/* ==================== V43.4 自动备份中心：每日自动备份 + 30天保留 ==================== */
+(function(){
+  const V434_VERSION = 'V43.5 Persist Queue Fix';
+  const DAILY_PREFIX = `${CLOUD_STATE_ID}-daily-`;
+  const MAX_DAILY_BACKUPS = 30;
+  window.__autoBackupRunningV434 = false;
+  window.__dailyBackupsV434 = [];
+
+  function pad2(n){ return String(n).padStart(2,'0'); }
+  function formatDateV434(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
+  function getYesterdayStrV434(){ const d=new Date(); d.setDate(d.getDate()-1); return formatDateV434(d); }
+  function getNowStampV434(){ return new Date().toISOString().replace(/[-:.TZ]/g,'').slice(0,14); }
+
+  function getPayloadV434(){
+    try{ return getCloudStatePayload(); }catch(e){
+      return {containers, blList, containerBlMap, transportTasks, locationStock, returnRecords, pickupPlans, productionRecords, productionPlans, factoryCalendar, nextIds, storageConfig, demurrageConfig, warningConfig};
+    }
+  }
+  function countsV434(state){
+    if(typeof getStateCountsV433 === 'function') return getStateCountsV433(state || {});
+    const len = v => Array.isArray(v) ? v.length : 0;
+    state = state || {};
+    return {containers:len(state.containers), blList:len(state.blList), pickupPlans:len(state.pickupPlans), transportTasks:len(state.transportTasks), productionPlans:len(state.productionPlans), productionRecords:len(state.productionRecords)};
+  }
+  function emptyV434(state){
+    if(typeof isStateEmptyV433 === 'function') return isStateEmptyV433(state);
+    const c=countsV434(state); return (c.containers+c.blList+c.pickupPlans+c.transportTasks+c.productionPlans+c.productionRecords)===0;
+  }
+
+  async function backupExistsV434(dateStr){
+    try{
+      const sb = initSupabaseClient(); if(!sb) return false;
+      const { data, error } = await sb.from('app_state').select('id').eq('id', DAILY_PREFIX + dateStr).maybeSingle();
+      if(error){ console.warn('检查每日备份失败', error); return false; }
+      return !!data;
+    }catch(e){ console.warn(e); return false; }
+  }
+
+  async function createDailyBackupV434(dateStr, reason){
+    const sb = initSupabaseClient(); if(!sb) return false;
+    const payload = JSON.parse(JSON.stringify(getPayloadV434()));
+    if(emptyV434(payload)){
+      console.warn('V43.4保护：当前数据为空，跳过自动备份，避免保存空备份。');
+      return false;
+    }
+    const c = countsV434(payload);
+    payload.backupMeta = {
+      type: 'daily',
+      backupDate: dateStr,
+      version: V434_VERSION,
+      reason: reason || 'auto_daily_backup',
+      createdAt: new Date().toISOString(),
+      createdBy: (cloudUser && cloudUser.email) || (currentUser && (currentUser.email || currentUser.name)) || '',
+      counts: c
+    };
+    const { error } = await sb.from('app_state').upsert({
+      id: DAILY_PREFIX + dateStr,
+      data: payload,
+      updated_by: payload.backupMeta.createdBy,
+      updated_at: new Date().toISOString()
+    });
+    if(error){ console.error('创建每日备份失败', error); return false; }
+    localStorage.setItem('cc_lastAutoBackupDate', dateStr);
+    console.log('V43.4每日备份已创建', dateStr, c);
+    return true;
+  }
+
+  async function pruneDailyBackupsV434(){
+    try{
+      const sb = initSupabaseClient(); if(!sb) return;
+      const { data, error } = await sb.from('app_state').select('id, updated_at').like('id', DAILY_PREFIX + '%').order('id', {ascending:false});
+      if(error || !Array.isArray(data)) return;
+      const old = data.slice(MAX_DAILY_BACKUPS);
+      for(const row of old){
+        try{ await sb.from('app_state').delete().eq('id', row.id); }catch(e){ console.warn('删除过期备份失败', row.id, e); }
+      }
+    }catch(e){ console.warn('清理过期备份失败', e); }
+  }
+
+  window.ensureDailyAutoBackupV434 = async function(reason){
+    if(window.__autoBackupRunningV434) return false;
+    window.__autoBackupRunningV434 = true;
+    try{
+      const dateStr = getYesterdayStrV434();
+      const payload = getPayloadV434();
+      if(emptyV434(payload)) return false;
+      if(await backupExistsV434(dateStr)) return true;
+      const ok = await createDailyBackupV434(dateStr, reason || 'first_open_today');
+      await pruneDailyBackupsV434();
+      return ok;
+    }finally{
+      window.__autoBackupRunningV434 = false;
+    }
+  };
+
+  async function loadDailyBackupsV434(){
+    const sb = initSupabaseClient(); if(!sb) return [];
+    const { data, error } = await sb.from('app_state').select('id, data, updated_at, updated_by').like('id', DAILY_PREFIX + '%').order('id', {ascending:false});
+    if(error){ alert('读取备份列表失败：' + error.message); return []; }
+    window.__dailyBackupsV434 = (data || []).map(row => {
+      const meta = row.data && row.data.backupMeta ? row.data.backupMeta : {};
+      return {id: row.id, date: row.id.replace(DAILY_PREFIX,''), updated_at: row.updated_at, updated_by: row.updated_by, counts: meta.counts || countsV434(row.data), data: row.data};
+    });
+    return window.__dailyBackupsV434;
+  }
+
+  function countsTableV434(c){
+    c = c || {};
+    return `<div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));margin:10px 0;">
+      <div class="stat-card"><div class="stat-number">${c.containers||0}</div><div class="stat-label">基础数据</div></div>
+      <div class="stat-card"><div class="stat-number">${c.blList||0}</div><div class="stat-label">提单</div></div>
+      <div class="stat-card"><div class="stat-number">${c.pickupPlans||0}</div><div class="stat-label">提箱计划</div></div>
+      <div class="stat-card"><div class="stat-number">${c.transportTasks||0}</div><div class="stat-label">运输任务</div></div>
+      <div class="stat-card"><div class="stat-number">${c.productionPlans||0}</div><div class="stat-label">生产计划</div></div>
+    </div>`;
+  }
+
+  window.renderAutoBackupCenterV434 = async function(container){
+    const localCounts = countsV434(getPayloadV434());
+    container.innerHTML = `<div class="card">
+      <div class="card-header"><span class="card-title">🛡️ 自动备份中心 V43.4</span><span class="status-badge status-success">数据保护已开启</span></div>
+      <div style="line-height:1.8;color:#606266;margin-bottom:12px;">
+        系统每天首次打开时，会自动把当前云端主数据保存为“昨天数据备份”。同步前也会先检查备份，避免再次出现空数据覆盖风险。默认保留最近 <b>${MAX_DAILY_BACKUPS}</b> 天备份。
+      </div>
+      <div class="card" style="background:#f8f9fc;box-shadow:none;border:1px solid #ebeef5;">
+        <div class="section-label">当前系统数据量</div>
+        ${countsTableV434(localCounts)}
+        <button class="btn btn-primary" onclick="manualCreateDailyBackupV434()">立即创建今日恢复点</button>
+        <button class="btn btn-secondary" onclick="refreshDailyBackupListV434()">刷新备份列表</button>
+      </div>
+      <div id="dailyBackupListV434" class="card" style="background:#fff;box-shadow:none;border:1px solid #ebeef5;">
+        正在读取备份列表...
+      </div>
+    </div>`;
+    await refreshDailyBackupListV434(false);
+  };
+
+  window.refreshDailyBackupListV434 = async function(showMsg=true){
+    const box = document.getElementById('dailyBackupListV434');
+    if(box) box.innerHTML = '正在读取备份列表...';
+    const list = await loadDailyBackupsV434();
+    if(box){
+      if(!list.length){
+        box.innerHTML = '<div class="empty-state">暂无每日备份。点击“立即创建今日恢复点”可手动创建一份。</div>';
+      }else{
+        box.innerHTML = `<div class="section-label">最近备份</div><table class="data-table"><thead><tr><th>备份日期</th><th>基础数据</th><th>提箱计划</th><th>运输任务</th><th>生产计划</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${list.map(b=>`<tr>
+          <td><b>${b.date}</b></td><td>${b.counts.containers||0}</td><td>${b.counts.pickupPlans||0}</td><td>${b.counts.transportTasks||0}</td><td>${b.counts.productionPlans||0}</td><td>${formatDateTime ? formatDateTime(b.updated_at) : (b.updated_at||'-')}</td>
+          <td><button class="btn btn-secondary" onclick="downloadDailyBackupV434('${b.id}')">下载</button> <button class="btn btn-danger" onclick="restoreDailyBackupV434('${b.id}')">恢复</button></td>
+        </tr>`).join('')}</tbody></table>`;
+      }
+    }
+    if(showMsg) showRealtimeSyncHint && showRealtimeSyncHint('备份列表已刷新');
+  };
+
+  window.manualCreateDailyBackupV434 = async function(){
+    const dateStr = formatDateV434(new Date()) + '-' + getNowStampV434().slice(8);
+    const ok = await createDailyBackupV434(dateStr, 'manual_backup');
+    if(ok){ alert('已创建手动恢复点。'); await refreshDailyBackupListV434(false); }
+    else alert('创建失败：当前数据为空或云端不可用。');
+  };
+
+  window.downloadDailyBackupV434 = function(id){
+    const b = (window.__dailyBackupsV434 || []).find(x=>x.id===id);
+    if(!b){ alert('找不到备份'); return; }
+    const blob = new Blob([JSON.stringify(b.data, null, 2)], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `container_auto_backup_${b.date}.json`;
+    a.click();
+  };
+
+  window.restoreDailyBackupV434 = async function(id){
+    const b = (window.__dailyBackupsV434 || []).find(x=>x.id===id);
+    if(!b){ alert('找不到备份'); return; }
+    if(emptyV434(b.data)){ alert('该备份为空，禁止恢复。'); return; }
+    const c = countsV434(b.data);
+    if(!confirm(`确认恢复备份 ${b.date}？\n基础数据：${c.containers||0}\n提箱计划：${c.pickupPlans||0}\n运输任务：${c.transportTasks||0}\n生产计划：${c.productionPlans||0}\n\n恢复前系统会自动创建一份当前数据恢复点。`)) return;
+    await createDailyBackupV434('before-restore-' + getNowStampV434(), 'before_restore_daily_backup');
+    applyCloudState(b.data);
+    if(typeof saveLocalData === 'function') saveLocalData();
+    window.__forceCloudSaveOnce = true;
+    await saveCloudState();
+    alert('恢复完成，请检查基础数据和运输任务。');
+    currentMenu = 'dashboard'; renderSidebar(); renderContent();
+  };
+
+  // 登录成功后自动备份一次：如果昨天没有备份，则创建昨天备份。
+  const baseEnsureCloudSessionV434 = window.ensureCloudSession;
+  if(baseEnsureCloudSessionV434){
+    window.ensureCloudSession = ensureCloudSession = async function(){
+      const ret = await baseEnsureCloudSessionV434.apply(this, arguments);
+      try{ if(ret && currentUser) await ensureDailyAutoBackupV434('login_auto_daily_backup'); }catch(e){ console.warn('V43.4登录自动备份失败', e); }
+      return ret;
+    };
+  }
+
+  // 每次保存云端前先确保存在每日备份，且继续继承 V43.3 的空数据保护。
+  const baseSaveCloudStateV434 = window.saveCloudState;
+  if(baseSaveCloudStateV434){
+    window.saveCloudState = saveCloudState = async function(){
+      try{ await ensureDailyAutoBackupV434('before_cloud_save'); }catch(e){ console.warn('V43.4保存前自动备份失败', e); }
+      return baseSaveCloudStateV434.apply(this, arguments);
+    };
+  }
+
+  try{
+    if(Array.isArray(allMenus) && !allMenus.some(m=>m.id==='autoBackupCenter')) allMenus.push({id:'autoBackupCenter', name:'自动备份中心', icon:'🛡️', roles:['Admin','订购科']});
+    if(Array.isArray(permissionModules) && !permissionModules.some(m=>m.id==='autoBackupCenter')) permissionModules.push({id:'autoBackupCenter', name:'自动备份中心'});
+  }catch(e){ console.warn(e); }
+
+  const baseRenderContentV434 = window.renderContent;
+  window.renderContent = renderContent = function(){
+    if(currentMenu === 'autoBackupCenter'){
+      bindCurrentPageOperationLock && bindCurrentPageOperationLock();
+      const main = document.getElementById('mainContent');
+      renderAutoBackupCenterV434(main);
+      applyLanguage && applyLanguage();
+      return;
+    }
+    return baseRenderContentV434.apply(this, arguments);
+  };
+
+  // 页面已经登录时延迟检查一次，避免因浏览器刷新未触发登录包装。
+  setTimeout(()=>{ try{ if(currentUser && !emptyV434(getPayloadV434())) ensureDailyAutoBackupV434('delayed_page_check'); }catch(e){} }, 2500);
+
+  console.log('V43.5 Persist Queue Fix loaded');
+})();
+
 </script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">
 
@@ -9566,7 +9796,7 @@ let main=document.getElementById('mainContent');
 
 /* ==================== V43.3 数据保护版：防止空数据覆盖 + JSON恢复中心 ==================== */
 (function(){
-  const V433_VERSION = 'V43.3 Data Protection';
+  const V433_VERSION = 'V43.5 Persist Queue Fix';
   window.__allowEmptyCloudOverwrite = false;
   window.__forceCloudSaveOnce = false;
   window.__lastCloudStateRaw = null;
@@ -9898,10 +10128,137 @@ let main=document.getElementById('mainContent');
     return originalRenderContentV433.apply(this, arguments);
   };
 
-  console.log('V43.3 Data Protection loaded');
+  console.log('V43.5 Persist Queue Fix loaded');
 })();
 
 </script>
 
+
+
+<script>
+/* ==================== V43.5 保存队列修复版：防止到货确认/掏箱确认刷新后丢失 ==================== */
+(function(){
+  const V435_VERSION = 'V43.5 Persist Queue Fix';
+  let persistTimerV435 = null;
+  let persistRunningV435 = false;
+  let persistAgainV435 = false;
+  let lastPersistReasonV435 = '';
+
+  function sleepV435(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
+
+  function arrLenV435(v){ return Array.isArray(v) ? v.length : 0; }
+  function stateScoreV435(state){
+    state = state || {};
+    return arrLenV435(state.containers) + arrLenV435(state.blList) + arrLenV435(state.containerBlMap) + arrLenV435(state.pickupPlans) + arrLenV435(state.transportTasks) + arrLenV435(state.locationStock) + arrLenV435(state.returnRecords) + arrLenV435(state.productionRecords) + arrLenV435(state.productionPlans);
+  }
+  function isEmptyStateV435(state){ return !state || typeof state !== 'object' || stateScoreV435(state) === 0; }
+
+  function getPayloadV435(){
+    let payload;
+    try { payload = getCloudStatePayload(); }
+    catch(e){
+      payload = {
+        containers, blList, containerBlMap, transportTasks, locationStock, returnRecords,
+        pickupPlans, productionRecords, productionPlans, factoryCalendar, nextIds,
+        storageConfig, demurrageConfig, warningConfig
+      };
+    }
+    payload.version = V435_VERSION;
+    payload.updatedAt = new Date().toISOString();
+    payload.updatedBy = cloudUser?.email || currentUser?.email || currentUser?.name || '';
+    return payload;
+  }
+
+  async function directPersistCloudV435(reason){
+    const sb = initSupabaseClient && initSupabaseClient();
+    if(!sb || !cloudUser) return false;
+
+    // 等待旧保存流程结束，避免 saveCloudState 里 isCloudSaving=true 时直接 return 导致关键状态丢失。
+    let waitCount = 0;
+    while(typeof isCloudSaving !== 'undefined' && isCloudSaving && waitCount < 40){
+      await sleepV435(150);
+      waitCount++;
+    }
+
+    const payload = getPayloadV435();
+    if(isEmptyStateV435(payload) && !window.__allowEmptyCloudOverwrite && !window.__forceCloudSaveOnce){
+      console.error('V43.5保护：阻止空数据持久化。', reason, payload);
+      if(typeof showRealtimeSyncHint === 'function') showRealtimeSyncHint('已阻止空数据保存');
+      return false;
+    }
+
+    try{
+      persistRunningV435 = true;
+      if(typeof isCloudSaving !== 'undefined') isCloudSaving = true;
+      const nowIso = new Date().toISOString();
+      if(typeof lastSelfSaveAt !== 'undefined') lastSelfSaveAt = Date.now();
+      if(typeof lastCloudUpdatedAt !== 'undefined') lastCloudUpdatedAt = nowIso;
+      const { error } = await sb.from('app_state').upsert({
+        id: CLOUD_STATE_ID,
+        data: payload,
+        updated_by: cloudUser?.email || '',
+        updated_at: nowIso
+      });
+      if(error) throw error;
+      window.__lastCloudStateRaw = JSON.parse(JSON.stringify(payload));
+      if(typeof showRealtimeSyncHint === 'function') showRealtimeSyncHint('云端已保存');
+      return true;
+    }catch(err){
+      console.error('V43.5云端保存失败', err);
+      alert('云端保存失败：' + (err.message || err));
+      return false;
+    }finally{
+      if(typeof isCloudSaving !== 'undefined') isCloudSaving = false;
+      persistRunningV435 = false;
+    }
+  }
+
+  async function runPersistQueueV435(){
+    if(persistRunningV435){ persistAgainV435 = true; return; }
+    do{
+      persistAgainV435 = false;
+      await directPersistCloudV435(lastPersistReasonV435 || 'queued_save');
+    }while(persistAgainV435);
+  }
+
+  window.queueCloudPersistV435 = function(reason, delay=250){
+    lastPersistReasonV435 = reason || 'save';
+    if(persistTimerV435) clearTimeout(persistTimerV435);
+    persistTimerV435 = setTimeout(runPersistQueueV435, delay);
+  };
+
+  // 覆盖 saveData：保留原有本地保存与原云端保存，同时额外追加“队列式云端持久化”，避免并发保存被跳过。
+  const baseSaveDataV435 = window.saveData || saveData;
+  if(typeof baseSaveDataV435 === 'function'){
+    window.saveData = saveData = function(){
+      const ret = baseSaveDataV435.apply(this, arguments);
+      try{ if(cloudUser) window.queueCloudPersistV435('saveData_queue', 350); }catch(e){ console.warn('V43.5 queue save skipped', e); }
+      return ret;
+    };
+  }
+
+  // 对关键确认动作增加立即保存：到货确认、确认掏箱、门岗、卸货口收货。
+  ['doArrival','confirmArrivalOnly','doUnpack','confirmGateArrival','releaseFromGate','startUnloading','finishUnloading'].forEach(fnName => {
+    const base = window[fnName];
+    if(typeof base === 'function' && !base.__v435Wrapped){
+      const wrapped = function(){
+        const ret = base.apply(this, arguments);
+        try{ if(cloudUser) window.queueCloudPersistV435(fnName + '_critical', 0); }catch(e){ console.warn('V43.5 critical persist skipped', e); }
+        return ret;
+      };
+      wrapped.__v435Wrapped = true;
+      window[fnName] = wrapped;
+      try{ eval(fnName + ' = window[fnName]'); }catch(e){}
+    }
+  });
+
+  // 页面关闭/刷新前尽量触发最终保存。浏览器可能不会等待异步请求，但可降低快速刷新导致未保存的概率。
+  window.addEventListener('beforeunload', function(){
+    try{ if(cloudUser) window.queueCloudPersistV435('beforeunload_final', 0); }catch(e){}
+  });
+
+  console.log('V43.5 Persist Queue Fix loaded');
+})();
+</script>
 </body>
 </html>
