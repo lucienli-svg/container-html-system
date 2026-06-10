@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V42.24 Dashboard Workday Sync</title>
+  <title>集装箱智能监控管理系统 V44.00 Dashboard Workday Sync</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
-    /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
+    /* ==================== V44.00：批次规则引擎 + 首页生产保供看板 ==================== */
     function v42SeqNum(v){ const n=parseInt(String(v||'').replace(/[^0-9]/g,''),10); return isNaN(n)?null:n; }
     function v42IsSupplementBatch(batch){ return String(batch||'').trim().toUpperCase().startsWith('BX'); }
     function v42BatchRule(batch){
@@ -388,7 +388,7 @@
 
 /* ==================== V43.4 自动备份中心：每日自动备份 + 30天保留 ==================== */
 (function(){
-  const V434_VERSION = 'V43.5 Persist Queue Fix';
+  const V434_VERSION = 'V44.0 Split Cloud Persistence';
   const DAILY_PREFIX = `${CLOUD_STATE_ID}-daily-`;
   const MAX_DAILY_BACKUPS = 30;
   window.__autoBackupRunningV434 = false;
@@ -611,7 +611,7 @@
   // 页面已经登录时延迟检查一次，避免因浏览器刷新未触发登录包装。
   setTimeout(()=>{ try{ if(currentUser && !emptyV434(getPayloadV434())) ensureDailyAutoBackupV434('delayed_page_check'); }catch(e){} }, 2500);
 
-  console.log('V43.5 Persist Queue Fix loaded');
+  console.log('V44.0 Split Cloud Persistence loaded');
 })();
 
 </script>
@@ -9796,7 +9796,7 @@ let main=document.getElementById('mainContent');
 
 /* ==================== V43.3 数据保护版：防止空数据覆盖 + JSON恢复中心 ==================== */
 (function(){
-  const V433_VERSION = 'V43.5 Persist Queue Fix';
+  const V433_VERSION = 'V44.0 Split Cloud Persistence';
   window.__allowEmptyCloudOverwrite = false;
   window.__forceCloudSaveOnce = false;
   window.__lastCloudStateRaw = null;
@@ -10128,7 +10128,7 @@ let main=document.getElementById('mainContent');
     return originalRenderContentV433.apply(this, arguments);
   };
 
-  console.log('V43.5 Persist Queue Fix loaded');
+  console.log('V44.0 Split Cloud Persistence loaded');
 })();
 
 </script>
@@ -10138,7 +10138,7 @@ let main=document.getElementById('mainContent');
 <script>
 /* ==================== V43.5 保存队列修复版：防止到货确认/掏箱确认刷新后丢失 ==================== */
 (function(){
-  const V435_VERSION = 'V43.5 Persist Queue Fix';
+  const V435_VERSION = 'V44.0 Split Cloud Persistence';
   let persistTimerV435 = null;
   let persistRunningV435 = false;
   let persistAgainV435 = false;
@@ -10257,8 +10257,350 @@ let main=document.getElementById('mainContent');
     try{ if(cloudUser) window.queueCloudPersistV435('beforeunload_final', 0); }catch(e){}
   });
 
-  console.log('V43.5 Persist Queue Fix loaded');
+  console.log('V44.0 Split Cloud Persistence loaded');
 })();
 </script>
+
+<script>
+/* ==================== V44.0 Split Cloud Persistence Architecture ====================
+   目标：不再把整个系统状态写入 app_state 单行大 JSON，避免 statement timeout。
+   方式：仍使用现有 app_state 表，但按模块/分片保存；读取时优先读取 V44 分片，兼容旧单行备份。
+============================================================================ */
+(function(){
+  const V44_VERSION = 'V44.0 Split Cloud Persistence';
+  const V44_PREFIX = (typeof CLOUD_STATE_ID !== 'undefined' ? CLOUD_STATE_ID : 'container-monitoring-main') + ':v44:';
+  const V44_MANIFEST_ID = V44_PREFIX + 'manifest';
+  const V44_CHUNK_SIZE = 200;
+  let v44Saving = false;
+  let v44SaveQueued = false;
+  let v44LastReason = '';
+
+  function nowIsoV44(){ return new Date().toISOString(); }
+  function cloneV44(obj){ return JSON.parse(JSON.stringify(obj == null ? null : obj)); }
+  function safeArrayV44(v){ return Array.isArray(v) ? v : []; }
+  function isObjV44(v){ return v && typeof v === 'object' && !Array.isArray(v); }
+  function scoreV44(state){
+    state = state || {};
+    return safeArrayV44(state.containers).length + safeArrayV44(state.blList).length + safeArrayV44(state.containerBlMap).length +
+      safeArrayV44(state.transportTasks).length + safeArrayV44(state.locationStock).length + safeArrayV44(state.returnRecords).length +
+      safeArrayV44(state.pickupPlans).length + safeArrayV44(state.productionRecords).length + safeArrayV44(state.productionPlans).length;
+  }
+  function isEmptyV44(state){ return !state || typeof state !== 'object' || scoreV44(state) === 0; }
+  function hintV44(msg){ try{ if(typeof showRealtimeSyncHint === 'function') showRealtimeSyncHint(msg); }catch(e){} }
+
+  function getStateV44(){
+    try{ if(typeof compactLargeStorageFields === 'function') compactLargeStorageFields(); }catch(e){}
+    return {
+      containers: safeArrayV44(typeof containers !== 'undefined' ? containers : []),
+      blList: safeArrayV44(typeof blList !== 'undefined' ? blList : []),
+      containerBlMap: safeArrayV44(typeof containerBlMap !== 'undefined' ? containerBlMap : []),
+      transportTasks: safeArrayV44(typeof transportTasks !== 'undefined' ? transportTasks : []),
+      locationStock: safeArrayV44(typeof locationStock !== 'undefined' ? locationStock : []),
+      returnRecords: safeArrayV44(typeof returnRecords !== 'undefined' ? returnRecords : []),
+      pickupPlans: safeArrayV44(typeof pickupPlans !== 'undefined' ? pickupPlans : []),
+      productionRecords: safeArrayV44(typeof productionRecords !== 'undefined' ? productionRecords : []),
+      productionPlans: safeArrayV44(typeof productionPlans !== 'undefined' ? productionPlans : []),
+      factoryCalendar: safeArrayV44(typeof factoryCalendar !== 'undefined' ? factoryCalendar : []),
+      nextIds: (typeof nextIds !== 'undefined' && nextIds) ? nextIds : {container:1, task:1, plan:1, production:1},
+      storageConfig: safeArrayV44(typeof storageConfig !== 'undefined' ? storageConfig : []),
+      demurrageConfig: safeArrayV44(typeof demurrageConfig !== 'undefined' ? demurrageConfig : []),
+      warningConfig: (typeof warningConfig !== 'undefined' && warningConfig) ? warningConfig : { storageWarningDays: 5, demurrageWarningDays: 7 },
+      version: V44_VERSION,
+      updatedAt: nowIsoV44(),
+      updatedBy: (typeof cloudUser !== 'undefined' && cloudUser?.email) || (typeof currentUser !== 'undefined' && (currentUser?.email || currentUser?.name)) || ''
+    };
+  }
+
+  function applyStateV44(data){
+    if(!data || isEmptyV44(data)) return false;
+    try{
+      containers = safeArrayV44(data.containers);
+      blList = safeArrayV44(data.blList);
+      containerBlMap = safeArrayV44(data.containerBlMap);
+      transportTasks = safeArrayV44(data.transportTasks);
+      locationStock = safeArrayV44(data.locationStock);
+      returnRecords = safeArrayV44(data.returnRecords);
+      pickupPlans = safeArrayV44(data.pickupPlans);
+      productionRecords = safeArrayV44(data.productionRecords);
+      productionPlans = safeArrayV44(data.productionPlans);
+      factoryCalendar = safeArrayV44(data.factoryCalendar);
+      nextIds = data.nextIds || {container:1, task:1, plan:1, production:1};
+      storageConfig = safeArrayV44(data.storageConfig);
+      demurrageConfig = safeArrayV44(data.demurrageConfig);
+      warningConfig = data.warningConfig || { storageWarningDays: 5, demurrageWarningDays: 7 };
+      try{ if(typeof normalizeDynamicPlansAfterCancelOneDock === 'function') normalizeDynamicPlansAfterCancelOneDock(); }catch(e){}
+      try{ if(typeof updateContainerStatus === 'function') updateContainerStatus(); }catch(e){}
+      try{ if(typeof updateDailyFees === 'function') updateDailyFees(); }catch(e){}
+      return true;
+    }catch(e){ console.error('V44 apply state failed', e); return false; }
+  }
+
+  function persistLocalV44(){
+    try{
+      localStorage.setItem('cc_containers',JSON.stringify(containers));
+      localStorage.setItem('cc_blList',JSON.stringify(blList));
+      localStorage.setItem('cc_containerBlMap',JSON.stringify(containerBlMap));
+      localStorage.setItem('cc_transportTasks',JSON.stringify(transportTasks));
+      localStorage.setItem('cc_locationStock',JSON.stringify(locationStock));
+      localStorage.setItem('cc_returnRecords',JSON.stringify(returnRecords));
+      localStorage.setItem('cc_pickupPlans',JSON.stringify(pickupPlans));
+      localStorage.setItem('cc_productionRecords',JSON.stringify(productionRecords));
+      localStorage.setItem('cc_productionPlans',JSON.stringify(productionPlans));
+      localStorage.setItem('cc_factoryCalendar',JSON.stringify(factoryCalendar));
+      localStorage.setItem('cc_nextIds',JSON.stringify(nextIds));
+      localStorage.setItem('cc_storageConfig',JSON.stringify(storageConfig));
+      localStorage.setItem('cc_demurrageConfig',JSON.stringify(demurrageConfig));
+      localStorage.setItem('cc_warningConfig',JSON.stringify(warningConfig));
+      localStorage.removeItem('cc_lastFeeUpdate');
+    }catch(e){ console.warn('V44 local persist failed', e); }
+  }
+
+  const arrayModulesV44 = ['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig'];
+  const objectModulesV44 = ['nextIds','warningConfig'];
+
+  function chunkArrayV44(arr, size){
+    const out=[]; arr=safeArrayV44(arr);
+    for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size));
+    if(out.length===0) out.push([]);
+    return out;
+  }
+
+  async function cleanupChunksV44(sb, prefix){
+    try{ await sb.from('app_state').delete().like('id', prefix + 'chunk:%'); }catch(e){ console.warn('V44 chunk cleanup skipped', e); }
+  }
+
+  async function saveSplitStateV44(reason, options){
+    const sb = (typeof initSupabaseClient === 'function') ? initSupabaseClient() : null;
+    if(!sb) return false;
+    if(typeof cloudUser !== 'undefined' && !cloudUser && !(options && options.allowNoUser)) return false;
+    if(v44Saving){ v44SaveQueued = true; v44LastReason = reason || v44LastReason; return false; }
+    v44Saving = true;
+    try{
+      const state = getStateV44();
+      if(isEmptyV44(state) && !window.__allowEmptyCloudOverwrite && !window.__forceCloudSaveOnce){
+        console.error('V44保护：阻止空数据覆盖云端。', reason, state);
+        hintV44('V44已阻止空数据覆盖云端');
+        return false;
+      }
+      const updatedAt = nowIsoV44();
+      const updatedBy = (typeof cloudUser !== 'undefined' && cloudUser?.email) || '';
+      const prefix = V44_PREFIX;
+      const manifest = {
+        version: V44_VERSION,
+        mode: 'split_app_state',
+        reason: reason || 'save',
+        updatedAt,
+        updatedBy,
+        chunkSize: V44_CHUNK_SIZE,
+        modules: {},
+        score: scoreV44(state)
+      };
+
+      await cleanupChunksV44(sb, prefix);
+
+      const rows = [];
+      for(const name of arrayModulesV44){
+        const chunks = chunkArrayV44(state[name], V44_CHUNK_SIZE);
+        manifest.modules[name] = { type:'array', length: safeArrayV44(state[name]).length, chunks: chunks.length };
+        chunks.forEach((chunk, idx)=>{
+          rows.push({ id: `${prefix}chunk:${name}:${idx}`, data: { module:name, index:idx, items:chunk }, updated_by: updatedBy, updated_at: updatedAt });
+        });
+      }
+      for(const name of objectModulesV44){
+        manifest.modules[name] = { type:'object', chunks: 1 };
+        rows.push({ id: `${prefix}chunk:${name}:0`, data: { module:name, index:0, value: state[name] || {} }, updated_by: updatedBy, updated_at: updatedAt });
+      }
+      rows.push({ id: V44_MANIFEST_ID, data: manifest, updated_by: updatedBy, updated_at: updatedAt });
+
+      // 分批 upsert，避免单次请求过大。
+      const batchSize = 25;
+      for(let i=0;i<rows.length;i+=batchSize){
+        const { error } = await sb.from('app_state').upsert(rows.slice(i,i+batchSize));
+        if(error) throw error;
+      }
+
+      // 只给旧主记录保存一个轻量指针，绝不再保存大 JSON。
+      try{
+        await sb.from('app_state').upsert({
+          id: (typeof CLOUD_STATE_ID !== 'undefined' ? CLOUD_STATE_ID : 'container-monitoring-main'),
+          data: { version: V44_VERSION, storageMode:'split_app_state', manifestId: V44_MANIFEST_ID, updatedAt, score: scoreV44(state) },
+          updated_by: updatedBy,
+          updated_at: updatedAt
+        });
+      }catch(e){ console.warn('V44 lightweight main pointer skipped', e); }
+
+      if(typeof lastSelfSaveAt !== 'undefined') lastSelfSaveAt = Date.now();
+      if(typeof lastCloudUpdatedAt !== 'undefined') lastCloudUpdatedAt = updatedAt;
+      window.__lastCloudStateRaw = cloneV44(state);
+      window.__lastCloudStateCounts = typeof getStateCounts === 'function' ? getStateCounts(state) : {score:scoreV44(state)};
+      window.__forceCloudSaveOnce = false;
+      hintV44('V44云端已保存');
+      return true;
+    }catch(err){
+      console.error('V44分片保存失败', err);
+      alert('云端保存失败：' + (err.message || err));
+      return false;
+    }finally{
+      v44Saving = false;
+      if(v44SaveQueued){
+        v44SaveQueued = false;
+        const r = v44LastReason || 'queued_after_save';
+        setTimeout(()=>saveSplitStateV44(r), 300);
+      }
+    }
+  }
+
+  async function loadSplitStateV44(){
+    const sb = (typeof initSupabaseClient === 'function') ? initSupabaseClient() : null;
+    if(!sb) return null;
+    const { data: manifestRow, error: mErr } = await sb.from('app_state').select('data, updated_at, updated_by').eq('id', V44_MANIFEST_ID).maybeSingle();
+    if(mErr) throw mErr;
+    if(!manifestRow || !manifestRow.data || !manifestRow.data.modules) return null;
+    const manifest = manifestRow.data;
+    const { data: rows, error } = await sb.from('app_state').select('id,data').like('id', V44_PREFIX + 'chunk:%');
+    if(error) throw error;
+    const byModule = {};
+    safeArrayV44(rows).forEach(r=>{
+      const d = r.data || {}; const name = d.module;
+      if(!name) return;
+      if(!byModule[name]) byModule[name] = [];
+      byModule[name].push(d);
+    });
+    const state = { version: manifest.version, updatedAt: manifest.updatedAt, updatedBy: manifest.updatedBy };
+    for(const name of arrayModulesV44){
+      const chunks = safeArrayV44(byModule[name]).sort((a,b)=>(a.index||0)-(b.index||0));
+      state[name] = chunks.flatMap(c=>safeArrayV44(c.items));
+    }
+    for(const name of objectModulesV44){
+      const chunks = safeArrayV44(byModule[name]).sort((a,b)=>(a.index||0)-(b.index||0));
+      state[name] = chunks[0]?.value || {};
+    }
+    if(isEmptyV44(state)) return null;
+    if(manifestRow.updated_at && typeof lastCloudUpdatedAt !== 'undefined') lastCloudUpdatedAt = manifestRow.updated_at;
+    return state;
+  }
+
+  async function loadLegacyMainStateV44(){
+    const sb = (typeof initSupabaseClient === 'function') ? initSupabaseClient() : null;
+    if(!sb) return null;
+    const { data, error } = await sb.from('app_state').select('data, updated_at, updated_by').eq('id', (typeof CLOUD_STATE_ID !== 'undefined' ? CLOUD_STATE_ID : 'container-monitoring-main')).maybeSingle();
+    if(error) throw error;
+    if(!data || !data.data) return null;
+    const d = data.data;
+    if(d.storageMode === 'split_app_state') return null;
+    if(isEmptyV44(d)) return null;
+    if(data.updated_at && typeof lastCloudUpdatedAt !== 'undefined') lastCloudUpdatedAt = data.updated_at;
+    return d;
+  }
+
+  async function loadStateV44(){
+    const split = await loadSplitStateV44();
+    if(split) return split;
+    const legacy = await loadLegacyMainStateV44();
+    if(legacy) return legacy;
+    return null;
+  }
+
+  // 覆盖云端读取：优先 V44 分片，兼容旧 app_state 大 JSON。
+  window.loadCloudState = loadCloudState = async function(){
+    try{
+      const state = await loadStateV44();
+      if(!state){ console.warn('V44：云端无有效数据，未应用空数据。'); return false; }
+      window.__lastCloudStateRaw = cloneV44(state);
+      window.__lastCloudStateCounts = typeof getStateCounts === 'function' ? getStateCounts(state) : {score:scoreV44(state)};
+      applyStateV44(state);
+      persistLocalV44();
+      return true;
+    }catch(err){
+      console.error('V44读取云端失败', err);
+      alert('云端数据读取失败：' + (err.message || err));
+      return false;
+    }
+  };
+
+  // 覆盖保存：分片保存，不再写单行大 JSON。
+  window.saveCloudState = saveCloudState = async function(){ return saveSplitStateV44('saveCloudState'); };
+  window.saveCloudStateV44 = saveSplitStateV44;
+
+  // 覆盖 V43.5 队列，避免继续调用旧 directPersistCloudV435 的单行大 JSON upsert。
+  window.queueCloudPersistV435 = function(reason, delay){
+    setTimeout(()=>saveSplitStateV44(reason || 'queueCloudPersistV44'), Math.max(0, delay || 0));
+  };
+
+  // 覆盖 saveData：本地立即保存，云端分片保存。
+  const oldSaveDataV44 = window.saveData || (typeof saveData !== 'undefined' ? saveData : null);
+  window.saveData = saveData = function(){
+    try{ if(typeof compactLargeStorageFields === 'function') compactLargeStorageFields(); }catch(e){}
+    persistLocalV44();
+    if(typeof cloudUser !== 'undefined' && cloudUser) saveSplitStateV44('saveData');
+  };
+
+  // 覆盖实时拉取：读取 V44 分片，远端为空不覆盖本地。
+  window.pullCloudStateAndRefresh = pullCloudStateAndRefresh = async function(reason){
+    if(v44Saving) return;
+    try{
+      const state = await loadStateV44();
+      if(!state || isEmptyV44(state)) return;
+      applyStateV44(state);
+      persistLocalV44();
+      if(typeof renderContent === 'function') renderContent();
+      if(typeof applyLanguage === 'function') applyLanguage();
+      console.log('V44 realtime synced:', reason, state.updatedAt || '');
+    }catch(e){ console.warn('V44 realtime pull skipped', e); }
+  };
+
+  // 覆盖备份：保留最近30天，按分片备份，避免大JSON备份超时。
+  async function createDailyBackupSplitV44(reason){
+    const sb = (typeof initSupabaseClient === 'function') ? initSupabaseClient() : null;
+    if(!sb || typeof cloudUser === 'undefined' || !cloudUser) return false;
+    const state = getStateV44();
+    if(isEmptyV44(state)) return false;
+    const day = new Date().toISOString().slice(0,10);
+    const backupPrefix = V44_PREFIX + 'backup:' + day + ':';
+    const manifestId = backupPrefix + 'manifest';
+    try{
+      const { data: exists } = await sb.from('app_state').select('id').eq('id', manifestId).maybeSingle();
+      if(exists) return true;
+      await sb.from('app_state').delete().like('id', backupPrefix + 'chunk:%');
+      const rows=[]; const updatedAt=nowIsoV44();
+      const manifest={version:V44_VERSION, mode:'split_backup', reason:reason||'daily', date:day, updatedAt, modules:{}, score:scoreV44(state)};
+      for(const name of arrayModulesV44){
+        const chunks=chunkArrayV44(state[name], V44_CHUNK_SIZE); manifest.modules[name]={type:'array', length:safeArrayV44(state[name]).length, chunks:chunks.length};
+        chunks.forEach((chunk,idx)=>rows.push({id:`${backupPrefix}chunk:${name}:${idx}`, data:{module:name,index:idx,items:chunk}, updated_by:cloudUser?.email||'', updated_at:updatedAt}));
+      }
+      for(const name of objectModulesV44){ manifest.modules[name]={type:'object',chunks:1}; rows.push({id:`${backupPrefix}chunk:${name}:0`, data:{module:name,index:0,value:state[name]||{}}, updated_by:cloudUser?.email||'', updated_at:updatedAt}); }
+      rows.push({id:manifestId, data:manifest, updated_by:cloudUser?.email||'', updated_at:updatedAt});
+      for(let i=0;i<rows.length;i+=25){ const {error}=await sb.from('app_state').upsert(rows.slice(i,i+25)); if(error) throw error; }
+      return true;
+    }catch(e){ console.warn('V44 split backup failed', e); return false; }
+  }
+  window.ensureDailyAutoBackupV434 = async function(reason){ return createDailyBackupSplitV44(reason || 'daily_auto_v44'); };
+  window.createRecoveryPointV433 = async function(reason){ return createDailyBackupSplitV44(reason || 'recovery_v44'); };
+
+  // 恢复中心导入后使用 V44 分片保存。
+  const oldConfirmRestoreV44 = window.confirmRestoreJsonV433;
+  window.confirmRestoreJsonV433 = async function(){
+    const json = window.__pendingRestoreJsonV433;
+    if(!json){ alert('请先选择并预览备份JSON。'); return; }
+    if(isEmptyV44(json)){ alert('备份文件为空，禁止恢复。'); return; }
+    const counts = typeof getStateCounts === 'function' ? getStateCounts(json) : {score:scoreV44(json)};
+    if(!confirm(`确认恢复该备份到云端？\n基础数据：${counts.containers||0}\n提箱计划：${counts.pickupPlans||0}\n运输任务：${counts.transportTasks||0}\n生产计划：${counts.productionPlans||0}`)) return;
+    applyStateV44(json);
+    persistLocalV44();
+    window.__forceCloudSaveOnce = true;
+    await saveSplitStateV44('restore_json_v44', {allowNoUser:false});
+    alert('数据恢复完成。系统将返回工作台，请检查基础数据和提箱计划。');
+    currentMenu = 'dashboard'; renderSidebar(); renderContent();
+  };
+
+  // 页面顶部版本标记。
+  try{
+    const oldTitle = document.title || '集装箱智能监控';
+    if(!oldTitle.includes('V44.0')) document.title = oldTitle + ' - V44.0';
+  }catch(e){}
+  console.log('V44.0 Split Cloud Persistence loaded');
+})();
+</script>
+
 </body>
 </html>
