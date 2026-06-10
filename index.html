@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V44.00 Dashboard Workday Sync</title>
+  <title>集装箱智能监控管理系统 V42.24 Dashboard Workday Sync</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
-    /* ==================== V44.00：批次规则引擎 + 首页生产保供看板 ==================== */
+    /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
     function v42SeqNum(v){ const n=parseInt(String(v||'').replace(/[^0-9]/g,''),10); return isNaN(n)?null:n; }
     function v42IsSupplementBatch(batch){ return String(batch||'').trim().toUpperCase().startsWith('BX'); }
     function v42BatchRule(batch){
@@ -10599,6 +10599,475 @@ let main=document.getElementById('mainContent');
     if(!oldTitle.includes('V44.0')) document.title = oldTitle + ' - V44.0';
   }catch(e){}
   console.log('V44.0 Split Cloud Persistence loaded');
+})();
+</script>
+
+
+<script>
+/* ==================== V44.1 Cloud Bootstrap & AppState Pointer Fix ====================
+   修复：V44.0 切换到分片保存后，旧 V43.3 登录初始化仍把“主 app_state 为空/轻量指针”
+   误判为系统无数据，刷新后进入数据恢复中心。
+   规则：
+   1) 优先读取 V44 分片；
+   2) 如果云端暂时无分片，但本地 localStorage 仍有有效数据，则允许系统继续进入，并后台写入 V44 分片；
+   3) 只有云端无有效数据且本地也为空时，才进入数据恢复中心；
+   4) 继续禁止空数据覆盖云端。
+============================================================================ */
+(function(){
+  const V441_VERSION = 'V44.1 Cloud Bootstrap & AppState Pointer Fix';
+  function safeArr(v){ return Array.isArray(v) ? v : []; }
+  function parseLS(key, fallback){
+    try{ const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }catch(e){ return fallback; }
+  }
+  function localPayloadV441(){
+    return {
+      containers: parseLS('cc_containers', []),
+      blList: parseLS('cc_blList', []),
+      containerBlMap: parseLS('cc_containerBlMap', []),
+      transportTasks: parseLS('cc_transportTasks', []),
+      locationStock: parseLS('cc_locationStock', []),
+      returnRecords: parseLS('cc_returnRecords', []),
+      pickupPlans: parseLS('cc_pickupPlans', []),
+      productionRecords: parseLS('cc_productionRecords', []),
+      productionPlans: parseLS('cc_productionPlans', []),
+      factoryCalendar: parseLS('cc_factoryCalendar', []),
+      storageConfig: parseLS('cc_storageConfig', []),
+      demurrageConfig: parseLS('cc_demurrageConfig', []),
+      nextIds: parseLS('cc_nextIds', {container:1, task:1, plan:1, production:1}),
+      warningConfig: parseLS('cc_warningConfig', { storageWarningDays: 5, demurrageWarningDays: 7 }),
+      version: V441_VERSION,
+      updatedAt: new Date().toISOString()
+    };
+  }
+  function scoreStateV441(st){
+    st = st || {};
+    return safeArr(st.containers).length + safeArr(st.blList).length + safeArr(st.containerBlMap).length +
+      safeArr(st.transportTasks).length + safeArr(st.locationStock).length + safeArr(st.returnRecords).length +
+      safeArr(st.pickupPlans).length + safeArr(st.productionRecords).length + safeArr(st.productionPlans).length;
+  }
+  function localHasDataV441(){ return scoreStateV441(localPayloadV441()) > 0; }
+
+  async function loadCloudOrLocalV441(){
+    // 先尝试 V44 的云端读取；如果失败但本地有有效数据，则不要进入恢复中心。
+    try{
+      if(typeof window.loadCloudState === 'function'){
+        const ok = await window.loadCloudState();
+        if(ok) return { source:'cloud', ok:true };
+      }
+    }catch(e){ console.warn('V44.1 cloud load failed, will try local fallback.', e); }
+
+    const local = localPayloadV441();
+    if(scoreStateV441(local) > 0){
+      try{
+        if(typeof applyStateV44 === 'function') applyStateV44(local);
+        else if(typeof applyCloudState === 'function') applyCloudState(local);
+        if(typeof persistLocalV44 === 'function') persistLocalV44();
+        // 云端缺少分片时，用本地有效数据后台补建 V44 分片。这里不阻塞登录。
+        if(typeof window.saveCloudStateV44 === 'function'){
+          setTimeout(()=>window.saveCloudStateV44('bootstrap_from_local_v441').catch(e=>console.warn('V44.1 bootstrap save failed', e)), 800);
+        }else if(typeof window.saveCloudState === 'function'){
+          setTimeout(()=>window.saveCloudState(), 800);
+        }
+      }catch(e){ console.warn('V44.1 local fallback apply failed', e); }
+      return { source:'local', ok:true };
+    }
+    return { source:'empty', ok:false };
+  }
+
+  // 覆盖登录初始化：不再因为 app_state 主记录为空/轻量指针而直接进入恢复中心。
+  if(typeof ensureCloudSession === 'function'){
+    window.ensureCloudSession = ensureCloudSession = async function(){
+      const sb = (typeof initSupabaseClient === 'function') ? initSupabaseClient() : null;
+      if(!sb) return false;
+      const { data, error: sessionError } = await sb.auth.getSession();
+      if(sessionError){ alert('读取登录会话失败：' + sessionError.message); return false; }
+      const session = data && data.session ? data.session : null;
+      if(!session || !session.user) return false;
+      cloudUser = session.user;
+
+      const { data: profile, error } = await sb.from('user_profiles').select('*').ilike('email', cloudUser.email).maybeSingle();
+      if(error){ alert('读取用户权限失败：' + error.message); return false; }
+      if(!profile || profile.is_active === false){
+        document.getElementById('loginPage').style.display='none';
+        document.getElementById('mainApp').style.display='block';
+        document.getElementById('sidebar').innerHTML='';
+        document.getElementById('mainContent').innerHTML=`<div class="card"><div class="card-header"><span class="card-title">⏳ 等待管理员授权</span></div><p>当前账号：<b>${cloudUser.email}</b></p><p style="margin-top:10px;color:#606266;">该账号尚未在 user_profiles 中分配角色，请联系系统管理员添加权限。</p><button class="btn btn-primary" onclick="logoutCloud()">退出</button></div>`;
+        return false;
+      }
+      cloudProfile = profile;
+      currentUser = mapProfileToCurrentUser(profile, cloudUser);
+      currentMenu = (currentUser.role === '订购科' || (typeof isAdminUser==='function' && isAdminUser())) ? 'dashboard' : (allMenus.find(m => canAccessMenu(m))?.id || 'containers');
+
+      const loaded = await loadCloudOrLocalV441();
+
+      document.getElementById('loginPage').style.display='none';
+      document.getElementById('mainApp').style.display='block';
+      document.getElementById('currentRole').innerText = currentUser.role;
+      document.getElementById('currentUser').innerText = currentUser.name;
+
+      if(!loaded.ok){
+        if(typeof loadLocalDataOnly === 'function') loadLocalDataOnly();
+        currentMenu = 'dataRecovery';
+        renderSidebar(); renderContent(); applyLanguage();
+        if(typeof startRealtimeSync === 'function') startRealtimeSync();
+        if(typeof showRealtimeSyncHint === 'function') showRealtimeSyncHint('云端和本地均为空：请导入备份');
+        setTimeout(()=>alert('检测到云端和本地均无有效数据。系统已进入数据恢复中心；请导入备份JSON恢复数据。'), 300);
+        return true;
+      }
+
+      renderSidebar(); renderContent(); applyLanguage();
+      if(typeof startRealtimeSync === 'function') startRealtimeSync();
+      if(typeof showRealtimeSyncHint === 'function') showRealtimeSyncHint(loaded.source === 'local' ? '已使用本地有效数据启动，并正在补建云端分片' : '已读取云端数据');
+      return true;
+    };
+  }
+
+  // 覆盖旧 pull 逻辑：云端暂无分片时，不用空数据覆盖当前页面。
+  const oldPullV441 = window.pullCloudStateAndRefresh;
+  window.pullCloudStateAndRefresh = pullCloudStateAndRefresh = async function(reason){
+    try{
+      if(typeof oldPullV441 === 'function') return await oldPullV441(reason);
+    }catch(e){ console.warn('V44.1 old pull failed', e); }
+    return false;
+  };
+
+  try{ if(!document.title.includes('V44.1')) document.title = (document.title || '集装箱智能监控') + ' - V44.1'; }catch(e){}
+  console.log('V44.1 Cloud Bootstrap & AppState Pointer Fix loaded');
+})();
+</script>
+
+<script>
+/* ==================== V44.2 Dirty Local Priority & Versioned Split Save ====================
+   目的：修复 V44.1 刷新后确认到货/掏箱状态被云端旧数据覆盖的问题。
+   核心：
+   1) 任何操作先本地持久化并标记 dirty；
+   2) 刷新/实时同步时，如果本地 dirty 且本地数据有效，优先使用本地，不用云端旧数据覆盖；
+   3) 云端保存改为 V44.2 版本化分片：先写 chunk，最后写 manifest；不再先删除当前有效分片；
+   4) 只有云端与本地均为空才进入恢复中心。
+============================================================================ */
+(function(){
+  const V442_VERSION = 'V44.2 Dirty Local Priority Save';
+  const BASE_ID = (typeof CLOUD_STATE_ID !== 'undefined' ? CLOUD_STATE_ID : 'container-monitoring-main');
+  const PREFIX = BASE_ID + ':v442:';
+  const MANIFEST_ID = PREFIX + 'manifest';
+  const CHUNK_SIZE = 200;
+  const arrayModules = ['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig'];
+  const objectModules = ['nextIds','warningConfig'];
+  let saving = false;
+  let queued = false;
+  let queuedReason = '';
+
+  function arr(v){ return Array.isArray(v) ? v : []; }
+  function parse(key, fallback){ try{ const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }catch(e){ return fallback; } }
+  function now(){ return new Date().toISOString(); }
+  function score(st){ st=st||{}; return arr(st.containers).length + arr(st.blList).length + arr(st.containerBlMap).length + arr(st.transportTasks).length + arr(st.locationStock).length + arr(st.returnRecords).length + arr(st.pickupPlans).length + arr(st.productionRecords).length + arr(st.productionPlans).length; }
+  function empty(st){ return !st || typeof st !== 'object' || score(st)===0; }
+  function clone(x){ return JSON.parse(JSON.stringify(x == null ? null : x)); }
+  function hint(msg){ try{ if(typeof showRealtimeSyncHint==='function') showRealtimeSyncHint(msg); }catch(e){} }
+  function timeMs(v){ const t = Date.parse(v || ''); return Number.isFinite(t) ? t : 0; }
+
+  function stateFromGlobals(){
+    try{ if(typeof compactLargeStorageFields === 'function') compactLargeStorageFields(); }catch(e){}
+    return {
+      containers: arr(typeof containers !== 'undefined' ? containers : []),
+      blList: arr(typeof blList !== 'undefined' ? blList : []),
+      containerBlMap: arr(typeof containerBlMap !== 'undefined' ? containerBlMap : []),
+      transportTasks: arr(typeof transportTasks !== 'undefined' ? transportTasks : []),
+      locationStock: arr(typeof locationStock !== 'undefined' ? locationStock : []),
+      returnRecords: arr(typeof returnRecords !== 'undefined' ? returnRecords : []),
+      pickupPlans: arr(typeof pickupPlans !== 'undefined' ? pickupPlans : []),
+      productionRecords: arr(typeof productionRecords !== 'undefined' ? productionRecords : []),
+      productionPlans: arr(typeof productionPlans !== 'undefined' ? productionPlans : []),
+      factoryCalendar: arr(typeof factoryCalendar !== 'undefined' ? factoryCalendar : []),
+      storageConfig: arr(typeof storageConfig !== 'undefined' ? storageConfig : []),
+      demurrageConfig: arr(typeof demurrageConfig !== 'undefined' ? demurrageConfig : []),
+      nextIds: (typeof nextIds !== 'undefined' && nextIds) ? nextIds : parse('cc_nextIds', {container:1, task:1, plan:1, production:1}),
+      warningConfig: (typeof warningConfig !== 'undefined' && warningConfig) ? warningConfig : parse('cc_warningConfig', {storageWarningDays:5, demurrageWarningDays:7}),
+      version: V442_VERSION,
+      updatedAt: now(),
+      updatedBy: (typeof cloudUser !== 'undefined' && cloudUser?.email) || (typeof currentUser !== 'undefined' && (currentUser?.email || currentUser?.name)) || ''
+    };
+  }
+  function stateFromLocal(){
+    return {
+      containers: parse('cc_containers', []),
+      blList: parse('cc_blList', []),
+      containerBlMap: parse('cc_containerBlMap', []),
+      transportTasks: parse('cc_transportTasks', []),
+      locationStock: parse('cc_locationStock', []),
+      returnRecords: parse('cc_returnRecords', []),
+      pickupPlans: parse('cc_pickupPlans', []),
+      productionRecords: parse('cc_productionRecords', []),
+      productionPlans: parse('cc_productionPlans', []),
+      factoryCalendar: parse('cc_factoryCalendar', []),
+      storageConfig: parse('cc_storageConfig', []),
+      demurrageConfig: parse('cc_demurrageConfig', []),
+      nextIds: parse('cc_nextIds', {container:1, task:1, plan:1, production:1}),
+      warningConfig: parse('cc_warningConfig', {storageWarningDays:5, demurrageWarningDays:7}),
+      version: localStorage.getItem('cc_version') || 'local',
+      updatedAt: localStorage.getItem('cc_localUpdatedAt') || '',
+      updatedBy: localStorage.getItem('cc_localUpdatedBy') || ''
+    };
+  }
+  function apply(st){
+    if(empty(st)) return false;
+    containers = arr(st.containers);
+    blList = arr(st.blList);
+    containerBlMap = arr(st.containerBlMap);
+    transportTasks = arr(st.transportTasks);
+    locationStock = arr(st.locationStock);
+    returnRecords = arr(st.returnRecords);
+    pickupPlans = arr(st.pickupPlans);
+    productionRecords = arr(st.productionRecords);
+    productionPlans = arr(st.productionPlans);
+    factoryCalendar = arr(st.factoryCalendar);
+    storageConfig = arr(st.storageConfig);
+    demurrageConfig = arr(st.demurrageConfig);
+    nextIds = st.nextIds || {container:1, task:1, plan:1, production:1};
+    warningConfig = st.warningConfig || {storageWarningDays:5, demurrageWarningDays:7};
+    try{ if(typeof normalizeDynamicPlansAfterCancelOneDock === 'function') normalizeDynamicPlansAfterCancelOneDock(); }catch(e){}
+    try{ if(typeof updateContainerStatus === 'function') updateContainerStatus(); }catch(e){}
+    try{ if(typeof updateDailyFees === 'function') updateDailyFees(); }catch(e){}
+    return true;
+  }
+  function persistLocal(st, markDirty){
+    st = st || stateFromGlobals();
+    if(empty(st)) return false;
+    try{
+      localStorage.setItem('cc_containers', JSON.stringify(arr(st.containers)));
+      localStorage.setItem('cc_blList', JSON.stringify(arr(st.blList)));
+      localStorage.setItem('cc_containerBlMap', JSON.stringify(arr(st.containerBlMap)));
+      localStorage.setItem('cc_transportTasks', JSON.stringify(arr(st.transportTasks)));
+      localStorage.setItem('cc_locationStock', JSON.stringify(arr(st.locationStock)));
+      localStorage.setItem('cc_returnRecords', JSON.stringify(arr(st.returnRecords)));
+      localStorage.setItem('cc_pickupPlans', JSON.stringify(arr(st.pickupPlans)));
+      localStorage.setItem('cc_productionRecords', JSON.stringify(arr(st.productionRecords)));
+      localStorage.setItem('cc_productionPlans', JSON.stringify(arr(st.productionPlans)));
+      localStorage.setItem('cc_factoryCalendar', JSON.stringify(arr(st.factoryCalendar)));
+      localStorage.setItem('cc_storageConfig', JSON.stringify(arr(st.storageConfig)));
+      localStorage.setItem('cc_demurrageConfig', JSON.stringify(arr(st.demurrageConfig)));
+      localStorage.setItem('cc_nextIds', JSON.stringify(st.nextIds || {}));
+      localStorage.setItem('cc_warningConfig', JSON.stringify(st.warningConfig || {}));
+      const ts = now();
+      localStorage.setItem('cc_localUpdatedAt', ts);
+      localStorage.setItem('cc_version', V442_VERSION);
+      if(markDirty){
+        localStorage.setItem('cc_dirty', '1');
+        localStorage.setItem('cc_dirtyAt', ts);
+      }
+      return true;
+    }catch(e){ console.warn('V44.2本地保存失败', e); return false; }
+  }
+  function chunk(a, size){ const out=[]; a=arr(a); for(let i=0;i<a.length;i+=size) out.push(a.slice(i,i+size)); if(!out.length) out.push([]); return out; }
+
+  async function loadV442Cloud(){
+    const sb = (typeof initSupabaseClient === 'function') ? initSupabaseClient() : null;
+    if(!sb) return null;
+    const { data: mf, error: me } = await sb.from('app_state').select('data, updated_at, updated_by').eq('id', MANIFEST_ID).maybeSingle();
+    if(me) throw me;
+    if(!mf || !mf.data || !mf.data.modules) return null;
+    const manifest = mf.data;
+    const { data: rows, error } = await sb.from('app_state').select('id,data').like('id', PREFIX + 'chunk:%');
+    if(error) throw error;
+    const grouped = {};
+    arr(rows).forEach(r=>{ const d=r.data||{}; if(!d.module) return; (grouped[d.module]||(grouped[d.module]=[])).push(d); });
+    const st = { version: manifest.version || V442_VERSION, updatedAt: manifest.updatedAt || mf.updated_at, updatedBy: manifest.updatedBy || mf.updated_by };
+    for(const name of arrayModules){
+      const expected = manifest.modules?.[name]?.chunks;
+      let chunks = arr(grouped[name]).sort((a,b)=>(a.index||0)-(b.index||0));
+      if(Number.isFinite(expected)) chunks = chunks.filter(c => (c.index||0) < expected);
+      st[name] = chunks.flatMap(c=>arr(c.items));
+    }
+    for(const name of objectModules){
+      let chunks = arr(grouped[name]).sort((a,b)=>(a.index||0)-(b.index||0));
+      st[name] = chunks[0]?.value || {};
+    }
+    if(empty(st)) return null;
+    return st;
+  }
+
+  async function loadAnyCloud(){
+    let st = await loadV442Cloud();
+    if(st) return {source:'cloud-v442', state:st};
+    try{
+      if(typeof loadStateV44 === 'function'){
+        st = await loadStateV44();
+        if(st && !empty(st)) return {source:'cloud-v44', state:st};
+      }
+    }catch(e){ console.warn('V44.2兼容读取V44失败', e); }
+    return {source:'empty', state:null};
+  }
+
+  async function saveV442(reason){
+    const sb = (typeof initSupabaseClient === 'function') ? initSupabaseClient() : null;
+    if(!sb) return false;
+    if(typeof cloudUser !== 'undefined' && !cloudUser) return false;
+    if(saving){ queued = true; queuedReason = reason || queuedReason; return false; }
+    saving = true;
+    try{
+      const st = stateFromGlobals();
+      if(empty(st) && !window.__allowEmptyCloudOverwrite){
+        console.error('V44.2保护：阻止空数据覆盖云端', reason, st);
+        hint('已阻止空数据覆盖云端');
+        return false;
+      }
+      persistLocal(st, true);
+      const updatedAt = now();
+      const updatedBy = (typeof cloudUser !== 'undefined' && cloudUser?.email) || '';
+      const manifest = {version:V442_VERSION, mode:'versioned_split_app_state', reason:reason||'save', updatedAt, updatedBy, chunkSize:CHUNK_SIZE, modules:{}, score:score(st)};
+      const rows = [];
+      for(const name of arrayModules){
+        const chunks = chunk(st[name], CHUNK_SIZE);
+        manifest.modules[name] = {type:'array', length:arr(st[name]).length, chunks:chunks.length};
+        chunks.forEach((items,idx)=>rows.push({id:`${PREFIX}chunk:${name}:${idx}`, data:{module:name,index:idx,items}, updated_by:updatedBy, updated_at:updatedAt}));
+      }
+      for(const name of objectModules){
+        manifest.modules[name] = {type:'object', chunks:1};
+        rows.push({id:`${PREFIX}chunk:${name}:0`, data:{module:name,index:0,value:st[name]||{}}, updated_by:updatedBy, updated_at:updatedAt});
+      }
+      // 先写 chunks，最后写 manifest。这样刷新时永远读取最后一次完整提交。
+      for(let i=0;i<rows.length;i+=20){
+        const { error } = await sb.from('app_state').upsert(rows.slice(i,i+20));
+        if(error) throw error;
+      }
+      const { error: mfErr } = await sb.from('app_state').upsert({id:MANIFEST_ID, data:manifest, updated_by:updatedBy, updated_at:updatedAt});
+      if(mfErr) throw mfErr;
+      // 轻量指针，仅用于兼容旧界面查看；不是数据源。
+      try{ await sb.from('app_state').upsert({id:BASE_ID, data:{version:V442_VERSION, storageMode:'v442_split', manifestId:MANIFEST_ID, updatedAt, score:score(st)}, updated_by:updatedBy, updated_at:updatedAt}); }catch(e){}
+      localStorage.setItem('cc_dirty','0');
+      localStorage.setItem('cc_lastCloudSaveAt', updatedAt);
+      if(typeof lastCloudUpdatedAt !== 'undefined') lastCloudUpdatedAt = updatedAt;
+      window.__lastCloudStateRaw = clone(st);
+      hint('云端已保存');
+      return true;
+    }catch(e){
+      console.error('V44.2云端保存失败', e);
+      localStorage.setItem('cc_dirty','1');
+      localStorage.setItem('cc_dirtyError', String(e.message || e));
+      alert('云端保存失败：' + (e.message || e) + '\n本地已保留本次修改，刷新时不会被云端旧数据覆盖。');
+      return false;
+    }finally{
+      saving = false;
+      if(queued){ const r=queuedReason||'queued'; queued=false; queuedReason=''; setTimeout(()=>saveV442(r), 500); }
+    }
+  }
+
+  async function chooseStartupState(){
+    const local = stateFromLocal();
+    const localDirty = localStorage.getItem('cc_dirty') === '1';
+    const localDirtyAt = localStorage.getItem('cc_dirtyAt') || local.updatedAt || '';
+    const localValid = !empty(local);
+    let cloud = null;
+    try{ cloud = await loadAnyCloud(); }catch(e){ console.warn('V44.2云端读取失败，尝试本地启动', e); }
+    const cloudValid = !!(cloud && cloud.state && !empty(cloud.state));
+    const cloudAt = cloudValid ? (cloud.state.updatedAt || '') : '';
+
+    if(localValid && (localDirty || !cloudValid || timeMs(localDirtyAt) > timeMs(cloudAt))){
+      apply(local);
+      persistLocal(local, localDirty);
+      setTimeout(()=>saveV442(localDirty ? 'startup_dirty_local_resync' : 'startup_local_bootstrap'), 800);
+      return {ok:true, source: localDirty ? 'local-dirty' : 'local'};
+    }
+    if(cloudValid){
+      apply(cloud.state);
+      persistLocal(cloud.state, false);
+      localStorage.setItem('cc_dirty','0');
+      return {ok:true, source:cloud.source};
+    }
+    if(localValid){
+      apply(local);
+      persistLocal(local, true);
+      setTimeout(()=>saveV442('startup_local_no_cloud'), 800);
+      return {ok:true, source:'local-no-cloud'};
+    }
+    return {ok:false, source:'empty'};
+  }
+
+  // 覆盖全局读写入口。
+  window.saveCloudState = saveCloudState = async function(){ return saveV442('saveCloudState'); };
+  window.saveCloudStateV44 = saveV442;
+  window.saveCloudStateV442 = saveV442;
+  window.loadCloudState = loadCloudState = async function(){
+    const chosen = await chooseStartupState();
+    return !!chosen.ok;
+  };
+  window.saveData = saveData = function(){
+    const st = stateFromGlobals();
+    persistLocal(st, true);
+    if(typeof cloudUser !== 'undefined' && cloudUser) setTimeout(()=>saveV442('saveData'), 0);
+  };
+  window.queueCloudPersistV435 = function(reason, delay){ setTimeout(()=>saveV442(reason || 'queued_v442'), Math.max(0, delay || 0)); };
+
+  // 覆盖实时同步：本地有未保存修改时，绝不应用云端旧状态。
+  window.pullCloudStateAndRefresh = pullCloudStateAndRefresh = async function(reason){
+    if(saving) return false;
+    if(localStorage.getItem('cc_dirty') === '1'){
+      hint('本地有未保存修改，已阻止云端旧数据覆盖');
+      setTimeout(()=>saveV442('dirty_realtime_resync'), 600);
+      return false;
+    }
+    try{
+      const cloud = await loadAnyCloud();
+      if(!cloud || !cloud.state || empty(cloud.state)) return false;
+      const local = stateFromLocal();
+      if(!empty(local) && timeMs(local.updatedAt) > timeMs(cloud.state.updatedAt || '')) return false;
+      apply(cloud.state); persistLocal(cloud.state, false);
+      const uiState = (typeof captureCurrentUiState === 'function') ? captureCurrentUiState() : null;
+      if(typeof isCurrentPageRefreshLocked === 'function' && (isCurrentPageRefreshLocked() || (typeof isModalOpen==='function' && isModalOpen()) || (typeof isUserActivelyEditing==='function' && isUserActivelyEditing()))){
+        if(typeof renderSidebar==='function') renderSidebar();
+        hint('已同步云端数据（当前页面未刷新）');
+      }else{
+        if(typeof renderSidebar==='function') renderSidebar();
+        if(typeof renderContent==='function') renderContent();
+        if(typeof applyLanguage==='function') applyLanguage();
+        if(uiState && typeof restoreCurrentUiState==='function') restoreCurrentUiState(uiState);
+        hint('已同步云端数据');
+      }
+      return true;
+    }catch(e){ console.warn('V44.2实时同步跳过', e); return false; }
+  };
+
+  // 覆盖登录初始化，彻底避免旧“app_state为空”弹窗和旧数据覆盖。
+  if(typeof ensureCloudSession === 'function'){
+    window.ensureCloudSession = ensureCloudSession = async function(){
+      const sb = (typeof initSupabaseClient === 'function') ? initSupabaseClient() : null;
+      if(!sb) return false;
+      const { data, error: sessionError } = await sb.auth.getSession();
+      if(sessionError){ alert('读取登录会话失败：' + sessionError.message); return false; }
+      const session = data && data.session ? data.session : null;
+      if(!session || !session.user) return false;
+      cloudUser = session.user;
+      const { data: profile, error } = await sb.from('user_profiles').select('*').ilike('email', cloudUser.email).maybeSingle();
+      if(error){ alert('读取用户权限失败：' + error.message); return false; }
+      if(!profile || profile.is_active === false){
+        document.getElementById('loginPage').style.display='none'; document.getElementById('mainApp').style.display='block';
+        document.getElementById('sidebar').innerHTML='';
+        document.getElementById('mainContent').innerHTML=`<div class="card"><div class="card-header"><span class="card-title">⏳ 等待管理员授权</span></div><p>当前账号：<b>${cloudUser.email}</b></p><p style="margin-top:10px;color:#606266;">该账号尚未在 user_profiles 中分配角色，请联系系统管理员添加权限。</p><button class="btn btn-primary" onclick="logoutCloud()">退出</button></div>`;
+        return false;
+      }
+      cloudProfile = profile;
+      currentUser = mapProfileToCurrentUser(profile, cloudUser);
+      currentMenu = (currentUser.role === '订购科' || (typeof isAdminUser==='function' && isAdminUser())) ? 'dashboard' : (allMenus.find(m => canAccessMenu(m))?.id || 'containers');
+      const chosen = await chooseStartupState();
+      document.getElementById('loginPage').style.display='none'; document.getElementById('mainApp').style.display='block';
+      document.getElementById('currentRole').innerText = currentUser.role; document.getElementById('currentUser').innerText = currentUser.name;
+      if(!chosen.ok){
+        currentMenu = 'dataRecovery';
+        renderSidebar(); renderContent(); applyLanguage();
+        if(typeof startRealtimeSync === 'function') startRealtimeSync();
+        hint('云端和本地均为空：请导入备份');
+        setTimeout(()=>alert('检测到云端和本地均无有效数据。系统已进入数据恢复中心；请导入备份JSON恢复数据。'), 300);
+        return true;
+      }
+      renderSidebar(); renderContent(); applyLanguage();
+      if(typeof startRealtimeSync === 'function') startRealtimeSync();
+      hint(chosen.source === 'local-dirty' ? '已使用本地未保存数据启动，正在重新保存云端' : '系统数据已加载');
+      return true;
+    };
+  }
+
+  try{ if(!document.title.includes('V44.2')) document.title = (document.title || '集装箱智能监控') + ' - V44.2'; }catch(e){}
+  console.log('V44.2 Dirty Local Priority & Versioned Split Save loaded');
 })();
 </script>
 
