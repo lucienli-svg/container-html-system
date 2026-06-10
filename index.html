@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V44.3 Dashboard Workday Sync</title>
+  <title>集装箱智能监控管理系统 V42.24 Dashboard Workday Sync</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
     /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
@@ -2852,7 +2852,7 @@ function getContainerLocation(cid){
 
     // ==================== 多语言切换（第一阶段：核心界面文字） ====================
     let currentLang = localStorage.getItem('cc_lang') || 'pt-BR';
-    // V44.3: 默认语言改为巴西葡萄牙语；旧版本未主动选择语言的中文默认值自动迁移为葡语。
+    // V44.4: 默认语言改为巴西葡萄牙语；旧版本未主动选择语言的中文默认值自动迁移为葡语。
     if(!localStorage.getItem('cc_lang_v443_default_applied') && localStorage.getItem('cc_lang') === 'zh-CN'){
       currentLang = 'pt-BR';
       localStorage.setItem('cc_lang','pt-BR');
@@ -2875,7 +2875,7 @@ function getContainerLocation(cid){
       }
     };
 
-    // V44.3：补充巴西葡萄牙语翻译词库，覆盖菜单、表头、按钮、状态、提示和常用业务术语。
+    // V44.4：补充巴西葡萄牙语翻译词库，覆盖菜单、表头、按钮、状态、提示和常用业务术语。
     Object.assign(i18nMap['pt-BR'], {
       '生产计划维护':'Manutenção do plano de produção','工厂日历':'Calendário da fábrica','门岗登记':'Registro na portaria','卸货口收货':'Recebimento na doca','附件中心':'Centro de anexos','账号权限管理':'Gestão de contas e permissões','自动备份中心':'Centro de backup automático','数据恢复中心':'Centro de recuperação de dados','系统维护':'Manutenção do sistema',
       '生产保供看板':'Painel de abastecimento da produção','物流运营工作台':'Painel operacional logístico','生产保供进度':'Progresso de abastecimento','WELDING':'SOLDA','ASSEMBLY':'MONTAGEM','未发运':'Não expedido','门口':'Portaria','厂内等待':'Aguardando na fábrica','卸货中':'Em descarga','已完成':'Concluído','已完成卸货':'Descarga concluída','暂无生产计划':'Sem plano de produção','休息日':'Dia de descanso','法定假日':'Feriado','特殊加班':'Trabalho extra','工作日':'Dia útil',
@@ -4419,7 +4419,7 @@ let main=document.getElementById('mainContent');
       });
     }
 
-    // V44.3：在途运输-到货确认排序：预计到达时间 → 批次号 → 集装箱序号。
+    // V44.4：在途运输-到货确认排序：预计到达时间 → 批次号 → 集装箱序号。
     function sortTasksByEtaBatchSeq(list){
       return [...(list || [])].sort((a,b)=>{
         const ta = a.estimatedArrival || a.arrivalDate || a.planArrivalTime || '';
@@ -11132,6 +11132,146 @@ let main=document.getElementById('mainContent');
 
   try{ if(!document.title.includes('V44.2')) document.title = (document.title || '集装箱智能监控') + ' - V44.2'; }catch(e){}
   console.log('V44.2 Dirty Local Priority & Versioned Split Save loaded');
+})();
+</script>
+
+<script>
+(function(){
+  'use strict';
+  const V='V44.4';
+  // V44.4 full i18n safety patch: make Portuguese the default and translate remaining hard-coded UI text.
+  try{
+    const stored = localStorage.getItem('cc_lang');
+    if(!stored || stored === 'zh-CN') localStorage.setItem('cc_lang','pt-BR');
+    if(typeof currentLang !== 'undefined') currentLang = localStorage.getItem('cc_lang') || 'pt-BR';
+    document.documentElement.lang = (localStorage.getItem('cc_lang') || 'pt-BR');
+  }catch(e){}
+
+  const pt = {
+    // Common / system
+    '集装箱智能监控':'Monitoramento inteligente de contêineres','当前页面操作中：本页暂停自动刷新':'Operação nesta página: atualização automática pausada','本页暂停自动刷新':'Atualização automática pausada nesta página','简体中文':'Chinês simplificado','巴西葡萄牙语':'Português (Brasil)','英文':'Inglês','退出':'Sair','退出登录':'Sair','备份':'Backup','本地→云端':'Local → Nuvem','云端→本地':'Nuvem → Local','保存中...':'Salvando...','已保存到云端':'Salvo na nuvem','等待同步':'Aguardando sincronização','同步失败':'Falha na sincronização','系统数据已加载':'Dados do sistema carregados','云端保存失败':'Falha ao salvar na nuvem','读取云端数据失败':'Falha ao ler dados da nuvem','检测到云端主数据为空':'Dados principais da nuvem estão vazios','系统已进入数据恢复中心':'O sistema entrou no Centro de Recuperação de Dados','请导入备份JSON恢复数据':'Importe o JSON de backup para restaurar os dados',
+    // Menus
+    '工作台':'Painel','生产计划维护':'Manutenção do plano de produção','基础数据':'Dados básicos','提单/IRA管理':'BL / IRA','清关维护':'Desembaraço aduaneiro','提箱计划':'Plano de retirada','运输任务':'Tarefas de transporte','门岗登记':'Registro na portaria','卸货口收货':'Recebimento na doca','到货确认':'Confirmação de chegada','还箱确认':'Confirmação de devolução','动态运输计划':'Plano dinâmico de transporte','库存看板':'Painel de estoque','生产完成确认':'Confirmação de produção','费率配置':'Configuração de tarifas','费用报表':'Relatório de custos','账号权限管理':'Gestão de contas e permissões','附件中心':'Centro de anexos','工厂日历':'Calendário da fábrica','自动备份中心':'Centro de backup automático','数据恢复中心':'Centro de recuperação de dados','系统信息':'Informações do sistema',
+    // Buttons/actions
+    '查询':'Pesquisar','重置':'Limpar','刷新':'Atualizar','新增':'Adicionar','新增计划':'Adicionar plano','Adicionar计划':'Adicionar plano','保存':'Salvar','删除':'Excluir','编辑':'Editar','复制':'Copiar','作废':'Invalidar','恢复':'Restaurar','下载':'Baixar','上传':'Carregar','导出':'Exportar','导入':'Importar','批量导入':'Importar em lote','批量导入IRA':'Importar IRA em lote','IRA导入模板':'Modelo de importação IRA','批量发布':'Publicar em lote','批量发布动态计划':'Publicar planos dinâmicos em lote','发布':'Publicar','确认':'Confirmar','确认到货':'Confirmar chegada','确认到达':'Confirmar chegada','确认掏箱':'Confirmar desova','确认提箱':'Confirmar retirada','确认还箱':'Confirmar devolução','取消':'Cancelar','关闭':'Fechar','返回':'Voltar','全选':'Selecionar tudo','收起':'Recolher','展开查看':'Expandir','展开':'Expandir','预览':'Pré-visualizar','设置加班后排产':'Definir trabalho extra para planejar',
+    // Dashboard / production board
+    '物流运营工作台':'Painel operacional logístico','生产保供看板':'Painel de abastecimento da produção','生产保供进度':'Progresso de abastecimento da produção','每日运营报表':'Relatório operacional diário','费用相关信息':'Informações de custos','清关相关信息':'Informações de desembaraço','提箱相关信息':'Informações de retirada','库存相关信息':'Informações de estoque','本区保留费用、清关、提箱和库存等核心指标':'Esta área mantém indicadores principais de custos, desembaraço, retirada e estoque','到厂进度由下方生产保供看板展示':'O progresso de chegada à fábrica é exibido no painel de abastecimento da produção abaixo','今日新增异常堆存费':'Armazenagem anormal gerada hoje','今日新增滞箱费':'Demurrage gerada hoje','今日清关完成':'Desembaraços concluídos hoje','今日计划提箱':'Retiradas planejadas hoje','今日实际提箱':'Retiradas realizadas hoje','已清关待提箱':'Desembaraçados aguardando retirada','待提箱-已产生异常堆存费':'Aguardando retirada com armazenagem anormal','待提箱-未产生异常堆存费':'Aguardando retirada sem armazenagem anormal','库存分布':'Distribuição de estoque','总集装箱':'Total de contêineres','待清关':'Aguardando desembaraço','异常堆存费':'Armazenagem anormal','滞箱费总额':'Total de demurrage','WELDING':'SOLDA','ASSEMBLY':'MONTAGEM','SIDER':'SIDER','CONTAINER':'CONTÊINER','暂无生产计划':'Sem plano de produção','暂无数据':'Sem dados','暂无符合条件的数据':'Sem dados correspondentes','0 batches':'0 lotes','batches':'lotes','已完成':'Concluído','未发运':'Não expedido','门口':'Portaria','厂内等待':'Aguardando na fábrica','卸货中':'Em descarga','运输中':'Em transporte','已完成卸货':'Descarga concluída',
+    // Production plan / calendar
+    '预排产':'Pré-planejamento','生产计划确认':'Confirmação do plano de produção','计划起始日期':'Data inicial do plano','计划起始Data':'Data inicial do plano','必填计划Data尚未维护':'Plano obrigatório ainda não cadastrado','维护今天、明天、后天计划':'Manter planos de hoje, amanhã e depois de amanhã','前2个有效生产日必须维护':'Os 2 primeiros dias efetivos de produção devem ser cadastrados','第3个有效生产日可选':'O 3º dia efetivo de produção é opcional','每条计划维护Lote顺序':'Cada plano deve manter a sequência do lote','用于后续到箱顺序和收货优先级':'Usado posteriormente para sequência de chegada e prioridade de recebimento','确认会显示所有历史未Confirmar计划':'A confirmação exibirá todos os planos históricos ainda não confirmados','支持Confirmado计划修正':'Suporta correção de planos já confirmados','生产计划':'Plano de produção','生产计划Data':'Data do plano de produção','工作日历':'Calendário de trabalho','日历':'Calendário','工作日':'Dia útil','休息日':'Dia de descanso','法定假日':'Feriado','特殊加班':'Trabalho extra','假日':'Feriado','加班':'Trabalho extra','第1生产日':'1º dia de produção','第2生产日':'2º dia de produção','第3生产日':'3º dia de produção','第1个生产日':'1º dia de produção','第2个生产日':'2º dia de produção','第3个生产日':'3º dia de produção','第1有效生产日':'1º dia efetivo de produção','第2有效生产日':'2º dia efetivo de produção','第3有效生产日':'3º dia efetivo de produção','焊装':'Solda','总装':'Montagem','车间':'Oficina','线体':'Linha','数量':'Quantidade','顺序':'Sequência','批次顺序':'Sequência do lote','合计':'Total','总计':'Total','BS合计':'Total BS','GA合计':'Total GA','GA-B合计':'Total GA-B','GA-P合计':'Total GA-P','确认状态':'Status da confirmação','实际完成数量':'Quantidade real concluída','计划数量':'Quantidade planejada','差异':'Diferença','未确认':'Não confirmado','已确认':'Confirmado',
+    // Fields/table headers
+    '批次':'Lote','批次号':'Lote','集装箱序号':'Seq. do contêiner','序号':'Seq.','集装箱号':'Nº do contêiner','提单号':'BL','主提单号':'Master BL','分提单号':'House BL','IRA号':'IRA','清关通道':'Canal','清关时间':'Data do desembaraço','清关完成时间':'Data/hora do desembaraço','清关用时':'Tempo de desembaraço','清关完成至提箱用时':'Tempo do desembaraço à retirada','操作':'Ação','状态':'Status','当前位置':'Local atual','目的地':'Destino','卸货口':'Doca','到货时间':'Horário de chegada','到达时间':'Horário de chegada','预计到达':'Chegada prevista','预计到货':'Chegada prevista','计划到达':'Chegada planejada','计划提箱':'Retirada planejada','提箱时间':'Horário de retirada','实际提箱':'Retirada real','还箱日期':'Data de devolução','运输公司':'Transportadora','到港时间':'ETA do porto','箱型':'Tipo de contêiner','船公司':'Armador','车型':'Tipo de veículo','出发地':'Origem','来源地':'Origem','车牌':'Placa','司机':'Motorista','电话':'Telefone','备注':'Observação','日期':'Data','Data':'Data','Lote':'Lote','Confirmar':'Confirmar','Dia útil':'Dia útil','Trabalho extra':'Trabalho extra','Dia de descanso':'Dia de descanso','Feriado':'Feriado',
+    // Status / locations
+    '港口':'Porto','工厂':'Fábrica','RG堆场':'Pátio RG','Rio Claro库房':'Armazém Rio Claro','IRA库房':'Armazém IRA','Rio Claro':'Rio Claro','已清关':'Desembaraçado','清关中':'Em desembaraço','待确认提箱':'Aguardando confirmação de retirada','待确认到达':'Aguardando confirmação de chegada','待确认掏箱':'Aguardando confirmação de desova','待还箱':'Aguardando devolução','已发布':'Publicado','已取消':'Cancelado','已到达':'Chegou','已掏箱':'Desovado','已生产':'Produzido','未到工厂':'Não chegou à fábrica','已到门口':'Chegou à portaria','工厂内等待':'Aguardando dentro da fábrica','已完成卸货':'Descarga concluída','已到厂':'Chegou à fábrica','已完结':'Concluído','正常':'Normal','异常':'Anormal',
+    // Pages / descriptions
+    '在途运输 - 到货确认':'Transporte em andamento - Confirmação de chegada','暂无在途运输':'Sem transporte em andamento','暂无待确认掏箱':'Sem desova pendente','暂无已掏箱记录':'Sem registros de desova concluída','全部地点':'Todos os locais','全部掏箱地点':'Todos os locais de desova','已到达，无需掏箱':'Chegou, sem necessidade de desova','已确认到达':'Chegada confirmada','已确认掏箱':'Desova confirmada','可在动态运输计划中继续运输':'Pode continuar no plano dinâmico de transporte','待维护IRA':'IRA pendente de manutenção','清关完成':'Desembaraço concluído','待发布集装箱':'Contêineres pendentes de publicação','已发布的提箱计划':'Planos de retirada publicados','已发布的运输计划':'Planos de transporte publicados','港口提箱任务':'Tarefas de retirada no porto','其他运输任务':'Outras tarefas de transporte','门岗登记 / 进厂放行':'Registro na portaria / Liberação de entrada','卸货口确认':'Confirmação na doca','费用统计':'Estatísticas de custos','费用明细':'Detalhamento de custos','滞箱费':'Demurrage','堆存费':'Armazenagem','免费期':'Período livre','最后免费日':'Último dia livre','7天内将产生滞箱费':'Demurrage prevista em 7 dias'
+  };
+  const en = {
+    '工作台':'Dashboard','生产计划维护':'Production Plan Maintenance','基础数据':'Basic Data','提单/IRA管理':'BL / IRA','清关维护':'Customs','提箱计划':'Pickup Plan','运输任务':'Transport Tasks','门岗登记':'Gate Registration','卸货口收货':'Dock Receiving','到货确认':'Arrival Confirmation','还箱确认':'Return Confirmation','动态运输计划':'Dynamic Transport Plan','库存看板':'Stock Board','生产完成确认':'Production Completion','费率配置':'Rate Configuration','费用报表':'Cost Report','工厂日历':'Factory Calendar','自动备份中心':'Auto Backup Center','数据恢复中心':'Data Recovery Center','查询':'Search','重置':'Reset','刷新':'Refresh','新增':'Add','保存':'Save','删除':'Delete','编辑':'Edit','发布':'Publish','确认':'Confirm','取消':'Cancel','关闭':'Close','导出':'Export','导入':'Import','批次':'Batch','批次号':'Batch','集装箱号':'Container No.','集装箱序号':'Container Seq.','序号':'Seq.','状态':'Status','操作':'Action','目的地':'Destination','当前位置':'Current Location','预计到达':'Estimated Arrival','到货时间':'Arrival Time','运输中':'In Transit','未发运':'Not Shipped','门口':'Gate','厂内等待':'Waiting Inside Factory','卸货中':'Unloading','已完成':'Completed','已完成卸货':'Unloading Completed','生产保供看板':'Production Supply Board','暂无生产计划':'No production plan','休息日':'Rest Day','法定假日':'Holiday','特殊加班':'Special Overtime','工作日':'Working Day','第1生产日':'Production Day 1','第2生产日':'Production Day 2','第3生产日':'Production Day 3'};
+
+  function mergeDict(){
+    try{
+      if(typeof i18nMap !== 'undefined'){
+        i18nMap['pt-BR'] = Object.assign(i18nMap['pt-BR']||{}, pt);
+        i18nMap['en-US'] = Object.assign(i18nMap['en-US']||{}, en);
+      }
+    }catch(e){}
+  }
+  mergeDict();
+
+  function dict(){
+    const lang = (typeof currentLang !== 'undefined' ? currentLang : localStorage.getItem('cc_lang')) || 'pt-BR';
+    return lang === 'en-US' ? en : (lang === 'zh-CN' ? null : pt);
+  }
+  function trText(input){
+    const d = dict(); if(!d || input == null) return input;
+    let s = String(input);
+    // Dynamic production-day phrases and mixed text
+    s = s.replace(/第\s*(\d+)\s*个?生产日/g, (_,n)=>`${n}º dia de produção`);
+    s = s.replace(/第\s*(\d+)\s*个?有效生产日/g, (_,n)=>`${n}º dia efetivo de produção`);
+    s = s.replace(/必填计划\s*Data\s*尚未维护/g, 'Plano obrigatório ainda não cadastrado');
+    s = s.replace(/计划起始\s*Data/g, 'Data inicial do plano');
+    s = s.replace(/确认会显示所有历史未\s*Confirmar\s*计划/g, 'A confirmação exibirá todos os planos históricos ainda não confirmados');
+    s = s.replace(/支持\s*Confirmado\s*计划修正/g, 'Suporta correção de planos já confirmados');
+    Object.keys(d).sort((a,b)=>b.length-a.length).forEach(k=>{ if(k && s.includes(k)) s = s.split(k).join(d[k]); });
+    return s;
+  }
+  window.v444TranslateText = trText;
+
+  const oldT = (typeof window.t === 'function') ? window.t : null;
+  window.t = function(text){
+    try{
+      const lang = (typeof currentLang !== 'undefined' ? currentLang : localStorage.getItem('cc_lang')) || 'pt-BR';
+      if(lang === 'zh-CN') return text;
+      if(typeof i18nMap !== 'undefined' && i18nMap[lang] && i18nMap[lang][text]) return i18nMap[lang][text];
+      return trText(text);
+    }catch(e){ return oldT ? oldT(text) : text; }
+  };
+
+  function translateNode(root){
+    const d = dict(); if(!d || !root) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node){
+        if(!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        const p=node.parentElement; if(!p || ['SCRIPT','STYLE','TEXTAREA'].includes(p.tagName)) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    const nodes=[]; while(walker.nextNode()) nodes.push(walker.currentNode);
+    nodes.forEach(n=>{ const nv=trText(n.nodeValue); if(nv!==n.nodeValue) n.nodeValue=nv; });
+    root.querySelectorAll && root.querySelectorAll('[placeholder],[title],[aria-label],input[type="button"],input[type="submit"],option').forEach(el=>{
+      ['placeholder','title','aria-label'].forEach(a=>{ if(el.hasAttribute(a)) el.setAttribute(a,trText(el.getAttribute(a))); });
+      if((el.tagName==='INPUT' && ['button','submit'].includes(el.type)) || el.tagName==='OPTION') el.textContent = trText(el.textContent);
+      if(el.tagName==='INPUT' && ['button','submit'].includes(el.type)) el.value = trText(el.value);
+    });
+  }
+  const oldApply = (typeof window.applyLanguage === 'function') ? window.applyLanguage : null;
+  window.applyLanguage = applyLanguage = function(){
+    try{ mergeDict(); if(oldApply) oldApply(); }catch(e){}
+    try{ translateNode(document.body); }catch(e){ console.warn('V44.4 translate failed', e); }
+  };
+
+  // Patch render methods so dynamic HTML is translated after each render.
+  function wrap(name){
+    const fn = window[name]; if(typeof fn !== 'function' || fn.__v444) return;
+    const wrapped = function(){ const r = fn.apply(this, arguments); setTimeout(()=>{ try{ window.applyLanguage(); }catch(e){} },0); return r; };
+    wrapped.__v444 = true; window[name]=wrapped; try{ eval(name+' = window[name];'); }catch(e){}
+  }
+  ['renderContent','renderSidebar','renderDashboard','renderProductionPlan','renderArrivalConfirm','renderPickupPlan','renderTransportTasks','renderFactoryCalendar'].forEach(wrap);
+
+  const rawAlert = window.alert;
+  window.alert = function(msg){ rawAlert.call(window, trText(msg)); };
+  const rawConfirm = window.confirm;
+  window.confirm = function(msg){ return rawConfirm.call(window, trText(msg)); };
+
+  // Add lightweight system info entry if it does not exist, without changing core business logic.
+  try{
+    if(Array.isArray(allMenus) && !allMenus.some(m=>m.id==='systemInfo')) allMenus.push({id:'systemInfo', name:'系统信息', icon:'ℹ️', roles:['Admin','订购科']});
+    const baseRender = window.renderContent;
+    if(typeof baseRender === 'function' && !baseRender.__v444Sys){
+      const wrapped = function(){
+        if(window.currentMenu === 'systemInfo'){
+          const el=document.getElementById('mainContent'); if(el){
+            el.innerHTML = `<div class="card"><div class="card-header"><span class="card-title">ℹ️ ${window.t('系统信息')}</span></div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
+                <div class="stat-card"><div class="stat-label">Versão</div><div class="stat-value">V44.4</div></div>
+                <div class="stat-card"><div class="stat-label">Modo de dados</div><div class="stat-value">Table Storage</div></div>
+                <div class="stat-card"><div class="stat-label">Último backup</div><div class="stat-value">${localStorage.getItem('cc_lastBackupTime')||'-'}</div></div>
+                <div class="stat-card"><div class="stat-label">Última sincronização</div><div class="stat-value">${localStorage.getItem('cc_lastSyncTime')||'-'}</div></div>
+              </div></div>`;
+            setTimeout(()=>window.applyLanguage(),0);
+          }
+          return;
+        }
+        return baseRender.apply(this, arguments);
+      };
+      wrapped.__v444Sys = true; window.renderContent = renderContent = wrapped;
+    }
+  }catch(e){}
+
+  setTimeout(()=>{ try{ window.applyLanguage(); }catch(e){} }, 300);
+  setTimeout(()=>{ try{ window.applyLanguage(); }catch(e){} }, 1500);
+  try{ document.title = 'Sistema Inteligente de Monitoramento de Contêineres V44.4'; }catch(e){}
+  console.log('V44.4 full i18n patch loaded');
 })();
 </script>
 
