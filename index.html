@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
@@ -1726,7 +1726,7 @@
       <div class="user-info">
         <select id="languageSelect" class="role-badge" style="border:none;outline:none;" onchange="setLanguage(this.value)">
           <option value="zh-CN">简体中文</option>
-          <option value="pt-BR">Português BR</option>
+          <option value="pt-BR" selected>Português BR</option>
           <option value="en-US">English US</option>
         </select>
         <span class="role-badge" id="currentRole"></span>
@@ -2851,7 +2851,13 @@ function getContainerLocation(cid){
     // ==================== 渲染函数 ====================
 
     // ==================== 多语言切换（第一阶段：核心界面文字） ====================
-    let currentLang = localStorage.getItem('cc_lang') || 'zh-CN';
+    let currentLang = localStorage.getItem('cc_lang') || 'pt-BR';
+    // V44.3: 默认语言改为巴西葡萄牙语；旧版本未主动选择语言的中文默认值自动迁移为葡语。
+    if(!localStorage.getItem('cc_lang_v443_default_applied') && localStorage.getItem('cc_lang') === 'zh-CN'){
+      currentLang = 'pt-BR';
+      localStorage.setItem('cc_lang','pt-BR');
+      localStorage.setItem('cc_lang_v443_default_applied','1');
+    }
     const i18nMap = {
       'pt-BR': {
         '工作台':'Painel','基础数据':'Dados básicos','提单/IRA管理':'BL / IRA','清关维护':'Desembaraço','提箱计划':'Plano de retirada','运输任务':'Tarefas de transporte','到货确认':'Confirmação de chegada','还箱确认':'Confirmação de devolução','动态运输计划':'Plano dinâmico','库存看板':'Estoque','生产完成确认':'Produção concluída','费率配置':'Configuração de tarifas','费用报表':'Relatório de custos',
@@ -2868,6 +2874,33 @@ function getContainerLocation(cid){
         '批次':'Batch','集装箱序号':'Container Seq.','集装箱号':'Container No.','提单号':'BL No.','主提单号':'Master BL','分提单号':'House BL','IRA号':'IRA No.','清关通道':'Channel','清关时间':'Clearance date','操作':'Action','状态':'Status','当前位置':'Current location','目的地':'Destination','卸货口':'Dock','到货时间':'Arrival time','运输公司':'Carrier','到港时间':'Port ETA'
       }
     };
+
+    // V44.3：补充巴西葡萄牙语翻译词库，覆盖菜单、表头、按钮、状态、提示和常用业务术语。
+    Object.assign(i18nMap['pt-BR'], {
+      '生产计划维护':'Manutenção do plano de produção','工厂日历':'Calendário da fábrica','门岗登记':'Registro na portaria','卸货口收货':'Recebimento na doca','附件中心':'Centro de anexos','账号权限管理':'Gestão de contas e permissões','自动备份中心':'Centro de backup automático','数据恢复中心':'Centro de recuperação de dados','系统维护':'Manutenção do sistema',
+      '生产保供看板':'Painel de abastecimento da produção','物流运营工作台':'Painel operacional logístico','生产保供进度':'Progresso de abastecimento','WELDING':'SOLDA','ASSEMBLY':'MONTAGEM','未发运':'Não expedido','门口':'Portaria','厂内等待':'Aguardando na fábrica','卸货中':'Em descarga','已完成':'Concluído','已完成卸货':'Descarga concluída','暂无生产计划':'Sem plano de produção','休息日':'Dia de descanso','法定假日':'Feriado','特殊加班':'Trabalho extra','工作日':'Dia útil',
+      '新增':'Adicionar','批量导入':'Importar em lote','导出':'Exportar','导出模板':'Exportar modelo','批量发布':'Publicar em lote','批量发布动态计划':'Publicar planos dinâmicos em lote','全选':'Selecionar tudo','发布':'Publicar','确认':'Confirmar','确认到达':'Confirmar chegada','确认掏箱':'Confirmar desova','确认提箱':'Confirmar retirada','确认还箱':'Confirmar devolução','取消':'Cancelar','关闭':'Fechar','返回':'Voltar','复制':'Copiar','作废':'Invalidar','恢复':'Restaurar','下载':'Baixar','上传':'Carregar','预览':'Pré-visualizar','保存到云端':'Salvar na nuvem','本地→云端':'Local → Nuvem','备份':'Backup','退出登录':'Sair',
+      '预计到达':'Chegada prevista','实际到达':'Chegada real','到达时间':'Horário de chegada','提箱时间':'Horário de retirada','实际提箱':'Retirada real','还箱日期':'Data de devolução','清关完成时间':'Data/hora do desembaraço','清关用时':'Tempo de desembaraço','清关完成至提箱用时':'Tempo do desembaraço à retirada','预计到货':'Chegada prevista','计划到达':'Chegada planejada','计划提箱':'Retirada planejada','计划到厂':'Chegada planejada à fábrica',
+      '序号':'Seq.','箱型':'Tipo de contêiner','船公司':'Armador','车型':'Tipo de veículo','出发地':'Origem','来源地':'Origem','车牌':'Placa','司机':'Motorista','电话':'Telefone','备注':'Observação','日期':'Data','车间':'Oficina','线体':'Linha','数量':'Quantidade','合计':'Total','总计':'Total','焊装':'Solda','总装':'Montagem','批次号':'Lote','集装箱':'Contêiner','集装箱信息':'Informações do contêiner',
+      '港口':'Porto','工厂':'Fábrica','RG堆场':'Pátio RG','IRA库房':'Armazém IRA','运输中':'Em transporte','待提箱':'Aguardando retirada','待确认提箱':'Aguardando confirmação de retirada','待确认到达':'Aguardando confirmação de chegada','待确认掏箱':'Aguardando confirmação de desova','待还箱':'Aguardando devolução','已清关':'Desembaraçado','清关中':'Em desembaraço','已到达':'Chegou','已发布':'Publicado','已确认':'Confirmado','已取消':'Cancelado','已掏箱':'Desovado','已生产':'Produzido','未到工厂':'Não chegou à fábrica','已到门口':'Chegou à portaria','工厂内等待':'Aguardando na fábrica',
+      '在途运输 - 到货确认':'Transporte em andamento - Confirmação de chegada','暂无在途运输':'Sem transporte em andamento','暂无待确认掏箱':'Sem desova pendente','暂无已掏箱记录':'Sem registros de desova concluída','全部地点':'Todos os locais','全部掏箱地点':'Todos os locais de desova','掏箱/还箱状态':'Status de desova/devolução','已到达，无需掏箱':'Chegou, sem necessidade de desova','已确认到达':'Chegada confirmada','已确认掏箱':'Desova confirmada','可在动态运输计划中继续运输':'Pode continuar o transporte no plano dinâmico',
+      '待维护IRA':'IRA pendente de manutenção','清关完成':'Desembaraço concluído','清关维护':'Manutenção do desembaraço','待发布集装箱':'Contêineres pendentes de publicação','已发布的提箱计划':'Planos de retirada publicados','已发布的运输计划':'Planos de transporte publicados','港口提箱任务':'Tarefas de retirada no porto','其他运输任务':'Outras tarefas de transporte','门岗登记 / 进厂放行':'Registro na portaria / Liberação de entrada','工厂内等待':'Aguardando dentro da fábrica','卸货口确认':'Confirmação na doca',
+      '费用统计':'Estatísticas de custos','费用明细':'Detalhamento de custos','费用报表':'Relatório de custos','滞箱费':'Demurrage','堆存费':'Armazenagem','异常堆存费':'Armazenagem anormal','免费期':'Período livre','最后免费日':'Último dia livre','7天内将产生滞箱费':'Demurrage prevista em 7 dias','无':'Nenhum','暂无数据':'Sem dados','暂无符合条件的数据':'Sem dados correspondentes','操作成功':'Operação concluída','保存成功':'Salvo com sucesso','云端保存失败':'Falha ao salvar na nuvem'
+    });
+
+    Object.assign(i18nMap['en-US'], {
+      '生产计划维护':'Production Plan Maintenance','工厂日历':'Factory Calendar','门岗登记':'Gate Registration','卸货口收货':'Dock Receiving','自动备份中心':'Auto Backup Center','数据恢复中心':'Data Recovery Center',
+      '预计到达':'Estimated arrival','出发地':'Origin','来源地':'Origin','车牌':'Plate','司机':'Driver','电话':'Phone','已确认':'Confirmed','未发运':'Not shipped','门口':'Gate','厂内等待':'Waiting inside factory','卸货中':'Unloading','已完成卸货':'Unloading completed'
+    });
+
+    function translateMixedTextV443(raw, map){
+      if(!raw || !map) return raw;
+      let out = raw;
+      Object.keys(map).sort((a,b)=>b.length-a.length).forEach(k=>{
+        if(out.includes(k)) out = out.split(k).join(map[k]);
+      });
+      return out;
+    }
 
     function t(text){
       if(currentLang === 'zh-CN') return text;
@@ -2886,20 +2919,28 @@ function getContainerLocation(cid){
     function applyLanguage(){
       let sel = document.getElementById('languageSelect');
       if(sel) sel.value = currentLang;
+      document.documentElement.lang = currentLang;
       if(currentLang === 'zh-CN') return;
       const map = i18nMap[currentLang] || {};
       function walk(node){
         if(node.nodeType === 3){
           let raw = node.nodeValue;
-          let trimmed = raw.trim();
-          if(map[trimmed]) node.nodeValue = raw.replace(trimmed, map[trimmed]);
+          if(raw && raw.trim()) node.nodeValue = translateMixedTextV443(raw, map);
         } else if(node.nodeType === 1) {
-          if(node.tagName === 'INPUT' && node.placeholder && map[node.placeholder]) node.placeholder = map[node.placeholder];
-          if(node.tagName === 'OPTION') return;
+          if(['SCRIPT','STYLE','TEXTAREA'].includes(node.tagName)) return;
+          ['placeholder','title','aria-label','value'].forEach(attr=>{
+            if(node.hasAttribute && node.hasAttribute(attr)){
+              const val = node.getAttribute(attr);
+              if(val) node.setAttribute(attr, translateMixedTextV443(val, map));
+            }
+          });
           Array.from(node.childNodes).forEach(walk);
         }
       }
       walk(document.getElementById('mainApp') || document.body);
+      // 顶部语言选择和按钮区域也需要翻译。
+      const top = document.querySelector('.topbar') || document.querySelector('.header') || document.body;
+      if(top && top !== (document.getElementById('mainApp') || document.body)) walk(top);
     }
 
     function renderTable(containerId,headers,rowsData,rowRenderer){
@@ -4378,6 +4419,29 @@ let main=document.getElementById('mainContent');
       });
     }
 
+    // V44.3：在途运输-到货确认排序：预计到达时间 → 批次号 → 集装箱序号。
+    function sortTasksByEtaBatchSeq(list){
+      return [...(list || [])].sort((a,b)=>{
+        const ta = a.estimatedArrival || a.arrivalDate || a.planArrivalTime || '';
+        const tb = b.estimatedArrival || b.arrivalDate || b.planArrivalTime || '';
+        const da = ta ? new Date(ta).getTime() : Number.MAX_SAFE_INTEGER;
+        const db = tb ? new Date(tb).getTime() : Number.MAX_SAFE_INTEGER;
+        const va = Number.isNaN(da) ? Number.MAX_SAFE_INTEGER : da;
+        const vb = Number.isNaN(db) ? Number.MAX_SAFE_INTEGER : db;
+        if(va !== vb) return va - vb;
+        const bc = String(a.batch || '').localeCompare(String(b.batch || ''),'zh-CN',{numeric:true});
+        if(bc !== 0) return bc;
+        const sa = getTaskContainerSeq(a);
+        const sb = getTaskContainerSeq(b);
+        const na = parseInt(sa || '999999', 10);
+        const nb = parseInt(sb || '999999', 10);
+        const nva = Number.isNaN(na) ? 999999 : na;
+        const nvb = Number.isNaN(nb) ? 999999 : nb;
+        if(nva !== nvb) return nva - nvb;
+        return String(a.containerNo || '').localeCompare(String(b.containerNo || ''),'zh-CN',{numeric:true});
+      });
+    }
+
     function getArrivalConfirmFilters(){
       const rawBatch = (document.getElementById('arrivalSearchBatch')?.value || '').trim();
       const rawContainerNo = (document.getElementById('arrivalSearchContainer')?.value || '').trim();
@@ -4450,7 +4514,7 @@ let main=document.getElementById('mainContent');
           <input type="text" id="arrivalSearchSeq" placeholder="集装箱序号" value="${f.rawSeq || ''}" oninput="refreshLocationConfirmSearch()">
           <button class="btn btn-primary" onclick="refreshLocationConfirmSearch()">查询</button>
           <button class="btn" onclick="clearLocationConfirmSearch()">重置</button>
-          <span style="font-size:12px;color:#909399;">按序号升序显示，支持批次号/集装箱号查询</span>
+          <span style="font-size:12px;color:#909399;">按预计到达时间、批次号、集装箱序号排序，支持批次号/集装箱号/序号查询</span>
         </div>`;
       if(arriving.length===0)html+='<div style="padding:20px;text-align:center">暂无在途运输</div>';
       else html+='<div id="arrivingTable"></div>';
@@ -4463,14 +4527,14 @@ let main=document.getElementById('mainContent');
       html+='</div></div>';
       container.innerHTML=html;
       if(arriving.length>0){
-        renderTable('arrivingTable',['序号','批次','集装箱号','出发地','目的地','预计到达','操作'],arriving,(t)=>{
+        renderTable('arrivingTable',['序号','批次','集装箱号','出发地','目的地','预计到达','操作'],sortTasksByEtaBatchSeq(arriving),(t)=>{
           let tr=document.createElement('tr');
           tr.innerHTML=`<td><span class="sequence-badge">${getTaskContainerSeq(t)||'-'}</span></td><td>${t.batch}</td><td>${t.containerNo}</td><td>${t.from}</td><td>${t.to}</td><td>${t.estimatedArrival?fmtDateTime(t.estimatedArrival):'-'}</td><td><button class="btn btn-sm btn-success" onclick="doArrival(${t.id})">确认到达</button></td>`;
           return tr;
         });
       }
       if(pendingUnpack.length>0){
-        renderTable('pendingUnpackTable',['序号','批次','集装箱号','目的地','到达时间','操作'],sortTasksByContainerSeq(pendingUnpack),(t)=>{
+        renderTable('pendingUnpackTable',['序号','批次','集装箱号','目的地','到达时间','操作'],sortTasksByEtaBatchSeq(pendingUnpack),(t)=>{
           let needUnpack=(t.to==='Rio Claro'||t.to==='IRA库房'||t.to==='工厂');
           let actionHtml=!needUnpack?`<span class="status-badge status-ready">已到达，无需掏箱</span>`:`<button class="btn btn-sm btn-warning" onclick="doUnpack(${t.id})">确认掏箱</button>`;
           let tr=document.createElement('tr');
@@ -4479,7 +4543,7 @@ let main=document.getElementById('mainContent');
         });
       }
       if(completedUnpack.length>0){
-        renderTable('completedUnpackTable',['序号','批次','集装箱号','目的地','到达时间','掏箱/还箱状态'],sortTasksByContainerSeq(completedUnpack),(t)=>{
+        renderTable('completedUnpackTable',['序号','批次','集装箱号','目的地','到达时间','掏箱/还箱状态'],sortTasksByEtaBatchSeq(completedUnpack),(t)=>{
           let existingRecord=returnRecords.find(r=>r.containerId===t.containerId&&r.location===t.to);
           let status='已完成';
           let cls='status-ready';
