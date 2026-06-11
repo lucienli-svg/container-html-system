@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V42.24 Dashboard Workday Sync</title>
+  <title>集装箱智能监控管理系统 V45.4 Workflow Guard</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
     /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
@@ -96,7 +96,7 @@
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.12</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V45.4</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -2609,7 +2609,70 @@ function getContainerLocation(cid){
       }
     }
     
-    function updateContainerStatus(){containers.forEach(c=>{let bls=containerBlMap.filter(m=>m.containerId===c.id).map(m=>m.blNo);let allCleared=bls.length===0||bls.every(bl=>{let b=blList.find(b=>b.blNo===bl||b.houseBlNo===bl);return b?.isCleared;});c.customsStatus=allCleared?'已清关':'清关中';});}
+    // V45.4 修复：基础数据导入后必须先进入 提单/IRA -> 清关 -> 提箱计划。
+    // 严禁把“没有提单映射”的集装箱默认判定为已清关；缺失提单时自动生成待补充提单记录。
+    function ensureContainerBlWorkflowIntegrity(){
+      let changed = false;
+      if(!Array.isArray(containers)) containers = [];
+      if(!Array.isArray(blList)) blList = [];
+      if(!Array.isArray(containerBlMap)) containerBlMap = [];
+      containers.forEach(c => {
+        if(!c || c.id === undefined || c.id === null) return;
+        let maps = containerBlMap.filter(m => String(m.containerId) === String(c.id));
+        if(maps.length === 0){
+          createBlForContainer(c.id, c.vessel || '未维护', '', c.containerNo || c.id);
+          changed = true;
+        }
+      });
+      // 清理无效或重复映射，避免一个箱被错误关联到不存在的提单。
+      const seen = new Set();
+      containerBlMap = containerBlMap.filter(m => {
+        if(!m || m.containerId === undefined || !m.blNo) return false;
+        const existsContainer = containers.some(c => String(c.id) === String(m.containerId));
+        const existsBl = blList.some(b => String(b.blNo || '') === String(m.blNo) || String(b.houseBlNo || '') === String(m.blNo));
+        const key = String(m.containerId) + '|' + String(m.blNo);
+        if(!existsContainer || !existsBl || seen.has(key)) { changed = true; return false; }
+        seen.add(key);
+        return true;
+      });
+      return changed;
+    }
+
+    function getRelatedBlsByContainer(c){
+      if(!c) return [];
+      return containerBlMap
+        .filter(m => String(m.containerId) === String(c.id))
+        .map(m => blList.find(b => String(b.blNo || '') === String(m.blNo) || String(b.houseBlNo || '') === String(m.blNo)))
+        .filter(Boolean);
+    }
+
+    function isContainerIraMaintained(c){
+      const relatedBls = getRelatedBlsByContainer(c);
+      return relatedBls.length > 0 && relatedBls.every(bl => String(bl.iraNo || '').trim());
+    }
+
+    function isContainerCustomsCleared(c){
+      const relatedBls = getRelatedBlsByContainer(c);
+      return relatedBls.length > 0 && relatedBls.every(bl => bl.isCleared === true && String(bl.clearanceDate || '').trim());
+    }
+
+    function canCreatePickupPlan(c){
+      return !!(c && isOperationalVisibleContainer(c) && isContainerIraMaintained(c) && isContainerCustomsCleared(c) && !c.actualPickupTime && !pickupPlans.some(p => String(p.containerId) === String(c.id) && p.status !== 'cancelled'));
+    }
+
+    function updateContainerStatus(){
+      ensureContainerBlWorkflowIntegrity();
+      containers.forEach(c => {
+        const relatedBls = getRelatedBlsByContainer(c);
+        if(relatedBls.length === 0){
+          c.customsStatus = '清关中';
+          c.iraStatus = '待维护IRA';
+          return;
+        }
+        c.iraStatus = relatedBls.every(bl => String(bl.iraNo || '').trim()) ? '已维护IRA' : '待维护IRA';
+        c.customsStatus = relatedBls.every(bl => bl.isCleared === true && String(bl.clearanceDate || '').trim()) ? '已清关' : '清关中';
+      });
+    }
     function addStock(cid,loc){locationStock=locationStock.filter(s=>s.containerId!==cid);locationStock.push({containerId:cid,location:loc,isActive:true});}
     function needsReturn(cid,to,from){if(!(to==='Rio Claro'||to==='IRA库房'||to==='工厂'))return false;if(!(from==='港口'||from==='RG堆场'))return false;if(returnRecords.some(r=>r.containerId===cid&&r.isReturnConfirmed))return false;if(returnRecords.some(r=>r.containerId===cid&&!r.isReturnConfirmed&&r.type==='return_needed'))return false;return true;}
     
@@ -3385,7 +3448,7 @@ let main=document.getElementById('mainContent');
       if(!batch||!no){alert('请填写必填项');return;}
       if(containers.find(c=>c.containerNo===no)){alert('集装箱号已存在');return;}
       let newId=nextIds.container++;
-      containers.push({id:newId,batch,containerSeq:seq,containerNo:no,vessel,containerType:type,eta,actualPickupTime:null});
+      containers.push({id:newId,batch,containerSeq:seq,containerNo:no,vessel,containerType:type,eta,actualPickupTime:null,iraStatus:'待维护IRA',customsStatus:'清关中'});
       
       // 处理提单
       if(blsRaw){
@@ -3533,7 +3596,7 @@ let main=document.getElementById('mainContent');
           let eta=fmtDate(etaRaw);
           if(containers.find(c=>normalizeText(c.containerNo)===no)){dup++;continue;}
           let newId=nextIds.container++;
-          containers.push({id:newId,batch,containerSeq:seq,containerNo:no,vessel,containerType:type,eta,actualPickupTime:null});
+          containers.push({id:newId,batch,containerSeq:seq,containerNo:no,vessel,containerType:type,eta,actualPickupTime:null,iraStatus:'待维护IRA',customsStatus:'清关中'});
           let blItems = blsRaw ? blsRaw.split(',').map(s=>s.trim()).filter(Boolean) : [''];
           if(!blsRaw) placeholder++;
           for(let bl of blItems){
@@ -3545,7 +3608,7 @@ let main=document.getElementById('mainContent');
         saveData();
         closeModal();
         renderContainerTable();
-        alert(`成功导入 ${success} 条，跳过重复 ${dup} 条${placeholder ? `，其中 ${placeholder} 条未填写提单号，系统已用集装箱号生成待补充提单记录` : ''}`);
+        alert(`成功导入 ${success} 条，跳过重复 ${dup} 条${placeholder ? `，其中 ${placeholder} 条未填写提单号，系统已用集装箱号生成待补充提单记录` : ''}。新导入数据将先进入提单/IRA管理和清关维护，完成IRA与清关时间后才可制作提箱计划。`);
       };
       reader.readAsArrayBuffer(file);
     }
@@ -3695,6 +3758,7 @@ let main=document.getElementById('mainContent');
 
     // ==================== 提单/IRA管理（新增批次搜索和批次显示） ====================
     function renderBlIra(container){
+      updateContainerStatus();
       container.innerHTML=`
         <div class="card">
           <div class="card-header"><span class="card-title">📋 待维护IRA</span><div><button class="btn export-btn" onclick="exportIraImportTemplate()">📥 IRA导入模板</button><button class="btn btn-success" onclick="showIraImport()">📎 批量导入IRA</button></div></div>
@@ -3893,6 +3957,7 @@ let main=document.getElementById('mainContent');
     
     // ==================== 清关维护（新增批次搜索和批次显示） ====================
     function renderCustoms(container){
+      updateContainerStatus();
       container.innerHTML=`
         <div class="card">
           <div class="card-header"><span class="card-title">🛃 待清关提单</span></div>
@@ -4025,7 +4090,7 @@ let main=document.getElementById('mainContent');
     // ==================== 以下为简化版的其他模块（保持原有功能） ====================
     function renderPickupPlan(container){
       updateContainerStatus();
-      let allReady=containers.filter(c=>isOperationalVisibleContainer(c)&&c.customsStatus==='已清关'&&!c.actualPickupTime&&!pickupPlans.some(p=>p.containerId===c.id&&p.status!=='cancelled'));
+      let allReady=containers.filter(c=>canCreatePickupPlan(c));
       allReady.sort((a,b)=>String(a.batch||'').localeCompare(String(b.batch||'')) || String(a.containerNo||'').localeCompare(String(b.containerNo||'')));
       let published=pickupPlans.filter(p=>p.status!=='cancelled');
       container.innerHTML=`
@@ -4071,7 +4136,7 @@ let main=document.getElementById('mainContent');
 
     window.filterPickupTable = function(){
       // 顶部查询条件同时作用于“待发布集装箱”和“已发布提箱计划”
-      let ready=containers.filter(c=>isOperationalVisibleContainer(c)&&c.customsStatus==='已清关'&&!c.actualPickupTime&&!pickupPlans.some(p=>p.containerId===c.id&&p.status!=='cancelled'));
+      let ready=containers.filter(c=>canCreatePickupPlan(c));
       let published=pickupPlans.filter(p=>p.status!=='cancelled');
       renderPickupTable(filterPickupRows(ready,'pickup'));
       renderPublishedPlans(filterPickupRows(published,'pickup'));
