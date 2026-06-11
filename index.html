@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V44.4 Dashboard Workday Sync</title>
+  <title>集装箱智能监控管理系统 V42.24 Dashboard Workday Sync</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
-    /* ==================== V44.4：批次规则引擎 + 首页生产保供看板 ==================== */
+    /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
     function v42SeqNum(v){ const n=parseInt(String(v||'').replace(/[^0-9]/g,''),10); return isNaN(n)?null:n; }
     function v42IsSupplementBatch(batch){ return String(batch||'').trim().toUpperCase().startsWith('BX'); }
     function v42BatchRule(batch){
@@ -11272,6 +11272,92 @@ let main=document.getElementById('mainContent');
   setTimeout(()=>{ try{ window.applyLanguage(); }catch(e){} }, 1500);
   try{ document.title = 'Sistema Inteligente de Monitoramento de Contêineres V44.4'; }catch(e){}
   console.log('V44.4 full i18n patch loaded');
+})();
+</script>
+
+
+<script>
+// ==================== V44.5 修复：运输任务确认提箱定位错误 ====================
+(function(){
+  const VERSION = 'V44.5';
+  function encKey(obj){
+    try{
+      const s = JSON.stringify({id: obj.id ?? null, containerId: obj.containerId ?? null, containerNo: obj.containerNo ?? '', batch: obj.batch ?? '', seq: obj.containerSeq ?? obj.seq ?? ''});
+      return btoa(unescape(encodeURIComponent(s))).replace(/=+$/,'');
+    }catch(e){ return String(obj.containerNo || obj.containerId || obj.id || '').replace(/[^a-zA-Z0-9_-]/g,'_'); }
+  }
+  function decKey(key){
+    try{
+      let s = String(key||'');
+      while(s.length % 4) s += '=';
+      return JSON.parse(decodeURIComponent(escape(atob(s))));
+    }catch(e){ return {containerNo:String(key||'')}; }
+  }
+  function norm(v){ return String(v ?? '').trim(); }
+  function pendingPlanCandidates(k){
+    const list = (window.pickupPlans || pickupPlans || []).filter(p => p && p.status !== 'confirmed' && p.status !== 'cancelled');
+    let arr = list;
+    if(k.containerNo) arr = arr.filter(p => norm(p.containerNo) === norm(k.containerNo));
+    if(arr.length === 0 && k.containerId != null) arr = list.filter(p => norm(p.containerId) === norm(k.containerId));
+    if(arr.length === 0 && k.id != null) arr = list.filter(p => norm(p.id) === norm(k.id));
+    if(arr.length > 1 && k.batch) arr = arr.filter(p => norm(p.batch) === norm(k.batch)) || arr;
+    if(arr.length > 1 && k.seq) arr = arr.filter(p => norm(p.containerSeq || p.seq) === norm(k.seq)) || arr;
+    return arr;
+  }
+  window.confirmPickupTaskByKey = function(key){
+    const k = decKey(key);
+    const candidates = pendingPlanCandidates(k);
+    const plan = candidates[0];
+    if(!plan){ alert('找不到对应的待确认提箱计划，请刷新后重试。'); return; }
+    const inputId = `pickupTimeKey_${key}`;
+    let actualTime = document.getElementById(inputId)?.value || '';
+    if(!actualTime){
+      // 兼容旧输入框ID，避免历史页面仍存在 pickupTime_id
+      actualTime = document.getElementById(`pickupTime_${plan.id}`)?.value || '';
+    }
+    if(!actualTime){ alert('请填写实际提箱日期'); return; }
+
+    const cont = (window.containers || containers || []).find(c => norm(c.id) === norm(plan.containerId) || norm(c.containerNo) === norm(plan.containerNo));
+    if(cont) cont.actualPickupTime = actualTime;
+    plan.status = 'confirmed';
+    plan.actualPickupTime = actualTime;
+    plan.needReconfirm = false;
+    try{ if(typeof syncPickupPlanTransportLink432 === 'function') syncPickupPlanTransportLink432(plan, {createIfMissing:true}); }catch(e){ console.warn('syncPickupPlanTransportLink432 failed', e); }
+    try{ if(typeof cleanupFactoryTasksV43 === 'function') cleanupFactoryTasksV43({noSave:true}); }catch(e){}
+
+    const keepDate = (document.querySelector('.date-tab.active')?.dataset?.date) || (typeof getDatePart === 'function' ? getDatePart(plan.arrivalDate) : '');
+    const keepScroll = window.scrollY;
+    try{ saveData(); }catch(e){ console.warn('saveData failed', e); alert('本地状态已更新，但云端保存可能失败，请稍后检查同步状态。'); }
+    const main = document.getElementById('mainContent');
+    try{
+      if(main && keepDate && typeof window.renderTransportTasksWithDate === 'function') window.renderTransportTasksWithDate(main, keepDate);
+      else if(typeof renderContent === 'function') renderContent();
+    }catch(e){ try{ renderContent(); }catch(_){} }
+    setTimeout(()=>window.scrollTo(0, keepScroll), 0);
+    alert(`已确认提箱 ${plan.containerNo}`);
+  };
+
+  // 兼容旧按钮：如果仍有 confirmPickupTask(id)，优先按 id 找唯一计划；若 id 重复则提示刷新使用新版按钮。
+  window.confirmPickupTask = function(planId){
+    const list = (window.pickupPlans || pickupPlans || []).filter(p => p && p.status !== 'confirmed' && p.status !== 'cancelled' && norm(p.id) === norm(planId));
+    if(list.length === 1) return window.confirmPickupTaskByKey(encKey(list[0]));
+    if(list.length > 1){ alert('检测到计划ID重复，已启用新版定位逻辑，请刷新页面后再确认提箱。'); return; }
+    alert('找不到计划，请刷新后重试。');
+  };
+
+  // 覆盖运输任务操作列：用唯一key绑定输入框和按钮，避免相同id导致确认到错误集装箱。
+  window.v4215ActionCell = function(item){
+    if(item.type === 'pending'){
+      const key = encKey(item);
+      return `<input type="date" id="pickupTimeKey_${key}" class="form-control" style="width:125px;margin-bottom:4px;"><br><button class="btn btn-sm btn-success" onclick="confirmPickupTaskByKey('${key}')">确认提箱</button>`;
+    }
+    return `<button class="btn btn-sm btn-warning" onclick="editDynamicTask(${item.id})">编辑</button>`;
+  };
+  // 全局函数声明可能未挂到window，尝试重新声明同名函数以覆盖后续渲染调用。
+  try{ v4215ActionCell = window.v4215ActionCell; }catch(e){}
+
+  try{ document.title = 'Sistema Inteligente de Monitoramento de Contêineres V44.5'; }catch(e){}
+  console.log('V44.5 pickup confirmation key patch loaded');
 })();
 </script>
 
