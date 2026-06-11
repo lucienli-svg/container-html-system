@@ -9854,7 +9854,138 @@ let main=document.getElementById('mainContent');
     };
   }
 
-  console.log('V43.1-SP4 Import WhiteList loaded');
+
+
+  /* ==================== V43.1-SP5 基础数据导入ID保护 + 严格来源修复 ====================
+     根因修复：部分历史 app_state 中 nextIds.container 小于现有最大 container.id，
+     新导入箱会复用旧ID，导致 containerBlMap 关联到旧提单/旧IRA，表现为：
+     1) 模板中是 MSC/MEDUYF...，系统显示成 EGLV...；
+     2) 新导入箱显示旧IRA号；
+     3) 出现模板中没有的旧数据。
+     SP5规则：导入时永远使用当前 containers 中最大ID+1，禁止复用旧ID；
+     同时继续保持 SP4 白名单导入：不生成提单、不生成IRA、不生成清关数据。
+  */
+  function sp5MaxNumericId(list){
+    let max = 0;
+    (list || []).forEach(x => {
+      const n = Number(x && x.id);
+      if(Number.isFinite(n) && n > max) max = n;
+    });
+    return max;
+  }
+  function sp5SyncNextIds(){
+    if(!window.nextIds || typeof nextIds !== 'object') window.nextIds = nextIds = {};
+    const maxContainerId = sp5MaxNumericId(containers || []);
+    const current = Number(nextIds.container || 1);
+    nextIds.container = Math.max(current, maxContainerId + 1, 1);
+    return nextIds.container;
+  }
+  function sp5AllocateContainerId(){
+    sp5SyncNextIds();
+    const id = nextIds.container;
+    nextIds.container = id + 1;
+    return id;
+  }
+  function sp5CleanMapsForContainerId(containerId){
+    // 新ID理论上不应存在映射；这里是保险：避免任何旧脏映射污染新导入数据。
+    if(!Array.isArray(containerBlMap)) containerBlMap = [];
+    for(let i = containerBlMap.length - 1; i >= 0; i--){
+      if(String(containerBlMap[i].containerId) === String(containerId)) containerBlMap.splice(i, 1);
+    }
+  }
+  function sp5IsImportedFileLikelyHeader(rows){
+    if(!rows || !rows.length) return false;
+    const first = rows[0] || [];
+    return first.some(v => ['批次','集装箱序号','集装箱号','船公司','箱型','到港时间','提单号','主提单号','分提单号'].includes(sp4Text(v)));
+  }
+
+  window.importExcel = importExcel = function(){
+    let file=document.getElementById('importFile')?.files?.[0];
+    if(!file){alert('请选择文件');return;}
+    let reader=new FileReader();
+    reader.onload=function(e){
+      try{
+        let data=new Uint8Array(e.target.result);
+        let workbook=XLSX.read(data,{type:'array',cellDates:true});
+        let sheet=workbook.Sheets[workbook.SheetNames[0]];
+        let rows=XLSX.utils.sheet_to_json(sheet,{header:1,defval:'',raw:false});
+        if(!rows.length){ alert('Excel中没有数据'); return; }
+        const idx = sp4BuildIndex(rows);
+        if(idx.no < 0){ alert('模板中未找到“集装箱号”列，导入已取消。'); return; }
+
+        sp5SyncNextIds();
+        let success=0, dup=0, skipped=0, missingBl=0, blLinked=0;
+        let idFixedCount=0;
+        const start = idx.headerRows ? 1 : 0;
+
+        for(let i=start;i<rows.length;i++){
+          let row=rows[i];
+          if(!row || row.every(v => sp4Text(v) === '')) continue;
+
+          let batch=sp4Get(row,idx.batch);
+          let seq=sp4Get(row,idx.seq);
+          let no=sp4Get(row,idx.no);
+          let vessel=sp4Get(row,idx.vessel);
+          let type=sp4Get(row,idx.type) || '';
+          let etaRaw=sp4Get(row,idx.eta);
+          let blRaw=sp4Get(row,idx.bl);
+          let masterRaw=sp4Get(row,idx.master);
+          let houseRaw=sp4Get(row,idx.house);
+
+          if(!batch && !seq && !no){ skipped++; continue; }
+          if(!no){ skipped++; continue; }
+
+          // 已存在的箱号绝不覆盖、不追加旧提单，避免二次导入污染已有数据。
+          if(sp4ContainerExists(no)){ dup++; continue; }
+
+          let newId=sp5AllocateContainerId();
+          // 如果历史脏数据导致新ID仍然有映射，先清空这个ID的旧映射。
+          const oldMapCount=(containerBlMap||[]).filter(m=>String(m.containerId)===String(newId)).length;
+          if(oldMapCount){ sp5CleanMapsForContainerId(newId); idFixedCount += oldMapCount; }
+
+          let eta = typeof fmtDate === 'function' ? fmtDate(etaRaw) : etaRaw;
+          containers.push({
+            id:newId,
+            batch:batch,
+            containerSeq:seq,
+            containerNo:no,
+            vessel:vessel,
+            containerType:type,
+            eta:eta,
+            actualPickupTime:null,
+            customsStatus:'清关中'
+          });
+
+          let linked = sp4LinkBlFromTemplate(newId, vessel, blRaw, masterRaw, houseRaw);
+          blLinked += linked;
+          if(!linked) missingBl++;
+          success++;
+        }
+
+        // 再同步一次，确保后续新增也不会复用ID。
+        sp5SyncNextIds();
+        if(typeof updateContainerStatus === 'function') updateContainerStatus();
+        saveData();
+        closeModal();
+        renderContainerTable();
+
+        let msg = `SP5严格导入完成：成功导入 ${success} 条，重复跳过 ${dup} 条，空行/无箱号跳过 ${skipped} 条。\n按模板真实提单关联 ${blLinked} 条。`;
+        if(missingBl) msg += `\n${missingBl} 条未关联提单：仅保存基础数据，不进入IRA/清关流程。`;
+        if(idFixedCount) msg += `\n已清理 ${idFixedCount} 条历史ID脏映射，避免旧提单/旧IRA污染新导入数据。`;
+        msg += `\n基础数据导入不会生成IRA号、不会生成提单号、不会生成长荣主/分提单。`;
+        alert(msg);
+      }catch(err){
+        console.error(err);
+        alert('导入失败：请检查Excel模板列名与数据格式。');
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  // 登录/加载后同步 nextIds，只修ID计数器，不改业务数据。
+  setTimeout(()=>{ try{ sp5SyncNextIds(); }catch(e){ console.warn('SP5 nextIds sync skipped', e); } }, 1000);
+
+  console.log('V43.1-SP5 Import ID Guard loaded');
 })();
 </script>
 
