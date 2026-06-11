@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V45.1 Dashboard Workday Sync</title>
+  <title>集装箱智能监控管理系统 V42.24 Dashboard Workday Sync</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
     /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
@@ -11730,6 +11730,192 @@ let main=document.getElementById('mainContent');
   };
   try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V45.1'; }catch(e){}
   console.log('V45.1 emergency transport pickup flow patch loaded');
+})();
+</script>
+
+
+
+<script>
+/* ==================== V45.2 紧急修复：到货确认/门岗/卸货口状态持久化与精准定位 ====================
+   修复范围：
+   1) 到货确认点击后仍停留在待确认列表。
+   2) 门岗确认到门口无反应。
+   3) 旧数据中可能存在重复 id，不能再只依赖 task.id 执行操作。
+   4) 所有关键状态变更先写本地，再触发云端保存，避免刷新回退。
+*/
+(function(){
+  const PATCH_VERSION='V45.2';
+  const arr=v=>Array.isArray(v)?v:[];
+  const norm=v=>String(v??'').trim();
+  function encodeTaskKey(t){
+    try{
+      const payload={
+        id:t.id??null,
+        containerId:t.containerId??null,
+        containerNo:t.containerNo||'',
+        batch:t.batch||'',
+        from:t.from||'',
+        to:t.to||t.destination||'',
+        eta:t.estimatedArrival||t.arrivalDate||'',
+        status:t.status||'',
+        op:t.operationStatus||''
+      };
+      return btoa(unescape(encodeURIComponent(JSON.stringify(payload)))).replace(/=+$/,'');
+    }catch(e){ return String(t.containerNo||t.id||Date.now()).replace(/[^a-zA-Z0-9_-]/g,'_'); }
+  }
+  function decodeTaskKey(key){
+    try{ let s=String(key||''); while(s.length%4) s+='='; return JSON.parse(decodeURIComponent(escape(atob(s)))); }
+    catch(e){ return {containerNo:String(key||'')}; }
+  }
+  function logicalMatch(t,k){
+    if(!t) return false;
+    if(k.containerNo && norm(t.containerNo)===norm(k.containerNo)){
+      if(k.to && norm(t.to||t.destination)!==norm(k.to)) return false;
+      if(k.from && norm(t.from)!==norm(k.from)) return false;
+      if(k.batch && norm(t.batch)!==norm(k.batch)) return false;
+      return true;
+    }
+    if(k.containerId!=null && norm(t.containerId)===norm(k.containerId)){
+      if(k.to && norm(t.to||t.destination)!==norm(k.to)) return false;
+      return true;
+    }
+    if(k.id!=null && norm(t.id)===norm(k.id)) return true;
+    return false;
+  }
+  function findTaskByKey(key, preferredStatus){
+    const k=decodeTaskKey(key);
+    let matches=arr(typeof transportTasks!=='undefined'?transportTasks:[]).filter(t=>logicalMatch(t,k) && t.status!=='cancelled' && !t.cancelled);
+    if(preferredStatus){
+      const exact=matches.filter(t=>t.status===preferredStatus);
+      if(exact.length) matches=exact;
+    }
+    if(matches.length>1 && k.eta){ const eta=matches.filter(t=>norm(t.estimatedArrival||t.arrivalDate)===norm(k.eta)); if(eta.length) matches=eta; }
+    return matches[0]||null;
+  }
+  function findLogicalDuplicates(task){
+    if(!task) return [];
+    return arr(typeof transportTasks!=='undefined'?transportTasks:[]).filter(t=>t && t.status!=='cancelled' && !t.cancelled &&
+      norm(t.containerNo)===norm(task.containerNo) && norm(t.batch)===norm(task.batch) && norm(t.from)===norm(task.from) && norm(t.to||t.destination)===norm(task.to||task.destination));
+  }
+  function localFirstSave(reason){
+    try{ if(typeof compactLargeStorageFields==='function') compactLargeStorageFields(); }catch(e){}
+    try{
+      if(typeof stateFromGlobals==='function' && typeof persistLocal==='function') persistLocal(stateFromGlobals(), true);
+      else if(typeof saveData==='function') saveData();
+    }catch(e){ console.warn('V45.2 local save fallback failed', e); }
+    try{ localStorage.setItem('cc_dirty','1'); localStorage.setItem('cc_lastLocalAction', reason||PATCH_VERSION); }catch(e){}
+    try{
+      const saver = window.saveCloudStateV45 || window.saveCloudStateV44 || window.saveCloudState;
+      if(typeof saver==='function') setTimeout(()=>saver(reason||PATCH_VERSION), 50);
+    }catch(e){ console.warn('V45.2 cloud save scheduled failed', e); }
+  }
+  function keepRender(){
+    const y=window.scrollY;
+    try{ if(typeof renderContent==='function') renderContent(); }catch(e){ console.warn(e); }
+    setTimeout(()=>window.scrollTo(0,y),0);
+  }
+  function addArrivedStockOnce(task){
+    try{
+      if(!task || task.__arrivalStockAdded) return;
+      if(typeof addStock==='function') addStock(task.containerId, task.to);
+      task.__arrivalStockAdded=true;
+    }catch(e){ console.warn('addStock skipped', e); }
+  }
+  window.doArrivalByKeyV452=function(key){
+    const task=findTaskByKey(key,'in_transit') || findTaskByKey(key);
+    if(!task){ alert('未找到当前行运输任务，请刷新后重试。'); return; }
+    const now=new Date().toISOString();
+    const group=findLogicalDuplicates(task);
+    group.forEach(t=>{
+      if(t.status==='in_transit'){
+        t.status='arrived';
+        t.actualArrival=t.actualArrival||now;
+        t.arrivalConfirmedAt=now;
+        t.arrivalConfirmedBy=(typeof currentUser!=='undefined' && (currentUser.name||currentUser.email))||'';
+        addArrivedStockOnce(t);
+      }
+    });
+    task.status='arrived'; task.actualArrival=task.actualArrival||now;
+    localFirstSave('arrival_confirm_'+(task.containerNo||''));
+    keepRender();
+    alert(`已确认到达 ${task.to||task.destination||''}`);
+  };
+  window.doUnpackByKeyV452=function(key){
+    const task=findTaskByKey(key,'arrived') || findTaskByKey(key);
+    if(!task){ alert('未找到当前行到达任务，请刷新后重试。'); return; }
+    if(typeof returnRecords==='undefined' || !Array.isArray(returnRecords)) window.returnRecords=returnRecords=[];
+    let existing=returnRecords.find(r=>String(r.containerId)===String(task.containerId)&&r.location===(task.to||task.destination));
+    if(existing){ alert('已完成掏箱'); return; }
+    const today=(new Date()).toISOString().split('T')[0];
+    const needReturn=(typeof needsReturn==='function') ? needsReturn(task.containerId, task.to, task.from) : (task.to==='工厂' && (task.from==='港口'||task.from==='RG堆场'));
+    if(needReturn){
+      returnRecords.push({containerId:task.containerId,location:task.to,type:'return_needed',unpackDate:today,isReturnConfirmed:false,fromLocation:task.from});
+      task.status='return_pending';
+      alert('已确认掏箱，请运输公司进行还箱确认');
+    }else{
+      returnRecords.push({containerId:task.containerId,location:task.to,type:'unpack',unpackDate:today,isReturnConfirmed:true,fromLocation:task.from});
+      task.status='completed';
+      alert('已确认掏箱，可在动态运输计划中继续运输');
+    }
+    task.unpackConfirmedAt=new Date().toISOString();
+    localFirstSave('unpack_confirm_'+(task.containerNo||''));
+    keepRender();
+  };
+  // 兼容旧按钮：如果仍传 id，也先用 id 找到当前任务，再转成逻辑 key 执行。
+  window.doArrival=function(taskId){ const t=arr(transportTasks).find(x=>String(x.id)===String(taskId)); if(t) return window.doArrivalByKeyV452(encodeTaskKey(t)); alert('未找到当前行运输任务，请刷新后重试。'); };
+  window.confirmArrivalOnly=window.doArrival;
+  window.doUnpack=function(taskId){ const t=arr(transportTasks).find(x=>String(x.id)===String(taskId)); if(t) return window.doUnpackByKeyV452(encodeTaskKey(t)); alert('未找到当前行到达任务，请刷新后重试。'); };
+
+  // 覆盖到货确认渲染，按钮使用逻辑Key，排序保持 ETA → 批次 → 序号。
+  const oldRenderLocationConfirm = (typeof renderLocationConfirm==='function') ? renderLocationConfirm : null;
+  window.renderLocationConfirm = renderLocationConfirm = function(container){
+    try{
+      const visible = t => (typeof isTaskVisibleForArrivalConfirm==='function'?isTaskVisibleForArrivalConfirm(t):true) && (typeof isOperationalVisibleTask==='function'?isOperationalVisibleTask(t):true);
+      const filter = (list)=> typeof filterArrivalConfirmTasks==='function' ? filterArrivalConfirmTasks(list) : list;
+      const sorter = (list)=> typeof sortTasksByEtaBatchSeq==='function' ? sortTasksByEtaBatchSeq(list) : list;
+      let arriving=filter(arr(transportTasks).filter(t=>t.status==='in_transit'&&visible(t)));
+      let arrived=filter(arr(transportTasks).filter(t=>t.status==='arrived'&&visible(t)));
+      let pendingUnpack=[], completedUnpack=[];
+      arrived.forEach(t=>{
+        let needUnpack=(t.to==='Rio Claro'||t.to==='IRA库房'||t.to==='工厂');
+        let existing=arr(returnRecords).find(r=>String(r.containerId)===String(t.containerId)&&r.location===t.to);
+        if(existing&&(existing.type==='unpack'||existing.isReturnConfirmed||existing.type==='return_needed')) completedUnpack.push(t);
+        else if(needUnpack) pendingUnpack.push(t);
+      });
+      let f=(typeof getArrivalConfirmFilters==='function')?getArrivalConfirmFilters():{rawBatch:'',rawContainerNo:'',rawSeq:''};
+      let html=`<div class="card"><div class="card-header"><span class="card-title">✅ 在途运输 - 到货确认</span></div>
+        <div class="search-bar">
+          <input type="text" id="arrivalSearchBatch" placeholder="批次号" value="${f.rawBatch||''}" oninput="refreshLocationConfirmSearch()">
+          <input type="text" id="arrivalSearchContainer" placeholder="集装箱号" value="${f.rawContainerNo||''}" oninput="refreshLocationConfirmSearch()">
+          <input type="text" id="arrivalSearchSeq" placeholder="集装箱序号" value="${f.rawSeq||''}" oninput="refreshLocationConfirmSearch()">
+          <button class="btn btn-primary" onclick="refreshLocationConfirmSearch()">查询</button><button class="btn" onclick="clearLocationConfirmSearch()">重置</button>
+          <span style="font-size:12px;color:#909399;">按预计到达时间、批次号、集装箱序号排序</span>
+        </div>${arriving.length?'<div id="arrivingTable"></div>':'<div style="padding:20px;text-align:center">暂无在途运输</div>'}</div>`;
+      html+=`<div class="card"><div class="card-header"><span class="card-title">📦 待确认掏箱（${pendingUnpack.length}）</span></div>${pendingUnpack.length?'<div id="pendingUnpackTable"></div>':'<div style="padding:20px;text-align:center">暂无待确认掏箱</div>'}</div>`;
+      html+=`<div class="card"><div class="card-header"><span class="card-title">✅ 已掏箱 / 已完成（${completedUnpack.length}）</span><button class="btn btn-sm" id="btnCompletedUnpack" onclick="toggleHistorySection('completedUnpackBody','btnCompletedUnpack')">展开查看</button></div><div id="completedUnpackBody" style="display:none;">${completedUnpack.length?'<div id="completedUnpackTable"></div>':'<div style="padding:20px;text-align:center">暂无已掏箱记录</div>'}</div></div>`;
+      container.innerHTML=html;
+      if(arriving.length) renderTable('arrivingTable',['序号','批次','集装箱号','出发地','目的地','预计到达','操作'],sorter(arriving),(t)=>{let key=encodeTaskKey(t);let tr=document.createElement('tr');tr.innerHTML=`<td><span class="sequence-badge">${(typeof getTaskContainerSeq==='function'?getTaskContainerSeq(t):(t.containerSeq||'-'))||'-'}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.from||'-'}</td><td>${t.to||'-'}</td><td>${t.estimatedArrival?fmtDateTime(t.estimatedArrival):'-'}</td><td><button class="btn btn-sm btn-success" onclick="doArrivalByKeyV452('${key}')">确认到达</button></td>`;return tr;});
+      if(pendingUnpack.length) renderTable('pendingUnpackTable',['序号','批次','集装箱号','目的地','到达时间','操作'],sorter(pendingUnpack),(t)=>{let key=encodeTaskKey(t);let tr=document.createElement('tr');tr.innerHTML=`<td><span class="sequence-badge">${(typeof getTaskContainerSeq==='function'?getTaskContainerSeq(t):(t.containerSeq||'-'))||'-'}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.to||'-'}</td><td>${t.actualArrival?fmtDateTime(t.actualArrival):'-'}</td><td><button class="btn btn-sm btn-warning" onclick="doUnpackByKeyV452('${key}')">确认掏箱</button></td>`;return tr;});
+      if(completedUnpack.length) renderTable('completedUnpackTable',['序号','批次','集装箱号','目的地','到达时间','掏箱/还箱状态'],sorter(completedUnpack),(t)=>{let existing=arr(returnRecords).find(r=>String(r.containerId)===String(t.containerId)&&r.location===t.to);let status=(existing&&existing.type==='return_needed'&&!existing.isReturnConfirmed)?'待还箱':'已完成';let cls=status==='待还箱'?'status-return-pending':'status-ready';let tr=document.createElement('tr');tr.innerHTML=`<td><span class="sequence-badge">${(typeof getTaskContainerSeq==='function'?getTaskContainerSeq(t):(t.containerSeq||'-'))||'-'}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.to||'-'}</td><td>${t.actualArrival?fmtDateTime(t.actualArrival):'-'}</td><td><span class="status-badge ${cls}">${status}</span></td>`;return tr;});
+    }catch(e){ console.error('V45.2 renderLocationConfirm failed, fallback old renderer',e); if(oldRenderLocationConfirm) oldRenderLocationConfirm(container); }
+  };
+
+  // 工厂门岗/卸货口按钮保存强化：旧按钮仍按 id 调用，但执行后本地优先保存并渲染。
+  function mutateFactoryTask(taskId, mutator, okMsg){
+    let t=arr(transportTasks).find(x=>String(x.id)===String(taskId));
+    if(!t){ alert('未找到当前工厂到货任务，请刷新后重试。'); return; }
+    mutator(t);
+    localFirstSave('factory_flow_'+(t.containerNo||''));
+    keepRender();
+    if(okMsg) alert(okMsg);
+  }
+  window.confirmGateArrival=function(taskId){ mutateFactoryTask(taskId,t=>{const now=(typeof nowLocalInput==='function'?nowLocalInput():new Date().toISOString());t.gateArrivalTime=t.gateArrivalTime||now;t.operationStatus='outside_parking';},'已确认到达门口'); };
+  window.releaseFromGate=function(taskId){ mutateFactoryTask(taskId,t=>{const now=(typeof nowLocalInput==='function'?nowLocalInput():new Date().toISOString());t.gateReleaseTime=t.gateReleaseTime||now;t.waitingAreaTime=t.waitingAreaTime||now;t.operationStatus='inside_waiting';},'已放行进厂'); };
+  window.startUnloading=function(taskId){ mutateFactoryTask(taskId,t=>{const now=(typeof nowLocalInput==='function'?nowLocalInput():new Date().toISOString());t.unloadStartTime=t.unloadStartTime||now;t.operationStatus='unloading';},'已开始卸货'); };
+  window.finishUnloading=function(taskId){ mutateFactoryTask(taskId,t=>{const now=(typeof nowLocalInput==='function'?nowLocalInput():new Date().toISOString());t.unloadFinishTime=t.unloadFinishTime||now;t.operationStatus='unloaded'; if(t.from==='港口'||t.from==='RG堆场') t.status='return_pending'; else t.status='completed';},'已确认掏箱完成'); };
+
+  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V45.2'; }catch(e){}
+  console.log('V45.2 arrival/gate stable patch loaded');
 })();
 </script>
 
