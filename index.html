@@ -5116,7 +5116,7 @@ let main=document.getElementById('mainContent');
           <td><input id="gateDriver_${t.id}" class="form-control" value="${t.driverName||''}" placeholder="司机" style="width:90px"></td>
           <td><input id="gatePhone_${t.id}" class="form-control" value="${t.driverPhone||''}" placeholder="电话" style="width:105px"></td>
           <td>${fmtDateTime(t.gateArrivalTime)||'-'}</td><td><span class="status-badge ${st==='outside_parking'?'status-warning':'status-pending'}">${getOpStatusText(t)}</span></td>
-          <td>${st==='not_arrived'?`<button class="btn btn-sm btn-success" onclick="confirmGateArrival(${t.id})">确认到达厂外停车区</button>`:`<button class="btn btn-sm btn-primary" onclick="releaseFromGate(${t.id})">放行到厂内等待</button>`}</td>`;
+          <td>${st==='not_arrived'?`<button class="btn btn-sm btn-success" onclick="confirmGateArrival('${String(t.id).replace(/'/g,\"\\'\")}')">确认到达厂外停车区</button>`:`<button class="btn btn-sm btn-primary" onclick="releaseFromGate('${String(t.id).replace(/'/g,\"\\'\")}')">放行到厂内等待</button>`}</td>`;
         return tr;
       });
     }
@@ -5136,7 +5136,7 @@ let main=document.getElementById('mainContent');
       let tasks=getFactoryOperationTasks(d).filter(t=>getOpStatus(t)==='inside_waiting');
       container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">⏳ 等待区监控</span></div><div class="search-bar"><input type="date" id="waitingAreaDate" value="${d}" onchange="renderWaitingArea(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderWaitingArea(document.getElementById('mainContent'))">查询</button></div><div id="waitingAreaTable"></div></div>`;
       if(tasks.length===0){document.getElementById('waitingAreaTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无厂内等待车辆</div></div>';return;}
-      renderTable('waitingAreaTable',['进入厂内等待','等待分钟','批次','集装箱号','卸货口','车牌','司机','电话','操作'],tasks,(t)=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${fmtDateTime(t.waitingAreaTime)}</td><td>${minutesBetween(t.waitingAreaTime,nowLocalInput())}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td>${t.driverPhone||'-'}</td><td><button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})">进入卸货口/开始卸货</button> <button class="btn btn-sm btn-warning" onclick="openAndonForTask(${t.id})">异常</button></td>`;return tr;});
+      renderTable('waitingAreaTable',['进入厂内等待','等待分钟','批次','集装箱号','卸货口','车牌','司机','电话','操作'],tasks,(t)=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${fmtDateTime(t.waitingAreaTime)}</td><td>${minutesBetween(t.waitingAreaTime,nowLocalInput())}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td>${t.driverPhone||'-'}</td><td><button class="btn btn-sm btn-success" onclick="startUnloading('${String(t.id).replace(/'/g,\"\\'\")}')">进入卸货口/开始卸货</button> <button class="btn btn-sm btn-warning" onclick="openAndonForTask('${String(t.id).replace(/'/g,\"\\'\")}')">异常</button></td>`;return tr;});
     }
     window.startUnloading=function(taskId){let t=transportTasks.find(x=>x.id===taskId);if(!t)return;t.unloadStartTime=t.unloadStartTime||nowLocalInput();t.operationStatus='unloading';saveAndRenderContentKeepState();};
     window.finishUnloading=function(taskId){let t=transportTasks.find(x=>x.id===taskId);if(!t)return;t.unloadFinishTime=t.unloadFinishTime||nowLocalInput();t.operationStatus='unloaded';saveAndRenderContentKeepState();};
@@ -5146,7 +5146,7 @@ let main=document.getElementById('mainContent');
       let docks=['120B','132','140B','140C']; tasks.forEach(t=>{if(t.unloadingDock && !docks.includes(t.unloadingDock)) docks.push(t.unloadingDock);});
       container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🏭 卸货口监控</span></div><div class="search-bar"><input type="date" id="dockMonitorDate" value="${d}" onchange="renderDockMonitoring(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderDockMonitoring(document.getElementById('mainContent'))">查询</button></div><div class="stats-grid">${docks.map(dk=>{let list=tasks.filter(t=>(t.unloadingDock||'')===dk);let doing=list.filter(t=>getOpStatus(t)==='unloading').length;let wait=list.filter(t=>getOpStatus(t)==='inside_waiting').length;return `<div class="stat-card" onclick="showDockDetail('${dk}')"><div class="stat-number">${doing}/${wait}</div><div class="stat-label">${dk} 卸货中/厂内等待</div></div>`}).join('')}</div><div id="dockMonitorTable"></div></div>`;
       if(tasks.length===0){document.getElementById('dockMonitorTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无卸货口执行数据</div></div>';return;}
-      renderTable('dockMonitorTable',['卸货口','状态','批次','集装箱号','车牌','等待开始','卸货开始','卸货完成','操作'],tasks,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);tr.innerHTML=`<td>${t.unloadingDock||'-'}</td><td><span class="status-badge ${st==='unloading'?'status-transport':st==='unloaded'?'status-completed':'status-warning'}">${getOpStatusText(t)}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})">开始</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading(${t.id})">完成</button>`:'-'}</td>`;return tr;});
+      renderTable('dockMonitorTable',['卸货口','状态','批次','集装箱号','车牌','等待开始','卸货开始','卸货完成','操作'],tasks,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);tr.innerHTML=`<td>${t.unloadingDock||'-'}</td><td><span class="status-badge ${st==='unloading'?'status-transport':st==='unloaded'?'status-completed':'status-warning'}">${getOpStatusText(t)}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading('${String(t.id).replace(/'/g,\"\\'\")}')">开始</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading('${String(t.id).replace(/'/g,\"\\'\")}')">完成</button>`:'-'}</td>`;return tr;});
     }
     window.showDockDetail=function(dock){ currentMenu='dockMonitoring'; renderSidebar(); renderContent(); };
     function renderAndonCenter(container){
@@ -5697,7 +5697,7 @@ let main=document.getElementById('mainContent');
       tasks = tasks.sort((a,b)=>getTaskDock(a).localeCompare(getTaskDock(b),'zh-CN',{numeric:true}) || a._seq-b._seq);
       container.innerHTML = `<div class="card"><div class="card-header"><span class="card-title">🚪 门岗监控 / 按生产顺序放行</span><button class="btn export-btn" onclick="exportFactoryOperationTasks()">📥 导出</button></div><div class="search-bar"><input type="date" id="gateMonitorDate" value="${d}" onchange="renderGateMonitoring(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderGateMonitoring(document.getElementById('mainContent'))">查询</button><button class="btn btn-success" onclick="currentMenu='receivingAndon';renderSidebar();renderContent();">打开Andon看板</button></div><div style="font-size:13px;color:#606266;margin-bottom:10px;line-height:1.7;">门岗按集装箱号确认车辆到达，并维护车牌/司机/电话。系统按照生产顺序提示放行；已跳过序号后到达，会自动标记为异常到达优先。</div><div id="gateMonitorTable"></div></div>`;
       if(tasks.length===0){ document.getElementById('gateMonitorTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无门岗/厂外停车区待处理任务</div></div>'; return; }
-      renderTable('gateMonitorTable',['卸货口','顺序','计划到达','批次','集装箱号','车牌','司机','电话','实际到达门岗','状态','操作'],tasks,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);let late=isLateRecoveryTask(t,d);let rec=getRecommendedTaskForDock(d,getTaskDock(t));let recommended=rec&&rec.id===t.id;tr.className=late?'priority-row':recommended?'recommended-row':'';tr.innerHTML=`<td>${getTaskDock(t)}</td><td><span class="sequence-badge">${t._seq<999999?t._seq:'-'}</span>${late?' <span class="andon-tag priority">异常到达</span>':recommended?' <span class="andon-tag recommended">推荐</span>':''}</td><td>${fmtDateTime(t.estimatedArrival)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td><input id="gatePlate_${t.id}" class="form-control" value="${t.truckPlate||''}" placeholder="车牌" style="width:95px"></td><td><input id="gateDriver_${t.id}" class="form-control" value="${t.driverName||''}" placeholder="司机" style="width:90px"></td><td><input id="gatePhone_${t.id}" class="form-control" value="${t.driverPhone||''}" placeholder="电话" style="width:105px"></td><td>${fmtDateTime(t.gateArrivalTime)||'-'}</td><td><span class="status-badge ${st==='outside_parking'?'status-warning':'status-pending'}">${getOpStatusText(t)}</span></td><td>${st==='not_arrived'?`<button class="btn btn-sm btn-success" onclick="confirmGateArrival(${t.id})">确认到达厂外停车区</button>`:`<button class="btn btn-sm btn-primary" onclick="releaseFromGate(${t.id})">放行到厂内等待</button>`}</td>`;return tr;});
+      renderTable('gateMonitorTable',['卸货口','顺序','计划到达','批次','集装箱号','车牌','司机','电话','实际到达门岗','状态','操作'],tasks,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);let late=isLateRecoveryTask(t,d);let rec=getRecommendedTaskForDock(d,getTaskDock(t));let recommended=rec&&rec.id===t.id;tr.className=late?'priority-row':recommended?'recommended-row':'';tr.innerHTML=`<td>${getTaskDock(t)}</td><td><span class="sequence-badge">${t._seq<999999?t._seq:'-'}</span>${late?' <span class="andon-tag priority">异常到达</span>':recommended?' <span class="andon-tag recommended">推荐</span>':''}</td><td>${fmtDateTime(t.estimatedArrival)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td><input id="gatePlate_${t.id}" class="form-control" value="${t.truckPlate||''}" placeholder="车牌" style="width:95px"></td><td><input id="gateDriver_${t.id}" class="form-control" value="${t.driverName||''}" placeholder="司机" style="width:90px"></td><td><input id="gatePhone_${t.id}" class="form-control" value="${t.driverPhone||''}" placeholder="电话" style="width:105px"></td><td>${fmtDateTime(t.gateArrivalTime)||'-'}</td><td><span class="status-badge ${st==='outside_parking'?'status-warning':'status-pending'}">${getOpStatusText(t)}</span></td><td>${st==='not_arrived'?`<button class="btn btn-sm btn-success" onclick="confirmGateArrival('${String(t.id).replace(/'/g,\"\\'\")}')">确认到达厂外停车区</button>`:`<button class="btn btn-sm btn-primary" onclick="releaseFromGate('${String(t.id).replace(/'/g,\"\\'\")}')">放行到厂内等待</button>`}</td>`;return tr;});
     }
     window.releaseFromGate=function(taskId){
       let t=transportTasks.find(x=>x.id===taskId); if(!t) return; enrichTaskSequence(t);
@@ -5710,7 +5710,7 @@ let main=document.getElementById('mainContent');
       let docks=[...new Set(tasks.map(t=>getTaskDock(t)))]; let ordered=[]; docks.forEach(dk=>ordered.push(...getPriorityOrderedTasks(d,dk,['inside_waiting'])));
       container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">⏳ 等待区监控 / 当前应进卸货口顺序</span></div><div class="search-bar"><input type="date" id="waitingAreaDate" value="${d}" onchange="renderWaitingArea(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderWaitingArea(document.getElementById('mainContent'))">查询</button></div><div id="waitingAreaTable"></div></div>`;
       if(ordered.length===0){document.getElementById('waitingAreaTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无厂内等待车辆</div></div>';return;}
-      renderTable('waitingAreaTable',['卸货口','顺序','进入厂内等待','等待分钟','批次','集装箱号','车牌','司机','电话','操作'],ordered,(t)=>{let late=isLateRecoveryTask(t,d);let rec=getRecommendedTaskForDock(d,getTaskDock(t));let recommended=rec&&rec.id===t.id;let tr=document.createElement('tr');tr.className=late?'priority-row':recommended?'recommended-row':'';tr.innerHTML=`<td>${getTaskDock(t)}</td><td><span class="sequence-badge">${t._seq<999999?t._seq:'-'}</span>${late?' <span class="andon-tag priority">异常到达优先</span>':recommended?' <span class="andon-tag recommended">当前推荐</span>':''}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${minutesBetween(t.waitingAreaTime,nowLocalInput())}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td>${t.driverPhone||'-'}</td><td><button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})">进入卸货口/开始卸货</button> <button class="btn btn-sm btn-warning" onclick="openAndonForTask(${t.id})">异常</button></td>`;return tr;});
+      renderTable('waitingAreaTable',['卸货口','顺序','进入厂内等待','等待分钟','批次','集装箱号','车牌','司机','电话','操作'],ordered,(t)=>{let late=isLateRecoveryTask(t,d);let rec=getRecommendedTaskForDock(d,getTaskDock(t));let recommended=rec&&rec.id===t.id;let tr=document.createElement('tr');tr.className=late?'priority-row':recommended?'recommended-row':'';tr.innerHTML=`<td>${getTaskDock(t)}</td><td><span class="sequence-badge">${t._seq<999999?t._seq:'-'}</span>${late?' <span class="andon-tag priority">异常到达优先</span>':recommended?' <span class="andon-tag recommended">当前推荐</span>':''}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${minutesBetween(t.waitingAreaTime,nowLocalInput())}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td>${t.driverPhone||'-'}</td><td><button class="btn btn-sm btn-success" onclick="startUnloading('${String(t.id).replace(/'/g,\"\\'\")}')">进入卸货口/开始卸货</button> <button class="btn btn-sm btn-warning" onclick="openAndonForTask('${String(t.id).replace(/'/g,\"\\'\")}')">异常</button></td>`;return tr;});
     }
     window.startUnloading=function(taskId){let t=transportTasks.find(x=>x.id===taskId);if(!t)return;let chk=canStartUnloadingTask(taskId);if(!chk.ok&&!confirm(chk.msg+'。仍要开始卸货吗？'))return;t.unloadStartTime=t.unloadStartTime||nowLocalInput();t.operationStatus='unloading';saveAndRenderContentKeepState();};
     window.finishUnloading=function(taskId){let t=transportTasks.find(x=>x.id===taskId);if(!t)return;t.unloadFinishTime=t.unloadFinishTime||nowLocalInput();t.operationStatus='unloaded';saveAndRenderContentKeepState();};
@@ -5719,7 +5719,7 @@ let main=document.getElementById('mainContent');
       container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🏭 卸货口监控 / 顺序控制</span></div><div class="search-bar"><input type="date" id="dockMonitorDate" value="${d}" onchange="renderDockMonitoring(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderDockMonitoring(document.getElementById('mainContent'))">查询</button><button class="btn btn-success" onclick="currentMenu='receivingAndon';renderSidebar();renderContent();">打开Andon看板</button></div><div class="stats-grid">${docks.map(dk=>{let list=tasks.filter(t=>getTaskDock(t)===dk);let rec=getRecommendedTaskForDock(d,dk);let doing=list.filter(t=>getOpStatus(t)==='unloading').length;let wait=list.filter(t=>getOpStatus(t)==='inside_waiting').length;return `<div class="stat-card"><div class="stat-number">${doing}/${wait}</div><div class="stat-label">${dk} 卸货中/等待<br>推荐：${rec?rec.containerNo:'-'}</div></div>`}).join('')}</div><div id="dockMonitorTable"></div></div>`;
       if(tasks.length===0){document.getElementById('dockMonitorTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无卸货口执行数据</div></div>';return;}
       let ordered=[];docks.forEach(dk=>ordered.push(...getPriorityOrderedTasks(d,dk,['inside_waiting','unloading','unloaded'])));
-      renderTable('dockMonitorTable',['卸货口','顺序','状态','批次','集装箱号','车牌','等待开始','卸货开始','卸货完成','操作'],ordered,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);let late=isLateRecoveryTask(t,d);let rec=getRecommendedTaskForDock(d,getTaskDock(t));let recommended=rec&&rec.id===t.id;tr.className=late?'priority-row':recommended?'recommended-row':'';tr.innerHTML=`<td>${getTaskDock(t)}</td><td><span class="sequence-badge">${t._seq<999999?t._seq:'-'}</span>${late?' <span class="andon-tag priority">异常到达优先</span>':recommended?' <span class="andon-tag recommended">当前推荐</span>':''}</td><td><span class="status-badge ${st==='unloading'?'status-transport':st==='unloaded'?'status-completed':'status-warning'}">${getOpStatusText(t)}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})">开始</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading(${t.id})">完成</button>`:'-'}</td>`;return tr;});
+      renderTable('dockMonitorTable',['卸货口','顺序','状态','批次','集装箱号','车牌','等待开始','卸货开始','卸货完成','操作'],ordered,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);let late=isLateRecoveryTask(t,d);let rec=getRecommendedTaskForDock(d,getTaskDock(t));let recommended=rec&&rec.id===t.id;tr.className=late?'priority-row':recommended?'recommended-row':'';tr.innerHTML=`<td>${getTaskDock(t)}</td><td><span class="sequence-badge">${t._seq<999999?t._seq:'-'}</span>${late?' <span class="andon-tag priority">异常到达优先</span>':recommended?' <span class="andon-tag recommended">当前推荐</span>':''}</td><td><span class="status-badge ${st==='unloading'?'status-transport':st==='unloaded'?'status-completed':'status-warning'}">${getOpStatusText(t)}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading('${String(t.id).replace(/'/g,\"\\'\")}')">开始</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading('${String(t.id).replace(/'/g,\"\\'\")}')">完成</button>`:'-'}</td>`;return tr;});
     }
 
     // ==================== V41 工厂到货监控：按实际收货流程重构 ====================
@@ -5856,7 +5856,7 @@ let main=document.getElementById('mainContent');
           <td><input id="gateDriver_${t.id}" class="form-control" value="${t.driverName||''}" placeholder="司机" style="width:90px" ${disabled}></td>
           <td><input id="gatePhone_${t.id}" class="form-control" value="${t.driverPhone||''}" placeholder="电话" style="width:105px" ${disabled}></td>
           <td>${fmtDateTime(t.gateArrivalTime)||'-'}</td><td>${renderStatusBadgeV41(st)}</td>
-          <td>${st==='not_arrived'?`<button class="btn btn-sm btn-success" onclick="confirmGateArrival(${t.id})" ${disabled}>确认到门口</button>`:`<button class="btn btn-sm btn-primary" onclick="releaseFromGate(${t.id})" ${disabled}>放行进厂</button>`}</td>`;
+          <td>${st==='not_arrived'?`<button class="btn btn-sm btn-success" onclick="confirmGateArrival('${String(t.id).replace(/'/g,\"\\'\")}')" ${disabled}>确认到门口</button>`:`<button class="btn btn-sm btn-primary" onclick="releaseFromGate('${String(t.id).replace(/'/g,\"\\'\")}')" ${disabled}>放行进厂</button>`}</td>`;
         return tr;
       });
     }
@@ -5872,7 +5872,7 @@ let main=document.getElementById('mainContent');
       if(list.length===0){document.getElementById('factoryDockSection').innerHTML='<div class="table-wrapper"><div style="padding:16px;text-align:center">暂无卸货口收货数据</div></div>'; return;}
       renderTable('factoryDockSection',['卸货口','状态','序号','批次','集装箱号','车牌','进厂时间','开始卸货','完成掏箱','操作'],list,(t)=>{
         let tr=document.createElement('tr'); let st=getFactoryReceivingStatus(t); const dock=t.unloadingDock||''; const disabled=canOperateDock(dock)?'':'disabled';
-        tr.innerHTML=`<td>${dock||'-'}</td><td>${renderStatusBadgeV41(st)}</td><td>${getTaskContainerSeqDisplay(t)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime||t.gateReleaseTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})" ${disabled}>确认到达卸货口/开始卸货</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading(${t.id})" ${disabled}>确认掏箱完成</button>`:'-'}</td>`;
+        tr.innerHTML=`<td>${dock||'-'}</td><td>${renderStatusBadgeV41(st)}</td><td>${getTaskContainerSeqDisplay(t)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime||t.gateReleaseTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading('${String(t.id).replace(/'/g,\"\\'\")}')" ${disabled}>确认到达卸货口/开始卸货</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading('${String(t.id).replace(/'/g,\"\\'\")}')" ${disabled}>确认掏箱完成</button>`:'-'}</td>`;
         return tr;
       });
     }
@@ -11736,7 +11736,7 @@ let main=document.getElementById('mainContent');
 
 
 <script>
-/* ==================== V45.2 紧急修复：到货确认/门岗/卸货口状态持久化与精准定位 ====================
+/* ==================== V45.3 紧急修复：到货确认/门岗/卸货口状态持久化与精准定位 ====================
    修复范围：
    1) 到货确认点击后仍停留在待确认列表。
    2) 门岗确认到门口无反应。
@@ -11744,7 +11744,7 @@ let main=document.getElementById('mainContent');
    4) 所有关键状态变更先写本地，再触发云端保存，避免刷新回退。
 */
 (function(){
-  const PATCH_VERSION='V45.2';
+  const PATCH_VERSION='V45.3';
   const arr=v=>Array.isArray(v)?v:[];
   const norm=v=>String(v??'').trim();
   function encodeTaskKey(t){
@@ -11802,12 +11802,12 @@ let main=document.getElementById('mainContent');
     try{
       if(typeof stateFromGlobals==='function' && typeof persistLocal==='function') persistLocal(stateFromGlobals(), true);
       else if(typeof saveData==='function') saveData();
-    }catch(e){ console.warn('V45.2 local save fallback failed', e); }
+    }catch(e){ console.warn('V45.3 local save fallback failed', e); }
     try{ localStorage.setItem('cc_dirty','1'); localStorage.setItem('cc_lastLocalAction', reason||PATCH_VERSION); }catch(e){}
     try{
       const saver = window.saveCloudStateV45 || window.saveCloudStateV44 || window.saveCloudState;
       if(typeof saver==='function') setTimeout(()=>saver(reason||PATCH_VERSION), 50);
-    }catch(e){ console.warn('V45.2 cloud save scheduled failed', e); }
+    }catch(e){ console.warn('V45.3 cloud save scheduled failed', e); }
   }
   function keepRender(){
     const y=window.scrollY;
@@ -11897,7 +11897,7 @@ let main=document.getElementById('mainContent');
       if(arriving.length) renderTable('arrivingTable',['序号','批次','集装箱号','出发地','目的地','预计到达','操作'],sorter(arriving),(t)=>{let key=encodeTaskKey(t);let tr=document.createElement('tr');tr.innerHTML=`<td><span class="sequence-badge">${(typeof getTaskContainerSeq==='function'?getTaskContainerSeq(t):(t.containerSeq||'-'))||'-'}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.from||'-'}</td><td>${t.to||'-'}</td><td>${t.estimatedArrival?fmtDateTime(t.estimatedArrival):'-'}</td><td><button class="btn btn-sm btn-success" onclick="doArrivalByKeyV452('${key}')">确认到达</button></td>`;return tr;});
       if(pendingUnpack.length) renderTable('pendingUnpackTable',['序号','批次','集装箱号','目的地','到达时间','操作'],sorter(pendingUnpack),(t)=>{let key=encodeTaskKey(t);let tr=document.createElement('tr');tr.innerHTML=`<td><span class="sequence-badge">${(typeof getTaskContainerSeq==='function'?getTaskContainerSeq(t):(t.containerSeq||'-'))||'-'}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.to||'-'}</td><td>${t.actualArrival?fmtDateTime(t.actualArrival):'-'}</td><td><button class="btn btn-sm btn-warning" onclick="doUnpackByKeyV452('${key}')">确认掏箱</button></td>`;return tr;});
       if(completedUnpack.length) renderTable('completedUnpackTable',['序号','批次','集装箱号','目的地','到达时间','掏箱/还箱状态'],sorter(completedUnpack),(t)=>{let existing=arr(returnRecords).find(r=>String(r.containerId)===String(t.containerId)&&r.location===t.to);let status=(existing&&existing.type==='return_needed'&&!existing.isReturnConfirmed)?'待还箱':'已完成';let cls=status==='待还箱'?'status-return-pending':'status-ready';let tr=document.createElement('tr');tr.innerHTML=`<td><span class="sequence-badge">${(typeof getTaskContainerSeq==='function'?getTaskContainerSeq(t):(t.containerSeq||'-'))||'-'}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.to||'-'}</td><td>${t.actualArrival?fmtDateTime(t.actualArrival):'-'}</td><td><span class="status-badge ${cls}">${status}</span></td>`;return tr;});
-    }catch(e){ console.error('V45.2 renderLocationConfirm failed, fallback old renderer',e); if(oldRenderLocationConfirm) oldRenderLocationConfirm(container); }
+    }catch(e){ console.error('V45.3 renderLocationConfirm failed, fallback old renderer',e); if(oldRenderLocationConfirm) oldRenderLocationConfirm(container); }
   };
 
   // 工厂门岗/卸货口按钮保存强化：旧按钮仍按 id 调用，但执行后本地优先保存并渲染。
@@ -11914,8 +11914,110 @@ let main=document.getElementById('mainContent');
   window.startUnloading=function(taskId){ mutateFactoryTask(taskId,t=>{const now=(typeof nowLocalInput==='function'?nowLocalInput():new Date().toISOString());t.unloadStartTime=t.unloadStartTime||now;t.operationStatus='unloading';},'已开始卸货'); };
   window.finishUnloading=function(taskId){ mutateFactoryTask(taskId,t=>{const now=(typeof nowLocalInput==='function'?nowLocalInput():new Date().toISOString());t.unloadFinishTime=t.unloadFinishTime||now;t.operationStatus='unloaded'; if(t.from==='港口'||t.from==='RG堆场') t.status='return_pending'; else t.status='completed';},'已确认掏箱完成'); };
 
-  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V45.2'; }catch(e){}
-  console.log('V45.2 arrival/gate stable patch loaded');
+  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V45.3'; }catch(e){}
+  console.log('V45.3 arrival/gate stable patch loaded');
+})();
+</script>
+
+
+<script>
+/* ==================== V45.3 门岗登记 / 卸货口收货稳定修复 ====================
+   目标：按 Lucien 确认的五状态逻辑推进：
+   未到厂 → 工厂外停车区 → 工厂内等待 → 卸货中 → 卸货完成/待还箱。
+   修复：1) 按钮 id 兼容数字/字符串；2) 门岗车牌/司机/电话保存；
+        3) 卸货完成后进入还箱确认；4) 本地优先保存后再云端同步。
+*/
+(function(){
+  const arr = v => Array.isArray(v) ? v : [];
+  const norm = v => String(v ?? '').trim();
+  function nowV453(){
+    try { return (typeof nowLocalInput === 'function') ? nowLocalInput() : new Date().toISOString(); }
+    catch(e){ return new Date().toISOString(); }
+  }
+  function findFactoryTaskV453(taskId){
+    return arr(typeof transportTasks !== 'undefined' ? transportTasks : []).find(t => norm(t.id) === norm(taskId));
+  }
+  function saveFactoryFlowV453(reason){
+    try { if(typeof saveLocalData === 'function') saveLocalData(); } catch(e){}
+    try { if(typeof saveData === 'function') saveData(); } catch(e){ console.warn('V45.3 saveData skipped', e); }
+    try {
+      if(typeof saveCloudState === 'function') setTimeout(() => saveCloudState(), 0);
+    } catch(e){ console.warn('V45.3 cloud save skipped', e); }
+    try {
+      const y = window.scrollY || 0;
+      if(typeof renderContent === 'function') renderContent();
+      setTimeout(() => window.scrollTo(0, y), 0);
+    } catch(e){ console.warn('V45.3 render skipped', e); }
+  }
+  function setMainStatusAfterFactoryStep(t, op){
+    if(!t) return;
+    if(op === 'outside_parking' || op === 'inside_waiting' || op === 'unloading') {
+      if(!t.status || ['planned','pending','arrived'].includes(t.status)) t.status = 'arrived';
+    }
+    if(op === 'unloaded') {
+      const from = norm(t.from);
+      const to = norm(t.to || t.destination);
+      const needReturn = (typeof needsReturn === 'function') ? needsReturn(t.containerId, to, from) : (to === '工厂' && (from === '港口' || from === 'RG堆场'));
+      t.status = needReturn ? 'return_pending' : 'completed';
+      if(typeof returnRecords !== 'undefined' && Array.isArray(returnRecords)){
+        const exists = returnRecords.some(r => norm(r.containerId) === norm(t.containerId) && norm(r.location) === to);
+        if(!exists){
+          returnRecords.push({
+            containerId: t.containerId,
+            location: to,
+            type: needReturn ? 'return_needed' : 'unpack',
+            unpackDate: new Date().toISOString().slice(0,10),
+            isReturnConfirmed: !needReturn,
+            fromLocation: from
+          });
+        }
+      }
+    }
+  }
+  function mutateFactoryTaskV453(taskId, mutator, msg){
+    const t = findFactoryTaskV453(taskId);
+    if(!t){ alert('未找到当前工厂到货任务，请刷新后重试。'); return; }
+    mutator(t);
+    t.updatedAt = new Date().toISOString();
+    t.updatedBy = (typeof currentUser !== 'undefined' && (currentUser.name || currentUser.email)) || '';
+    saveFactoryFlowV453('factory_flow_v453_' + (t.containerNo || t.id || ''));
+    if(msg) alert(msg);
+  }
+  window.confirmGateArrival = function(taskId){
+    mutateFactoryTaskV453(taskId, t => {
+      const id = String(taskId);
+      t.truckPlate = document.getElementById('gatePlate_' + id)?.value?.trim() || t.truckPlate || '';
+      t.driverName = document.getElementById('gateDriver_' + id)?.value?.trim() || t.driverName || '';
+      t.driverPhone = document.getElementById('gatePhone_' + id)?.value?.trim() || t.driverPhone || '';
+      t.gateArrivalTime = t.gateArrivalTime || nowV453();
+      t.operationStatus = 'outside_parking';
+      setMainStatusAfterFactoryStep(t, 'outside_parking');
+    }, '已确认到门口，车辆进入工厂外停车区。');
+  };
+  window.releaseFromGate = function(taskId){
+    mutateFactoryTaskV453(taskId, t => {
+      t.gateReleaseTime = t.gateReleaseTime || nowV453();
+      t.waitingAreaTime = t.waitingAreaTime || t.gateReleaseTime;
+      t.operationStatus = 'inside_waiting';
+      setMainStatusAfterFactoryStep(t, 'inside_waiting');
+    }, '已放行进厂，集装箱进入工厂内等待。');
+  };
+  window.startUnloading = function(taskId){
+    mutateFactoryTaskV453(taskId, t => {
+      t.unloadStartTime = t.unloadStartTime || nowV453();
+      t.operationStatus = 'unloading';
+      setMainStatusAfterFactoryStep(t, 'unloading');
+    }, '已确认到达卸货口，开始卸货。');
+  };
+  window.finishUnloading = function(taskId){
+    mutateFactoryTaskV453(taskId, t => {
+      t.unloadFinishTime = t.unloadFinishTime || nowV453();
+      t.operationStatus = 'unloaded';
+      setMainStatusAfterFactoryStep(t, 'unloaded');
+    }, '已确认收货，集装箱已转入还箱确认/完成流程。');
+  };
+  try { document.title = 'Sistema Inteligente de Monitoramento de Contêineres V45.3'; } catch(e){}
+  console.log('V45.3 gate/dock flow patch loaded');
 })();
 </script>
 
