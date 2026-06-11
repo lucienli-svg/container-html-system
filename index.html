@@ -2178,7 +2178,7 @@
       return bl.blNo || '-';
     }
     function createBlForContainer(containerId, vessel, blText, containerNo){
-      // V43.1-SP3 Import Strict Mode:
+      // V43.1-SP3 Import WhiteList:
       // 基础数据导入只读取模板中的提单信息，禁止自动生成“待补充提单”等任何业务数据。
       // 如果模板没有提单号，则只保存集装箱基础数据，不进入提单/IRA与清关维护板块。
       let carrier = normalizeText(vessel) || '';
@@ -9621,6 +9621,241 @@ let main=document.getElementById('mainContent');
   console.log('V43.1-SP2 Data Protection loaded');
 })();
 
+</script>
+
+
+<script>
+/* ==================== V43.1-SP4 基础数据导入白名单模式 ====================
+   目标：基础数据批量导入只读取模板已有字段，禁止自动生成任何业务数据。
+   禁止：自动生成IRA、自动生成提单、自动生成长荣主/分提单、自动清关。
+   长荣：仅当模板明确提供“主提单号/分提单号”或“主提单|分提单”时，按原值保存；不复制、不拆错、不补默认值。
+*/
+(function(){
+  function sp4Text(v){ return (v === null || v === undefined) ? '' : String(v).trim(); }
+  function sp4Header(v){ return sp4Text(v).replace(/\s+/g,'').replace(/[：:]/g,'').toUpperCase(); }
+  function sp4Norm(v){ return sp4Text(v).toUpperCase().replace(/\s+/g,''); }
+  function sp4IsEvergreen(v){
+    const s = sp4Norm(v);
+    return s === '长荣' || s === 'EVERGREEN' || s === 'EVERGREENLINE' || s === 'EGLV' || s === 'EMC';
+  }
+  function sp4Get(row, idx){ return idx >= 0 ? sp4Text(row[idx]) : ''; }
+  function sp4Find(headers, candidates){
+    for(const c of candidates){
+      const target = sp4Header(c);
+      const exact = headers.findIndex(h => h === target);
+      if(exact >= 0) return exact;
+    }
+    for(const c of candidates){
+      const target = sp4Header(c);
+      const part = headers.findIndex(h => h.includes(target));
+      if(part >= 0) return part;
+    }
+    return -1;
+  }
+  function sp4BuildIndex(rows){
+    const first = rows && rows.length ? rows[0] : [];
+    const headers = first.map(sp4Header);
+    const hasHeaders = headers.some(h => ['批次','BATCH','集装箱号','CONTAINERNO','CONTAINER'].includes(h) || h.includes('提单') || h.includes('BL'));
+    if(!hasHeaders){
+      return {headerRows:0,batch:0,seq:1,no:2,vessel:3,type:4,eta:5,bl:6,master:-1,house:-1};
+    }
+    return {
+      headerRows:1,
+      batch: sp4Find(headers, ['批次','Batch','Lote']),
+      seq: sp4Find(headers, ['集装箱序号','箱序号','序号','Container Seq','Seq','Sequência']),
+      no: sp4Find(headers, ['集装箱号','箱号','Container No','ContainerNo','CNTR','Container']),
+      vessel: sp4Find(headers, ['船公司','运输公司','船东','Carrier','Shipping Company','Armador']),
+      type: sp4Find(headers, ['箱型','Container Type','Type','Tipo']),
+      eta: sp4Find(headers, ['到港时间','到港日期','ETA','Port ETA','Data de chegada']),
+      bl: sp4Find(headers, ['提单号','BL No','B/L No','BL','Conhecimento','Bill of Lading']),
+      master: sp4Find(headers, ['主提单号','Master BL','Master B/L','MBL']),
+      house: sp4Find(headers, ['分提单号','House BL','House B/L','HBL'])
+    };
+  }
+  function sp4ContainerExists(no){
+    const n = sp4Text(no);
+    return (containers || []).some(c => sp4Text(c.containerNo) === n);
+  }
+  function sp4EnsureNormalBl(containerId, carrier, blNo){
+    const no = sp4Text(blNo);
+    if(!no) return false;
+    let existing = (blList || []).find(b => sp4Text(b.blNo) === no && sp4Text(b.carrier) !== '长荣');
+    if(!existing){
+      blList.push({carrier: sp4Text(carrier), blNo: no, iraNo:'', isCleared:false, channel:'', clearanceDate:null, isPlaceholder:false});
+    }
+    if(!containerBlMap.some(m => m.containerId === containerId && sp4Text(m.blNo) === no)){
+      containerBlMap.push({containerId, blNo:no});
+    }
+    return true;
+  }
+  function sp4EnsureEvergreenBl(containerId, masterNo, houseNo){
+    const master = sp4Text(masterNo);
+    const house = sp4Text(houseNo);
+    // 没有分提单号时，禁止系统自动用主提单号生成分提单号。
+    if(!house) return false;
+    let existing = (blList || []).find(b => sp4Text(b.houseBlNo) === house && sp4Text(b.carrier) === '长荣');
+    if(!existing){
+      blList.push({carrier:'长荣', masterBlNo:master, houseBlNo:house, iraNo:'', isCleared:false, channel:'', clearanceDate:null, isPlaceholder:false});
+    }else if(master && !sp4Text(existing.masterBlNo)){
+      existing.masterBlNo = master;
+    }
+    if(!containerBlMap.some(m => m.containerId === containerId && sp4Text(m.blNo) === house)){
+      containerBlMap.push({containerId, blNo:house});
+    }
+    return true;
+  }
+  function sp4LinkBlFromTemplate(containerId, vessel, blCell, masterCell, houseCell){
+    const carrier = sp4Text(vessel);
+    const evergreen = sp4IsEvergreen(carrier);
+    const master = sp4Text(masterCell);
+    const house = sp4Text(houseCell);
+    const blRaw = sp4Text(blCell);
+    let linked = 0;
+    if(evergreen){
+      // 优先使用模板明确的主/分提单列；只在提单号列本身包含“|”时读取主|分结构。
+      if(master || house){
+        if(sp4EnsureEvergreenBl(containerId, master, house)) linked++;
+        return linked;
+      }
+      if(blRaw && blRaw.includes('|')){
+        const parts = blRaw.split('|');
+        if(sp4EnsureEvergreenBl(containerId, sp4Text(parts[0]), sp4Text(parts[1]))) linked++;
+        return linked;
+      }
+      // 只有一个普通提单号时，作为分提单号保存，主提单留空；不自动生成主提单。
+      if(blRaw){
+        for(const item of blRaw.split(',').map(sp4Text).filter(Boolean)){
+          if(item.includes('|')){
+            const p = item.split('|');
+            if(sp4EnsureEvergreenBl(containerId, sp4Text(p[0]), sp4Text(p[1]))) linked++;
+          }else{
+            if(sp4EnsureEvergreenBl(containerId, '', item)) linked++;
+          }
+        }
+      }
+      return linked;
+    }
+    // 非长荣：只允许使用“提单号”列；绝不创建主提单/分提单结构。
+    if(blRaw){
+      for(const item of blRaw.split(',').map(sp4Text).filter(Boolean)){
+        if(sp4EnsureNormalBl(containerId, carrier, item)) linked++;
+      }
+    }
+    return linked;
+  }
+
+  window.createBlForContainer = createBlForContainer = function(containerId, vessel, blText, containerNo, masterBlText, houseBlText){
+    return sp4LinkBlFromTemplate(containerId, vessel, blText, masterBlText, houseBlText) > 0;
+  };
+
+  window.exportTemplate = exportTemplate = function(){
+    let wsData=[['批次','集装箱序号','集装箱号','船公司','箱型','到港时间','提单号','主提单号','分提单号']];
+    (containers || []).forEach(c=>{
+      let normalBls=[], master='', house='';
+      (containerBlMap || []).filter(m=>m.containerId===c.id).forEach(m=>{
+        let bl = (blList || []).find(b => sp4Text(b.blNo) === sp4Text(m.blNo) || sp4Text(b.houseBlNo) === sp4Text(m.blNo));
+        if(bl && sp4Text(bl.carrier) === '长荣'){
+          master = sp4Text(bl.masterBlNo);
+          house = sp4Text(bl.houseBlNo);
+        }else if(m.blNo){
+          normalBls.push(sp4Text(m.blNo));
+        }
+      });
+      wsData.push([c.batch||'',c.containerSeq||'',c.containerNo||'',c.vessel||'',c.containerType||'',c.eta||'',normalBls.join(','),master,house]);
+    });
+    let ws=XLSX.utils.aoa_to_sheet(wsData);
+    ws['!cols']=[{wch:16},{wch:14},{wch:18},{wch:14},{wch:12},{wch:14},{wch:24},{wch:24},{wch:24}];
+    let wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,'Containers');
+    XLSX.writeFile(wb,'containers_import_template_v43_1_sp4.xlsx');
+  };
+
+  window.showImport = showImport = function(){
+    document.getElementById('modalTitle').innerText='批量导入 - 严格模板模式';
+    document.getElementById('modalBody').innerHTML=`
+      <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:12px;">
+        <b>SP4规则：</b>基础数据导入只读取模板字段，不自动生成IRA号、提单号、主提单号、分提单号或清关信息。<br>
+        长荣请使用“主提单号 + 分提单号”列；系统按分提单号进入IRA/清关板块。
+      </div>
+      <input type="file" id="importFile" accept=".xlsx,.xls" class="form-control">
+      <div style="margin-top:20px;display:flex;gap:10px;justify-content:center;">
+        <button class="btn export-btn" onclick="exportTemplate()">下载SP4模板</button>
+        <button class="btn btn-primary" onclick="importExcel()">导入</button>
+      </div>`;
+    openModal();
+  };
+
+  window.importExcel = importExcel = function(){
+    let file=document.getElementById('importFile')?.files?.[0];
+    if(!file){alert('请选择文件');return;}
+    let reader=new FileReader();
+    reader.onload=function(e){
+      try{
+        let data=new Uint8Array(e.target.result);
+        let workbook=XLSX.read(data,{type:'array',cellDates:true});
+        let sheet=workbook.Sheets[workbook.SheetNames[0]];
+        let rows=XLSX.utils.sheet_to_json(sheet,{header:1,defval:'',raw:false});
+        if(!rows.length){ alert('Excel中没有数据'); return; }
+        const idx = sp4BuildIndex(rows);
+        if(idx.no < 0){ alert('模板中未找到“集装箱号”列，导入已取消。'); return; }
+        let success=0, dup=0, skipped=0, missingBl=0, blLinked=0, ignoredIra=0, evergreenMissingHouse=0;
+        const start = idx.headerRows ? 1 : 0;
+        for(let i=start;i<rows.length;i++){
+          let row=rows[i];
+          if(!row || row.every(v => sp4Text(v) === '')) continue;
+          let batch=sp4Get(row,idx.batch);
+          let seq=sp4Get(row,idx.seq);
+          let no=sp4Get(row,idx.no);
+          let vessel=sp4Get(row,idx.vessel);
+          let type=sp4Get(row,idx.type) || '';
+          let etaRaw=sp4Get(row,idx.eta);
+          let blRaw=sp4Get(row,idx.bl);
+          let masterRaw=sp4Get(row,idx.master);
+          let houseRaw=sp4Get(row,idx.house);
+          if(!batch && !seq && !no){ skipped++; continue; }
+          if(!no){ skipped++; continue; }
+          if(sp4ContainerExists(no)){ dup++; continue; }
+          let newId=nextIds.container++;
+          let eta = typeof fmtDate === 'function' ? fmtDate(etaRaw) : etaRaw;
+          containers.push({id:newId,batch,containerSeq:seq,containerNo:no,vessel,containerType:type,eta,actualPickupTime:null,customsStatus:'清关中'});
+          let before = (containerBlMap || []).length;
+          let linked = sp4LinkBlFromTemplate(newId, vessel, blRaw, masterRaw, houseRaw);
+          blLinked += linked;
+          if(!linked){
+            missingBl++;
+            if(sp4IsEvergreen(vessel) && (masterRaw || (!houseRaw && blRaw && !blRaw.includes('|')))) evergreenMissingHouse += (!houseRaw && masterRaw && !blRaw) ? 1 : 0;
+          }
+          success++;
+        }
+        if(typeof updateContainerStatus === 'function') updateContainerStatus();
+        saveData();
+        closeModal();
+        renderContainerTable();
+        let msg = `SP4严格导入完成：成功导入 ${success} 条，重复跳过 ${dup} 条，空行/无箱号跳过 ${skipped} 条。\n按模板真实提单关联 ${blLinked} 条。`;
+        if(missingBl) msg += `\n${missingBl} 条未关联提单：仅保存基础数据，不进入IRA/清关流程。`;
+        msg += `\n基础数据导入已忽略所有IRA/清关相关列，不会自动生成IRA号。`;
+        alert(msg);
+      }catch(err){
+        console.error(err);
+        alert('导入失败：请检查Excel模板列名与数据格式。');
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  if(typeof updateContainerStatus === 'function'){
+    const sp4BaseUpdateStatus = updateContainerStatus;
+    window.updateContainerStatus = updateContainerStatus = function(){
+      (containers || []).forEach(c=>{
+        let bls=(containerBlMap || []).filter(m=>m.containerId===c.id).map(m=>m.blNo);
+        let allCleared=bls.length>0 && bls.every(bl=>{let b=(blList || []).find(x=>sp4Text(x.blNo)===sp4Text(bl)||sp4Text(x.houseBlNo)===sp4Text(bl));return !!(b && b.isCleared && b.clearanceDate);});
+        c.customsStatus=allCleared?'已清关':'清关中';
+      });
+    };
+  }
+
+  console.log('V43.1-SP4 Import WhiteList loaded');
+})();
 </script>
 
 </body>
