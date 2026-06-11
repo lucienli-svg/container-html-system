@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V45.4 Workflow Guard</title>
+  <title>集装箱智能监控管理系统 V42.24 Dashboard Workday Sync</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
     /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
@@ -96,7 +96,7 @@
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V45.4</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.12</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -2609,70 +2609,7 @@ function getContainerLocation(cid){
       }
     }
     
-    // V45.4 修复：基础数据导入后必须先进入 提单/IRA -> 清关 -> 提箱计划。
-    // 严禁把“没有提单映射”的集装箱默认判定为已清关；缺失提单时自动生成待补充提单记录。
-    function ensureContainerBlWorkflowIntegrity(){
-      let changed = false;
-      if(!Array.isArray(containers)) containers = [];
-      if(!Array.isArray(blList)) blList = [];
-      if(!Array.isArray(containerBlMap)) containerBlMap = [];
-      containers.forEach(c => {
-        if(!c || c.id === undefined || c.id === null) return;
-        let maps = containerBlMap.filter(m => String(m.containerId) === String(c.id));
-        if(maps.length === 0){
-          createBlForContainer(c.id, c.vessel || '未维护', '', c.containerNo || c.id);
-          changed = true;
-        }
-      });
-      // 清理无效或重复映射，避免一个箱被错误关联到不存在的提单。
-      const seen = new Set();
-      containerBlMap = containerBlMap.filter(m => {
-        if(!m || m.containerId === undefined || !m.blNo) return false;
-        const existsContainer = containers.some(c => String(c.id) === String(m.containerId));
-        const existsBl = blList.some(b => String(b.blNo || '') === String(m.blNo) || String(b.houseBlNo || '') === String(m.blNo));
-        const key = String(m.containerId) + '|' + String(m.blNo);
-        if(!existsContainer || !existsBl || seen.has(key)) { changed = true; return false; }
-        seen.add(key);
-        return true;
-      });
-      return changed;
-    }
-
-    function getRelatedBlsByContainer(c){
-      if(!c) return [];
-      return containerBlMap
-        .filter(m => String(m.containerId) === String(c.id))
-        .map(m => blList.find(b => String(b.blNo || '') === String(m.blNo) || String(b.houseBlNo || '') === String(m.blNo)))
-        .filter(Boolean);
-    }
-
-    function isContainerIraMaintained(c){
-      const relatedBls = getRelatedBlsByContainer(c);
-      return relatedBls.length > 0 && relatedBls.every(bl => String(bl.iraNo || '').trim());
-    }
-
-    function isContainerCustomsCleared(c){
-      const relatedBls = getRelatedBlsByContainer(c);
-      return relatedBls.length > 0 && relatedBls.every(bl => bl.isCleared === true && String(bl.clearanceDate || '').trim());
-    }
-
-    function canCreatePickupPlan(c){
-      return !!(c && isOperationalVisibleContainer(c) && isContainerIraMaintained(c) && isContainerCustomsCleared(c) && !c.actualPickupTime && !pickupPlans.some(p => String(p.containerId) === String(c.id) && p.status !== 'cancelled'));
-    }
-
-    function updateContainerStatus(){
-      ensureContainerBlWorkflowIntegrity();
-      containers.forEach(c => {
-        const relatedBls = getRelatedBlsByContainer(c);
-        if(relatedBls.length === 0){
-          c.customsStatus = '清关中';
-          c.iraStatus = '待维护IRA';
-          return;
-        }
-        c.iraStatus = relatedBls.every(bl => String(bl.iraNo || '').trim()) ? '已维护IRA' : '待维护IRA';
-        c.customsStatus = relatedBls.every(bl => bl.isCleared === true && String(bl.clearanceDate || '').trim()) ? '已清关' : '清关中';
-      });
-    }
+    function updateContainerStatus(){containers.forEach(c=>{let bls=containerBlMap.filter(m=>m.containerId===c.id).map(m=>m.blNo);let allCleared=bls.length===0||bls.every(bl=>{let b=blList.find(b=>b.blNo===bl||b.houseBlNo===bl);return b?.isCleared;});c.customsStatus=allCleared?'已清关':'清关中';});}
     function addStock(cid,loc){locationStock=locationStock.filter(s=>s.containerId!==cid);locationStock.push({containerId:cid,location:loc,isActive:true});}
     function needsReturn(cid,to,from){if(!(to==='Rio Claro'||to==='IRA库房'||to==='工厂'))return false;if(!(from==='港口'||from==='RG堆场'))return false;if(returnRecords.some(r=>r.containerId===cid&&r.isReturnConfirmed))return false;if(returnRecords.some(r=>r.containerId===cid&&!r.isReturnConfirmed&&r.type==='return_needed'))return false;return true;}
     
@@ -3448,7 +3385,7 @@ let main=document.getElementById('mainContent');
       if(!batch||!no){alert('请填写必填项');return;}
       if(containers.find(c=>c.containerNo===no)){alert('集装箱号已存在');return;}
       let newId=nextIds.container++;
-      containers.push({id:newId,batch,containerSeq:seq,containerNo:no,vessel,containerType:type,eta,actualPickupTime:null,iraStatus:'待维护IRA',customsStatus:'清关中'});
+      containers.push({id:newId,batch,containerSeq:seq,containerNo:no,vessel,containerType:type,eta,actualPickupTime:null});
       
       // 处理提单
       if(blsRaw){
@@ -3596,7 +3533,7 @@ let main=document.getElementById('mainContent');
           let eta=fmtDate(etaRaw);
           if(containers.find(c=>normalizeText(c.containerNo)===no)){dup++;continue;}
           let newId=nextIds.container++;
-          containers.push({id:newId,batch,containerSeq:seq,containerNo:no,vessel,containerType:type,eta,actualPickupTime:null,iraStatus:'待维护IRA',customsStatus:'清关中'});
+          containers.push({id:newId,batch,containerSeq:seq,containerNo:no,vessel,containerType:type,eta,actualPickupTime:null});
           let blItems = blsRaw ? blsRaw.split(',').map(s=>s.trim()).filter(Boolean) : [''];
           if(!blsRaw) placeholder++;
           for(let bl of blItems){
@@ -3608,7 +3545,7 @@ let main=document.getElementById('mainContent');
         saveData();
         closeModal();
         renderContainerTable();
-        alert(`成功导入 ${success} 条，跳过重复 ${dup} 条${placeholder ? `，其中 ${placeholder} 条未填写提单号，系统已用集装箱号生成待补充提单记录` : ''}。新导入数据将先进入提单/IRA管理和清关维护，完成IRA与清关时间后才可制作提箱计划。`);
+        alert(`成功导入 ${success} 条，跳过重复 ${dup} 条${placeholder ? `，其中 ${placeholder} 条未填写提单号，系统已用集装箱号生成待补充提单记录` : ''}`);
       };
       reader.readAsArrayBuffer(file);
     }
@@ -3758,7 +3695,6 @@ let main=document.getElementById('mainContent');
 
     // ==================== 提单/IRA管理（新增批次搜索和批次显示） ====================
     function renderBlIra(container){
-      updateContainerStatus();
       container.innerHTML=`
         <div class="card">
           <div class="card-header"><span class="card-title">📋 待维护IRA</span><div><button class="btn export-btn" onclick="exportIraImportTemplate()">📥 IRA导入模板</button><button class="btn btn-success" onclick="showIraImport()">📎 批量导入IRA</button></div></div>
@@ -3957,7 +3893,6 @@ let main=document.getElementById('mainContent');
     
     // ==================== 清关维护（新增批次搜索和批次显示） ====================
     function renderCustoms(container){
-      updateContainerStatus();
       container.innerHTML=`
         <div class="card">
           <div class="card-header"><span class="card-title">🛃 待清关提单</span></div>
@@ -4090,7 +4025,7 @@ let main=document.getElementById('mainContent');
     // ==================== 以下为简化版的其他模块（保持原有功能） ====================
     function renderPickupPlan(container){
       updateContainerStatus();
-      let allReady=containers.filter(c=>canCreatePickupPlan(c));
+      let allReady=containers.filter(c=>isOperationalVisibleContainer(c)&&c.customsStatus==='已清关'&&!c.actualPickupTime&&!pickupPlans.some(p=>p.containerId===c.id&&p.status!=='cancelled'));
       allReady.sort((a,b)=>String(a.batch||'').localeCompare(String(b.batch||'')) || String(a.containerNo||'').localeCompare(String(b.containerNo||'')));
       let published=pickupPlans.filter(p=>p.status!=='cancelled');
       container.innerHTML=`
@@ -4136,7 +4071,7 @@ let main=document.getElementById('mainContent');
 
     window.filterPickupTable = function(){
       // 顶部查询条件同时作用于“待发布集装箱”和“已发布提箱计划”
-      let ready=containers.filter(c=>canCreatePickupPlan(c));
+      let ready=containers.filter(c=>isOperationalVisibleContainer(c)&&c.customsStatus==='已清关'&&!c.actualPickupTime&&!pickupPlans.some(p=>p.containerId===c.id&&p.status!=='cancelled'));
       let published=pickupPlans.filter(p=>p.status!=='cancelled');
       renderPickupTable(filterPickupRows(ready,'pickup'));
       renderPublishedPlans(filterPickupRows(published,'pickup'));
@@ -5181,7 +5116,7 @@ let main=document.getElementById('mainContent');
           <td><input id="gateDriver_${t.id}" class="form-control" value="${t.driverName||''}" placeholder="司机" style="width:90px"></td>
           <td><input id="gatePhone_${t.id}" class="form-control" value="${t.driverPhone||''}" placeholder="电话" style="width:105px"></td>
           <td>${fmtDateTime(t.gateArrivalTime)||'-'}</td><td><span class="status-badge ${st==='outside_parking'?'status-warning':'status-pending'}">${getOpStatusText(t)}</span></td>
-          <td>${st==='not_arrived'?`<button class="btn btn-sm btn-success" onclick="confirmGateArrival('${String(t.id).replace(/'/g,\"\\'\")}')">确认到达厂外停车区</button>`:`<button class="btn btn-sm btn-primary" onclick="releaseFromGate('${String(t.id).replace(/'/g,\"\\'\")}')">放行到厂内等待</button>`}</td>`;
+          <td>${st==='not_arrived'?`<button class="btn btn-sm btn-success" onclick="confirmGateArrival(${t.id})">确认到达厂外停车区</button>`:`<button class="btn btn-sm btn-primary" onclick="releaseFromGate(${t.id})">放行到厂内等待</button>`}</td>`;
         return tr;
       });
     }
@@ -5201,7 +5136,7 @@ let main=document.getElementById('mainContent');
       let tasks=getFactoryOperationTasks(d).filter(t=>getOpStatus(t)==='inside_waiting');
       container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">⏳ 等待区监控</span></div><div class="search-bar"><input type="date" id="waitingAreaDate" value="${d}" onchange="renderWaitingArea(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderWaitingArea(document.getElementById('mainContent'))">查询</button></div><div id="waitingAreaTable"></div></div>`;
       if(tasks.length===0){document.getElementById('waitingAreaTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无厂内等待车辆</div></div>';return;}
-      renderTable('waitingAreaTable',['进入厂内等待','等待分钟','批次','集装箱号','卸货口','车牌','司机','电话','操作'],tasks,(t)=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${fmtDateTime(t.waitingAreaTime)}</td><td>${minutesBetween(t.waitingAreaTime,nowLocalInput())}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td>${t.driverPhone||'-'}</td><td><button class="btn btn-sm btn-success" onclick="startUnloading('${String(t.id).replace(/'/g,\"\\'\")}')">进入卸货口/开始卸货</button> <button class="btn btn-sm btn-warning" onclick="openAndonForTask('${String(t.id).replace(/'/g,\"\\'\")}')">异常</button></td>`;return tr;});
+      renderTable('waitingAreaTable',['进入厂内等待','等待分钟','批次','集装箱号','卸货口','车牌','司机','电话','操作'],tasks,(t)=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${fmtDateTime(t.waitingAreaTime)}</td><td>${minutesBetween(t.waitingAreaTime,nowLocalInput())}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.unloadingDock||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td>${t.driverPhone||'-'}</td><td><button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})">进入卸货口/开始卸货</button> <button class="btn btn-sm btn-warning" onclick="openAndonForTask(${t.id})">异常</button></td>`;return tr;});
     }
     window.startUnloading=function(taskId){let t=transportTasks.find(x=>x.id===taskId);if(!t)return;t.unloadStartTime=t.unloadStartTime||nowLocalInput();t.operationStatus='unloading';saveAndRenderContentKeepState();};
     window.finishUnloading=function(taskId){let t=transportTasks.find(x=>x.id===taskId);if(!t)return;t.unloadFinishTime=t.unloadFinishTime||nowLocalInput();t.operationStatus='unloaded';saveAndRenderContentKeepState();};
@@ -5211,7 +5146,7 @@ let main=document.getElementById('mainContent');
       let docks=['120B','132','140B','140C']; tasks.forEach(t=>{if(t.unloadingDock && !docks.includes(t.unloadingDock)) docks.push(t.unloadingDock);});
       container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🏭 卸货口监控</span></div><div class="search-bar"><input type="date" id="dockMonitorDate" value="${d}" onchange="renderDockMonitoring(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderDockMonitoring(document.getElementById('mainContent'))">查询</button></div><div class="stats-grid">${docks.map(dk=>{let list=tasks.filter(t=>(t.unloadingDock||'')===dk);let doing=list.filter(t=>getOpStatus(t)==='unloading').length;let wait=list.filter(t=>getOpStatus(t)==='inside_waiting').length;return `<div class="stat-card" onclick="showDockDetail('${dk}')"><div class="stat-number">${doing}/${wait}</div><div class="stat-label">${dk} 卸货中/厂内等待</div></div>`}).join('')}</div><div id="dockMonitorTable"></div></div>`;
       if(tasks.length===0){document.getElementById('dockMonitorTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无卸货口执行数据</div></div>';return;}
-      renderTable('dockMonitorTable',['卸货口','状态','批次','集装箱号','车牌','等待开始','卸货开始','卸货完成','操作'],tasks,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);tr.innerHTML=`<td>${t.unloadingDock||'-'}</td><td><span class="status-badge ${st==='unloading'?'status-transport':st==='unloaded'?'status-completed':'status-warning'}">${getOpStatusText(t)}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading('${String(t.id).replace(/'/g,\"\\'\")}')">开始</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading('${String(t.id).replace(/'/g,\"\\'\")}')">完成</button>`:'-'}</td>`;return tr;});
+      renderTable('dockMonitorTable',['卸货口','状态','批次','集装箱号','车牌','等待开始','卸货开始','卸货完成','操作'],tasks,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);tr.innerHTML=`<td>${t.unloadingDock||'-'}</td><td><span class="status-badge ${st==='unloading'?'status-transport':st==='unloaded'?'status-completed':'status-warning'}">${getOpStatusText(t)}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})">开始</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading(${t.id})">完成</button>`:'-'}</td>`;return tr;});
     }
     window.showDockDetail=function(dock){ currentMenu='dockMonitoring'; renderSidebar(); renderContent(); };
     function renderAndonCenter(container){
@@ -5762,7 +5697,7 @@ let main=document.getElementById('mainContent');
       tasks = tasks.sort((a,b)=>getTaskDock(a).localeCompare(getTaskDock(b),'zh-CN',{numeric:true}) || a._seq-b._seq);
       container.innerHTML = `<div class="card"><div class="card-header"><span class="card-title">🚪 门岗监控 / 按生产顺序放行</span><button class="btn export-btn" onclick="exportFactoryOperationTasks()">📥 导出</button></div><div class="search-bar"><input type="date" id="gateMonitorDate" value="${d}" onchange="renderGateMonitoring(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderGateMonitoring(document.getElementById('mainContent'))">查询</button><button class="btn btn-success" onclick="currentMenu='receivingAndon';renderSidebar();renderContent();">打开Andon看板</button></div><div style="font-size:13px;color:#606266;margin-bottom:10px;line-height:1.7;">门岗按集装箱号确认车辆到达，并维护车牌/司机/电话。系统按照生产顺序提示放行；已跳过序号后到达，会自动标记为异常到达优先。</div><div id="gateMonitorTable"></div></div>`;
       if(tasks.length===0){ document.getElementById('gateMonitorTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无门岗/厂外停车区待处理任务</div></div>'; return; }
-      renderTable('gateMonitorTable',['卸货口','顺序','计划到达','批次','集装箱号','车牌','司机','电话','实际到达门岗','状态','操作'],tasks,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);let late=isLateRecoveryTask(t,d);let rec=getRecommendedTaskForDock(d,getTaskDock(t));let recommended=rec&&rec.id===t.id;tr.className=late?'priority-row':recommended?'recommended-row':'';tr.innerHTML=`<td>${getTaskDock(t)}</td><td><span class="sequence-badge">${t._seq<999999?t._seq:'-'}</span>${late?' <span class="andon-tag priority">异常到达</span>':recommended?' <span class="andon-tag recommended">推荐</span>':''}</td><td>${fmtDateTime(t.estimatedArrival)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td><input id="gatePlate_${t.id}" class="form-control" value="${t.truckPlate||''}" placeholder="车牌" style="width:95px"></td><td><input id="gateDriver_${t.id}" class="form-control" value="${t.driverName||''}" placeholder="司机" style="width:90px"></td><td><input id="gatePhone_${t.id}" class="form-control" value="${t.driverPhone||''}" placeholder="电话" style="width:105px"></td><td>${fmtDateTime(t.gateArrivalTime)||'-'}</td><td><span class="status-badge ${st==='outside_parking'?'status-warning':'status-pending'}">${getOpStatusText(t)}</span></td><td>${st==='not_arrived'?`<button class="btn btn-sm btn-success" onclick="confirmGateArrival('${String(t.id).replace(/'/g,\"\\'\")}')">确认到达厂外停车区</button>`:`<button class="btn btn-sm btn-primary" onclick="releaseFromGate('${String(t.id).replace(/'/g,\"\\'\")}')">放行到厂内等待</button>`}</td>`;return tr;});
+      renderTable('gateMonitorTable',['卸货口','顺序','计划到达','批次','集装箱号','车牌','司机','电话','实际到达门岗','状态','操作'],tasks,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);let late=isLateRecoveryTask(t,d);let rec=getRecommendedTaskForDock(d,getTaskDock(t));let recommended=rec&&rec.id===t.id;tr.className=late?'priority-row':recommended?'recommended-row':'';tr.innerHTML=`<td>${getTaskDock(t)}</td><td><span class="sequence-badge">${t._seq<999999?t._seq:'-'}</span>${late?' <span class="andon-tag priority">异常到达</span>':recommended?' <span class="andon-tag recommended">推荐</span>':''}</td><td>${fmtDateTime(t.estimatedArrival)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td><input id="gatePlate_${t.id}" class="form-control" value="${t.truckPlate||''}" placeholder="车牌" style="width:95px"></td><td><input id="gateDriver_${t.id}" class="form-control" value="${t.driverName||''}" placeholder="司机" style="width:90px"></td><td><input id="gatePhone_${t.id}" class="form-control" value="${t.driverPhone||''}" placeholder="电话" style="width:105px"></td><td>${fmtDateTime(t.gateArrivalTime)||'-'}</td><td><span class="status-badge ${st==='outside_parking'?'status-warning':'status-pending'}">${getOpStatusText(t)}</span></td><td>${st==='not_arrived'?`<button class="btn btn-sm btn-success" onclick="confirmGateArrival(${t.id})">确认到达厂外停车区</button>`:`<button class="btn btn-sm btn-primary" onclick="releaseFromGate(${t.id})">放行到厂内等待</button>`}</td>`;return tr;});
     }
     window.releaseFromGate=function(taskId){
       let t=transportTasks.find(x=>x.id===taskId); if(!t) return; enrichTaskSequence(t);
@@ -5775,7 +5710,7 @@ let main=document.getElementById('mainContent');
       let docks=[...new Set(tasks.map(t=>getTaskDock(t)))]; let ordered=[]; docks.forEach(dk=>ordered.push(...getPriorityOrderedTasks(d,dk,['inside_waiting'])));
       container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">⏳ 等待区监控 / 当前应进卸货口顺序</span></div><div class="search-bar"><input type="date" id="waitingAreaDate" value="${d}" onchange="renderWaitingArea(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderWaitingArea(document.getElementById('mainContent'))">查询</button></div><div id="waitingAreaTable"></div></div>`;
       if(ordered.length===0){document.getElementById('waitingAreaTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无厂内等待车辆</div></div>';return;}
-      renderTable('waitingAreaTable',['卸货口','顺序','进入厂内等待','等待分钟','批次','集装箱号','车牌','司机','电话','操作'],ordered,(t)=>{let late=isLateRecoveryTask(t,d);let rec=getRecommendedTaskForDock(d,getTaskDock(t));let recommended=rec&&rec.id===t.id;let tr=document.createElement('tr');tr.className=late?'priority-row':recommended?'recommended-row':'';tr.innerHTML=`<td>${getTaskDock(t)}</td><td><span class="sequence-badge">${t._seq<999999?t._seq:'-'}</span>${late?' <span class="andon-tag priority">异常到达优先</span>':recommended?' <span class="andon-tag recommended">当前推荐</span>':''}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${minutesBetween(t.waitingAreaTime,nowLocalInput())}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td>${t.driverPhone||'-'}</td><td><button class="btn btn-sm btn-success" onclick="startUnloading('${String(t.id).replace(/'/g,\"\\'\")}')">进入卸货口/开始卸货</button> <button class="btn btn-sm btn-warning" onclick="openAndonForTask('${String(t.id).replace(/'/g,\"\\'\")}')">异常</button></td>`;return tr;});
+      renderTable('waitingAreaTable',['卸货口','顺序','进入厂内等待','等待分钟','批次','集装箱号','车牌','司机','电话','操作'],ordered,(t)=>{let late=isLateRecoveryTask(t,d);let rec=getRecommendedTaskForDock(d,getTaskDock(t));let recommended=rec&&rec.id===t.id;let tr=document.createElement('tr');tr.className=late?'priority-row':recommended?'recommended-row':'';tr.innerHTML=`<td>${getTaskDock(t)}</td><td><span class="sequence-badge">${t._seq<999999?t._seq:'-'}</span>${late?' <span class="andon-tag priority">异常到达优先</span>':recommended?' <span class="andon-tag recommended">当前推荐</span>':''}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${minutesBetween(t.waitingAreaTime,nowLocalInput())}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${t.driverName||'-'}</td><td>${t.driverPhone||'-'}</td><td><button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})">进入卸货口/开始卸货</button> <button class="btn btn-sm btn-warning" onclick="openAndonForTask(${t.id})">异常</button></td>`;return tr;});
     }
     window.startUnloading=function(taskId){let t=transportTasks.find(x=>x.id===taskId);if(!t)return;let chk=canStartUnloadingTask(taskId);if(!chk.ok&&!confirm(chk.msg+'。仍要开始卸货吗？'))return;t.unloadStartTime=t.unloadStartTime||nowLocalInput();t.operationStatus='unloading';saveAndRenderContentKeepState();};
     window.finishUnloading=function(taskId){let t=transportTasks.find(x=>x.id===taskId);if(!t)return;t.unloadFinishTime=t.unloadFinishTime||nowLocalInput();t.operationStatus='unloaded';saveAndRenderContentKeepState();};
@@ -5784,7 +5719,7 @@ let main=document.getElementById('mainContent');
       container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🏭 卸货口监控 / 顺序控制</span></div><div class="search-bar"><input type="date" id="dockMonitorDate" value="${d}" onchange="renderDockMonitoring(document.getElementById('mainContent'))"><button class="btn btn-primary" onclick="renderDockMonitoring(document.getElementById('mainContent'))">查询</button><button class="btn btn-success" onclick="currentMenu='receivingAndon';renderSidebar();renderContent();">打开Andon看板</button></div><div class="stats-grid">${docks.map(dk=>{let list=tasks.filter(t=>getTaskDock(t)===dk);let rec=getRecommendedTaskForDock(d,dk);let doing=list.filter(t=>getOpStatus(t)==='unloading').length;let wait=list.filter(t=>getOpStatus(t)==='inside_waiting').length;return `<div class="stat-card"><div class="stat-number">${doing}/${wait}</div><div class="stat-label">${dk} 卸货中/等待<br>推荐：${rec?rec.containerNo:'-'}</div></div>`}).join('')}</div><div id="dockMonitorTable"></div></div>`;
       if(tasks.length===0){document.getElementById('dockMonitorTable').innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">该日期暂无卸货口执行数据</div></div>';return;}
       let ordered=[];docks.forEach(dk=>ordered.push(...getPriorityOrderedTasks(d,dk,['inside_waiting','unloading','unloaded'])));
-      renderTable('dockMonitorTable',['卸货口','顺序','状态','批次','集装箱号','车牌','等待开始','卸货开始','卸货完成','操作'],ordered,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);let late=isLateRecoveryTask(t,d);let rec=getRecommendedTaskForDock(d,getTaskDock(t));let recommended=rec&&rec.id===t.id;tr.className=late?'priority-row':recommended?'recommended-row':'';tr.innerHTML=`<td>${getTaskDock(t)}</td><td><span class="sequence-badge">${t._seq<999999?t._seq:'-'}</span>${late?' <span class="andon-tag priority">异常到达优先</span>':recommended?' <span class="andon-tag recommended">当前推荐</span>':''}</td><td><span class="status-badge ${st==='unloading'?'status-transport':st==='unloaded'?'status-completed':'status-warning'}">${getOpStatusText(t)}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading('${String(t.id).replace(/'/g,\"\\'\")}')">开始</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading('${String(t.id).replace(/'/g,\"\\'\")}')">完成</button>`:'-'}</td>`;return tr;});
+      renderTable('dockMonitorTable',['卸货口','顺序','状态','批次','集装箱号','车牌','等待开始','卸货开始','卸货完成','操作'],ordered,(t)=>{let tr=document.createElement('tr');let st=getOpStatus(t);let late=isLateRecoveryTask(t,d);let rec=getRecommendedTaskForDock(d,getTaskDock(t));let recommended=rec&&rec.id===t.id;tr.className=late?'priority-row':recommended?'recommended-row':'';tr.innerHTML=`<td>${getTaskDock(t)}</td><td><span class="sequence-badge">${t._seq<999999?t._seq:'-'}</span>${late?' <span class="andon-tag priority">异常到达优先</span>':recommended?' <span class="andon-tag recommended">当前推荐</span>':''}</td><td><span class="status-badge ${st==='unloading'?'status-transport':st==='unloaded'?'status-completed':'status-warning'}">${getOpStatusText(t)}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})">开始</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading(${t.id})">完成</button>`:'-'}</td>`;return tr;});
     }
 
     // ==================== V41 工厂到货监控：按实际收货流程重构 ====================
@@ -5921,7 +5856,7 @@ let main=document.getElementById('mainContent');
           <td><input id="gateDriver_${t.id}" class="form-control" value="${t.driverName||''}" placeholder="司机" style="width:90px" ${disabled}></td>
           <td><input id="gatePhone_${t.id}" class="form-control" value="${t.driverPhone||''}" placeholder="电话" style="width:105px" ${disabled}></td>
           <td>${fmtDateTime(t.gateArrivalTime)||'-'}</td><td>${renderStatusBadgeV41(st)}</td>
-          <td>${st==='not_arrived'?`<button class="btn btn-sm btn-success" onclick="confirmGateArrival('${String(t.id).replace(/'/g,\"\\'\")}')" ${disabled}>确认到门口</button>`:`<button class="btn btn-sm btn-primary" onclick="releaseFromGate('${String(t.id).replace(/'/g,\"\\'\")}')" ${disabled}>放行进厂</button>`}</td>`;
+          <td>${st==='not_arrived'?`<button class="btn btn-sm btn-success" onclick="confirmGateArrival(${t.id})" ${disabled}>确认到门口</button>`:`<button class="btn btn-sm btn-primary" onclick="releaseFromGate(${t.id})" ${disabled}>放行进厂</button>`}</td>`;
         return tr;
       });
     }
@@ -5937,7 +5872,7 @@ let main=document.getElementById('mainContent');
       if(list.length===0){document.getElementById('factoryDockSection').innerHTML='<div class="table-wrapper"><div style="padding:16px;text-align:center">暂无卸货口收货数据</div></div>'; return;}
       renderTable('factoryDockSection',['卸货口','状态','序号','批次','集装箱号','车牌','进厂时间','开始卸货','完成掏箱','操作'],list,(t)=>{
         let tr=document.createElement('tr'); let st=getFactoryReceivingStatus(t); const dock=t.unloadingDock||''; const disabled=canOperateDock(dock)?'':'disabled';
-        tr.innerHTML=`<td>${dock||'-'}</td><td>${renderStatusBadgeV41(st)}</td><td>${getTaskContainerSeqDisplay(t)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime||t.gateReleaseTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading('${String(t.id).replace(/'/g,\"\\'\")}')" ${disabled}>确认到达卸货口/开始卸货</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading('${String(t.id).replace(/'/g,\"\\'\")}')" ${disabled}>确认掏箱完成</button>`:'-'}</td>`;
+        tr.innerHTML=`<td>${dock||'-'}</td><td>${renderStatusBadgeV41(st)}</td><td>${getTaskContainerSeqDisplay(t)}</td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.truckPlate||'-'}</td><td>${fmtDateTime(t.waitingAreaTime||t.gateReleaseTime)}</td><td>${fmtDateTime(t.unloadStartTime)}</td><td>${fmtDateTime(t.unloadFinishTime)}</td><td>${st==='inside_waiting'?`<button class="btn btn-sm btn-success" onclick="startUnloading(${t.id})" ${disabled}>确认到达卸货口/开始卸货</button>`:st==='unloading'?`<button class="btn btn-sm btn-success" onclick="finishUnloading(${t.id})" ${disabled}>确认掏箱完成</button>`:'-'}</td>`;
         return tr;
       });
     }
@@ -11801,7 +11736,7 @@ let main=document.getElementById('mainContent');
 
 
 <script>
-/* ==================== V45.3 紧急修复：到货确认/门岗/卸货口状态持久化与精准定位 ====================
+/* ==================== V45.2 紧急修复：到货确认/门岗/卸货口状态持久化与精准定位 ====================
    修复范围：
    1) 到货确认点击后仍停留在待确认列表。
    2) 门岗确认到门口无反应。
@@ -11809,7 +11744,7 @@ let main=document.getElementById('mainContent');
    4) 所有关键状态变更先写本地，再触发云端保存，避免刷新回退。
 */
 (function(){
-  const PATCH_VERSION='V45.3';
+  const PATCH_VERSION='V45.2';
   const arr=v=>Array.isArray(v)?v:[];
   const norm=v=>String(v??'').trim();
   function encodeTaskKey(t){
@@ -11867,12 +11802,12 @@ let main=document.getElementById('mainContent');
     try{
       if(typeof stateFromGlobals==='function' && typeof persistLocal==='function') persistLocal(stateFromGlobals(), true);
       else if(typeof saveData==='function') saveData();
-    }catch(e){ console.warn('V45.3 local save fallback failed', e); }
+    }catch(e){ console.warn('V45.2 local save fallback failed', e); }
     try{ localStorage.setItem('cc_dirty','1'); localStorage.setItem('cc_lastLocalAction', reason||PATCH_VERSION); }catch(e){}
     try{
       const saver = window.saveCloudStateV45 || window.saveCloudStateV44 || window.saveCloudState;
       if(typeof saver==='function') setTimeout(()=>saver(reason||PATCH_VERSION), 50);
-    }catch(e){ console.warn('V45.3 cloud save scheduled failed', e); }
+    }catch(e){ console.warn('V45.2 cloud save scheduled failed', e); }
   }
   function keepRender(){
     const y=window.scrollY;
@@ -11962,7 +11897,7 @@ let main=document.getElementById('mainContent');
       if(arriving.length) renderTable('arrivingTable',['序号','批次','集装箱号','出发地','目的地','预计到达','操作'],sorter(arriving),(t)=>{let key=encodeTaskKey(t);let tr=document.createElement('tr');tr.innerHTML=`<td><span class="sequence-badge">${(typeof getTaskContainerSeq==='function'?getTaskContainerSeq(t):(t.containerSeq||'-'))||'-'}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.from||'-'}</td><td>${t.to||'-'}</td><td>${t.estimatedArrival?fmtDateTime(t.estimatedArrival):'-'}</td><td><button class="btn btn-sm btn-success" onclick="doArrivalByKeyV452('${key}')">确认到达</button></td>`;return tr;});
       if(pendingUnpack.length) renderTable('pendingUnpackTable',['序号','批次','集装箱号','目的地','到达时间','操作'],sorter(pendingUnpack),(t)=>{let key=encodeTaskKey(t);let tr=document.createElement('tr');tr.innerHTML=`<td><span class="sequence-badge">${(typeof getTaskContainerSeq==='function'?getTaskContainerSeq(t):(t.containerSeq||'-'))||'-'}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.to||'-'}</td><td>${t.actualArrival?fmtDateTime(t.actualArrival):'-'}</td><td><button class="btn btn-sm btn-warning" onclick="doUnpackByKeyV452('${key}')">确认掏箱</button></td>`;return tr;});
       if(completedUnpack.length) renderTable('completedUnpackTable',['序号','批次','集装箱号','目的地','到达时间','掏箱/还箱状态'],sorter(completedUnpack),(t)=>{let existing=arr(returnRecords).find(r=>String(r.containerId)===String(t.containerId)&&r.location===t.to);let status=(existing&&existing.type==='return_needed'&&!existing.isReturnConfirmed)?'待还箱':'已完成';let cls=status==='待还箱'?'status-return-pending':'status-ready';let tr=document.createElement('tr');tr.innerHTML=`<td><span class="sequence-badge">${(typeof getTaskContainerSeq==='function'?getTaskContainerSeq(t):(t.containerSeq||'-'))||'-'}</span></td><td>${t.batch||'-'}</td><td>${t.containerNo||'-'}</td><td>${t.to||'-'}</td><td>${t.actualArrival?fmtDateTime(t.actualArrival):'-'}</td><td><span class="status-badge ${cls}">${status}</span></td>`;return tr;});
-    }catch(e){ console.error('V45.3 renderLocationConfirm failed, fallback old renderer',e); if(oldRenderLocationConfirm) oldRenderLocationConfirm(container); }
+    }catch(e){ console.error('V45.2 renderLocationConfirm failed, fallback old renderer',e); if(oldRenderLocationConfirm) oldRenderLocationConfirm(container); }
   };
 
   // 工厂门岗/卸货口按钮保存强化：旧按钮仍按 id 调用，但执行后本地优先保存并渲染。
@@ -11979,110 +11914,212 @@ let main=document.getElementById('mainContent');
   window.startUnloading=function(taskId){ mutateFactoryTask(taskId,t=>{const now=(typeof nowLocalInput==='function'?nowLocalInput():new Date().toISOString());t.unloadStartTime=t.unloadStartTime||now;t.operationStatus='unloading';},'已开始卸货'); };
   window.finishUnloading=function(taskId){ mutateFactoryTask(taskId,t=>{const now=(typeof nowLocalInput==='function'?nowLocalInput():new Date().toISOString());t.unloadFinishTime=t.unloadFinishTime||now;t.operationStatus='unloaded'; if(t.from==='港口'||t.from==='RG堆场') t.status='return_pending'; else t.status='completed';},'已确认掏箱完成'); };
 
-  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V45.3'; }catch(e){}
-  console.log('V45.3 arrival/gate stable patch loaded');
+  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V45.2 SAFE'; }catch(e){}
+  console.log('V45.2 arrival/gate stable patch loaded');
 })();
 </script>
 
 
+
 <script>
-/* ==================== V45.3 门岗登记 / 卸货口收货稳定修复 ====================
-   目标：按 Lucien 确认的五状态逻辑推进：
-   未到厂 → 工厂外停车区 → 工厂内等待 → 卸货中 → 卸货完成/待还箱。
-   修复：1) 按钮 id 兼容数字/字符串；2) 门岗车牌/司机/电话保存；
-        3) 卸货完成后进入还箱确认；4) 本地优先保存后再云端同步。
+/* ==================== V45.2-SAFE 数据保护补丁（只保护数据，不改业务流程） ====================
+   目标：以 V45.2 稳定业务逻辑为底版，增加云端保存/读取保护，避免空数据覆盖正常 app_state。
+   保护原则：
+   1) 当前 payload 为空或明显少于云端正常数据时，禁止覆盖云端主数据；
+   2) 每次正常保存前，先在 app_state 中创建 protected 备份；
+   3) 云端读取到空数据时，不覆盖浏览器当前已有数据；
+   4) 不自动修复历史业务状态，不改提单/清关/运输/门岗逻辑。
 */
 (function(){
-  const arr = v => Array.isArray(v) ? v : [];
-  const norm = v => String(v ?? '').trim();
-  function nowV453(){
-    try { return (typeof nowLocalInput === 'function') ? nowLocalInput() : new Date().toISOString(); }
-    catch(e){ return new Date().toISOString(); }
+  const SAFE_VERSION = 'V45.2-SAFE Data Protection Only';
+  const BACKUP_PREFIX_SUFFIX = '-protected-';
+  const MIN_BACKUP_INTERVAL_MS = 5 * 60 * 1000;
+  const MAX_PROTECTED_BACKUPS = 40;
+
+  function safeArr(v){ return Array.isArray(v) ? v : []; }
+  function safeNowStamp(){
+    const d = new Date();
+    const p = n => String(n).padStart(2,'0');
+    return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
   }
-  function findFactoryTaskV453(taskId){
-    return arr(typeof transportTasks !== 'undefined' ? transportTasks : []).find(t => norm(t.id) === norm(taskId));
+  function safePayloadCounts(state){
+    state = state || {};
+    return {
+      containers: safeArr(state.containers).length,
+      blList: safeArr(state.blList).length,
+      containerBlMap: safeArr(state.containerBlMap).length,
+      pickupPlans: safeArr(state.pickupPlans).length,
+      transportTasks: safeArr(state.transportTasks).length,
+      returnRecords: safeArr(state.returnRecords).length,
+      productionPlans: safeArr(state.productionPlans).length,
+      productionRecords: safeArr(state.productionRecords).length,
+      factoryCalendar: safeArr(state.factoryCalendar).length
+    };
   }
-  function saveFactoryFlowV453(reason){
-    try { if(typeof saveLocalData === 'function') saveLocalData(); } catch(e){}
-    try { if(typeof saveData === 'function') saveData(); } catch(e){ console.warn('V45.3 saveData skipped', e); }
-    try {
-      if(typeof saveCloudState === 'function') setTimeout(() => saveCloudState(), 0);
-    } catch(e){ console.warn('V45.3 cloud save skipped', e); }
-    try {
-      const y = window.scrollY || 0;
-      if(typeof renderContent === 'function') renderContent();
-      setTimeout(() => window.scrollTo(0, y), 0);
-    } catch(e){ console.warn('V45.3 render skipped', e); }
+  function safeScore(counts){
+    counts = counts || {};
+    return (counts.containers||0) + (counts.blList||0) + (counts.containerBlMap||0) + (counts.pickupPlans||0) + (counts.transportTasks||0) + (counts.returnRecords||0) + (counts.productionPlans||0) + (counts.productionRecords||0);
   }
-  function setMainStatusAfterFactoryStep(t, op){
-    if(!t) return;
-    if(op === 'outside_parking' || op === 'inside_waiting' || op === 'unloading') {
-      if(!t.status || ['planned','pending','arrived'].includes(t.status)) t.status = 'arrived';
+  function safeIsEmptyState(state){ return safeScore(safePayloadCounts(state)) === 0; }
+  function safeCurrentLocalCounts(){
+    try{
+      return safePayloadCounts({containers, blList, containerBlMap, pickupPlans, transportTasks, returnRecords, productionPlans, productionRecords, factoryCalendar});
+    }catch(e){ return {}; }
+  }
+  function safeRememberGoodCounts(counts){
+    try{
+      if((counts.containers||0) > 0 || safeScore(counts) > 0){
+        localStorage.setItem('cc_safe_last_good_counts', JSON.stringify(counts));
+        localStorage.setItem('cc_safe_last_good_at', new Date().toISOString());
+      }
+    }catch(e){}
+  }
+  function safeGetRememberedCounts(){
+    try{ return JSON.parse(localStorage.getItem('cc_safe_last_good_counts') || '{}'); }catch(e){ return {}; }
+  }
+  async function safeFetchCloudMain(){
+    try{
+      const sb = initSupabaseClient && initSupabaseClient();
+      if(!sb || typeof CLOUD_STATE_ID === 'undefined') return null;
+      const res = await sb.from('app_state').select('data, updated_at, updated_by').eq('id', CLOUD_STATE_ID).maybeSingle();
+      if(res.error){ console.warn('SAFE: 读取云端主数据失败', res.error); return null; }
+      return res.data || null;
+    }catch(e){ console.warn('SAFE: 读取云端主数据异常', e); return null; }
+  }
+  async function safeCreateProtectedBackup(reason, payload){
+    try{
+      const sb = initSupabaseClient && initSupabaseClient();
+      if(!sb || typeof CLOUD_STATE_ID === 'undefined') return false;
+      payload = payload || (typeof getCloudStatePayload === 'function' ? getCloudStatePayload() : null);
+      if(!payload || safeIsEmptyState(payload)) return false;
+      const now = Date.now();
+      const lastAt = Number(localStorage.getItem('cc_safe_last_backup_ms') || '0');
+      if(reason !== 'manual' && now - lastAt < MIN_BACKUP_INTERVAL_MS) return true;
+      const backupPayload = JSON.parse(JSON.stringify(payload));
+      backupPayload.safeBackupMeta = {
+        type: 'protected',
+        version: SAFE_VERSION,
+        reason: reason || 'before_save',
+        createdAt: new Date().toISOString(),
+        createdBy: (cloudUser && cloudUser.email) || (currentUser && (currentUser.email || currentUser.name)) || '',
+        counts: safePayloadCounts(backupPayload)
+      };
+      const id = `${CLOUD_STATE_ID}${BACKUP_PREFIX_SUFFIX}${safeNowStamp()}`;
+      const up = await sb.from('app_state').upsert({
+        id,
+        data: backupPayload,
+        updated_by: backupPayload.safeBackupMeta.createdBy,
+        updated_at: new Date().toISOString()
+      });
+      if(up.error){ console.warn('SAFE: 创建保护备份失败', up.error); return false; }
+      localStorage.setItem('cc_safe_last_backup_ms', String(now));
+      await safePruneProtectedBackups();
+      return true;
+    }catch(e){ console.warn('SAFE: 创建保护备份异常', e); return false; }
+  }
+  async function safePruneProtectedBackups(){
+    try{
+      const sb = initSupabaseClient && initSupabaseClient();
+      if(!sb || typeof CLOUD_STATE_ID === 'undefined') return;
+      const like = `${CLOUD_STATE_ID}${BACKUP_PREFIX_SUFFIX}%`;
+      const res = await sb.from('app_state').select('id, updated_at').like('id', like).order('id', {ascending:false});
+      if(res.error || !Array.isArray(res.data)) return;
+      for(const row of res.data.slice(MAX_PROTECTED_BACKUPS)){
+        try{ await sb.from('app_state').delete().eq('id', row.id); }catch(e){}
+      }
+    }catch(e){}
+  }
+  function safeShouldBlockApply(incoming){
+    const incomingCounts = safePayloadCounts(incoming);
+    const incomingScore = safeScore(incomingCounts);
+    const currentCounts = safeCurrentLocalCounts();
+    const currentScore = safeScore(currentCounts);
+    const rememberedScore = safeScore(safeGetRememberedCounts());
+    return incomingScore === 0 && (currentScore > 0 || rememberedScore > 0);
+  }
+  async function safeShouldBlockSave(payload){
+    const payloadCounts = safePayloadCounts(payload);
+    const payloadScore = safeScore(payloadCounts);
+    if(payloadScore === 0) return {block:true, reason:'当前系统数据为空，已阻止空数据覆盖云端。'};
+    const remembered = safeGetRememberedCounts();
+    const rememberedScore = safeScore(remembered);
+    if(rememberedScore > 0 && payloadScore < Math.max(3, Math.floor(rememberedScore * 0.35))){
+      return {block:true, reason:`当前待保存数据量明显少于最近正常数据，已阻止覆盖。当前 ${payloadScore}，最近正常 ${rememberedScore}。`};
     }
-    if(op === 'unloaded') {
-      const from = norm(t.from);
-      const to = norm(t.to || t.destination);
-      const needReturn = (typeof needsReturn === 'function') ? needsReturn(t.containerId, to, from) : (to === '工厂' && (from === '港口' || from === 'RG堆场'));
-      t.status = needReturn ? 'return_pending' : 'completed';
-      if(typeof returnRecords !== 'undefined' && Array.isArray(returnRecords)){
-        const exists = returnRecords.some(r => norm(r.containerId) === norm(t.containerId) && norm(r.location) === to);
-        if(!exists){
-          returnRecords.push({
-            containerId: t.containerId,
-            location: to,
-            type: needReturn ? 'return_needed' : 'unpack',
-            unpackDate: new Date().toISOString().slice(0,10),
-            isReturnConfirmed: !needReturn,
-            fromLocation: from
-          });
-        }
+    const cloud = await safeFetchCloudMain();
+    if(cloud && cloud.data){
+      const cloudCounts = safePayloadCounts(cloud.data);
+      const cloudScore = safeScore(cloudCounts);
+      if(cloudScore > 0 && payloadScore < Math.max(3, Math.floor(cloudScore * 0.25))){
+        return {block:true, reason:`当前待保存数据量明显少于云端主数据，已阻止覆盖。当前 ${payloadScore}，云端 ${cloudScore}。`};
       }
     }
+    return {block:false};
   }
-  function mutateFactoryTaskV453(taskId, mutator, msg){
-    const t = findFactoryTaskV453(taskId);
-    if(!t){ alert('未找到当前工厂到货任务，请刷新后重试。'); return; }
-    mutator(t);
-    t.updatedAt = new Date().toISOString();
-    t.updatedBy = (typeof currentUser !== 'undefined' && (currentUser.name || currentUser.email)) || '';
-    saveFactoryFlowV453('factory_flow_v453_' + (t.containerNo || t.id || ''));
-    if(msg) alert(msg);
+
+  const originalApplyCloudState = window.applyCloudState;
+  if(typeof originalApplyCloudState === 'function'){
+    window.applyCloudState = applyCloudState = function(data){
+      if(safeShouldBlockApply(data)){
+        console.error('SAFE: 阻止空云端数据覆盖当前页面数据', safePayloadCounts(data));
+        alert('数据保护已生效：云端主数据为空，系统已阻止它覆盖当前页面数据。请先检查自动备份中心或 Supabase app_state。');
+        return false;
+      }
+      const ret = originalApplyCloudState.apply(this, arguments);
+      safeRememberGoodCounts(safeCurrentLocalCounts());
+      return ret;
+    };
   }
-  window.confirmGateArrival = function(taskId){
-    mutateFactoryTaskV453(taskId, t => {
-      const id = String(taskId);
-      t.truckPlate = document.getElementById('gatePlate_' + id)?.value?.trim() || t.truckPlate || '';
-      t.driverName = document.getElementById('gateDriver_' + id)?.value?.trim() || t.driverName || '';
-      t.driverPhone = document.getElementById('gatePhone_' + id)?.value?.trim() || t.driverPhone || '';
-      t.gateArrivalTime = t.gateArrivalTime || nowV453();
-      t.operationStatus = 'outside_parking';
-      setMainStatusAfterFactoryStep(t, 'outside_parking');
-    }, '已确认到门口，车辆进入工厂外停车区。');
+
+  const originalSaveCloudState = window.saveCloudState;
+  if(typeof originalSaveCloudState === 'function'){
+    window.saveCloudState = saveCloudState = async function(){
+      try{
+        const payload = (typeof getCloudStatePayload === 'function') ? getCloudStatePayload() : null;
+        const decision = await safeShouldBlockSave(payload);
+        if(decision.block){
+          console.error('SAFE: 阻止危险云端保存', decision.reason, safePayloadCounts(payload));
+          alert('数据保护已生效：' + decision.reason + '\n\n本次不会写入 Supabase app_state。');
+          return false;
+        }
+        await safeCreateProtectedBackup('before_cloud_save', payload);
+        const ret = await originalSaveCloudState.apply(this, arguments);
+        safeRememberGoodCounts(safePayloadCounts(payload));
+        return ret;
+      }catch(e){
+        console.error('SAFE: 保存保护层异常，已阻止继续保存', e);
+        alert('数据保护层检测到异常，已阻止本次云端保存：' + (e.message || e));
+        return false;
+      }
+    };
+  }
+
+  const originalSaveData = window.saveData;
+  if(typeof originalSaveData === 'function'){
+    window.saveData = saveData = function(){
+      try{ safeRememberGoodCounts(safeCurrentLocalCounts()); }catch(e){}
+      return originalSaveData.apply(this, arguments);
+    };
+  }
+
+  window.createProtectedBackupNowV452Safe = async function(){
+    const payload = (typeof getCloudStatePayload === 'function') ? getCloudStatePayload() : null;
+    const ok = await safeCreateProtectedBackup('manual', payload);
+    alert(ok ? '已创建手动保护备份。' : '创建失败：当前数据为空或 Supabase 不可用。');
   };
-  window.releaseFromGate = function(taskId){
-    mutateFactoryTaskV453(taskId, t => {
-      t.gateReleaseTime = t.gateReleaseTime || nowV453();
-      t.waitingAreaTime = t.waitingAreaTime || t.gateReleaseTime;
-      t.operationStatus = 'inside_waiting';
-      setMainStatusAfterFactoryStep(t, 'inside_waiting');
-    }, '已放行进厂，集装箱进入工厂内等待。');
+
+  window.showDataProtectionStatusV452Safe = async function(){
+    const local = safeCurrentLocalCounts();
+    const cloud = await safeFetchCloudMain();
+    const cloudCounts = cloud && cloud.data ? safePayloadCounts(cloud.data) : {};
+    alert(`数据保护状态：已开启\n\n本地数据：${JSON.stringify(local)}\n\n云端主数据：${JSON.stringify(cloudCounts)}\n\n手动备份命令：createProtectedBackupNowV452Safe()`);
   };
-  window.startUnloading = function(taskId){
-    mutateFactoryTaskV453(taskId, t => {
-      t.unloadStartTime = t.unloadStartTime || nowV453();
-      t.operationStatus = 'unloading';
-      setMainStatusAfterFactoryStep(t, 'unloading');
-    }, '已确认到达卸货口，开始卸货。');
-  };
-  window.finishUnloading = function(taskId){
-    mutateFactoryTaskV453(taskId, t => {
-      t.unloadFinishTime = t.unloadFinishTime || nowV453();
-      t.operationStatus = 'unloaded';
-      setMainStatusAfterFactoryStep(t, 'unloaded');
-    }, '已确认收货，集装箱已转入还箱确认/完成流程。');
-  };
-  try { document.title = 'Sistema Inteligente de Monitoramento de Contêineres V45.3'; } catch(e){}
-  console.log('V45.3 gate/dock flow patch loaded');
+
+  try{
+    safeRememberGoodCounts(safeCurrentLocalCounts());
+    document.title = 'Container Monitoring System V45.2 SAFE';
+    console.log('V45.2-SAFE data protection loaded');
+  }catch(e){}
 })();
 </script>
 
