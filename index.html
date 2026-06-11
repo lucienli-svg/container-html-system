@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V43.1-SP1 Cloud Read Guard</title>
+  <title>集装箱智能监控管理系统 V43.1-SP2 Data Protection</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
     /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
@@ -1643,197 +1643,30 @@
       updateDailyFees();
     }
 
-    /* ==================== V43.1-SP1 数据读取与空数据保护补丁 ====================
-       目标：保留 V43.1 业务逻辑，只加强 app_state 读取与保存保护。
-       1) 读取顺序：主 app_state 大 JSON → V44 分片数据 → 最近非空备份。
-       2) 禁止空数据覆盖云端。
-       3) 保存前自动创建 protected 备份，不修改任何业务状态。
-    ============================================================================ */
-    const V431_SP1_VERSION = 'V43.1-SP1 Cloud Read + Data Guard';
-    let lastValidCloudCountsV431 = null;
-
-    function getStateCountsV431(state){
-      state = state || {};
-      const len = v => Array.isArray(v) ? v.length : 0;
-      return {
-        containers: len(state.containers),
-        blList: len(state.blList),
-        containerBlMap: len(state.containerBlMap),
-        pickupPlans: len(state.pickupPlans),
-        transportTasks: len(state.transportTasks),
-        returnRecords: len(state.returnRecords),
-        productionPlans: len(state.productionPlans),
-        factoryCalendar: len(state.factoryCalendar),
-        score: len(state.containers) + len(state.blList) + len(state.containerBlMap) + len(state.pickupPlans) + len(state.transportTasks) + len(state.returnRecords) + len(state.productionPlans)
-      };
-    }
-
-    function isStateEmptyV431(state){
-      const c = getStateCountsV431(state);
-      return c.score === 0;
-    }
-
-    function cloneV431(obj){
-      return JSON.parse(JSON.stringify(obj == null ? null : obj));
-    }
-
-    function persistLocalStateV431(){
-      try{
-        localStorage.setItem('cc_containers',JSON.stringify(containers));
-        localStorage.setItem('cc_blList',JSON.stringify(blList));
-        localStorage.setItem('cc_containerBlMap',JSON.stringify(containerBlMap));
-        localStorage.setItem('cc_transportTasks',JSON.stringify(transportTasks));
-        localStorage.setItem('cc_locationStock',JSON.stringify(locationStock));
-        localStorage.setItem('cc_returnRecords',JSON.stringify(returnRecords));
-        localStorage.setItem('cc_pickupPlans',JSON.stringify(pickupPlans));
-        localStorage.setItem('cc_productionRecords',JSON.stringify(productionRecords));
-        localStorage.setItem('cc_productionPlans',JSON.stringify(productionPlans));
-        localStorage.setItem('cc_factoryCalendar',JSON.stringify(factoryCalendar));
-        localStorage.setItem('cc_nextIds',JSON.stringify(nextIds));
-        localStorage.setItem('cc_storageConfig',JSON.stringify(storageConfig));
-        localStorage.setItem('cc_demurrageConfig',JSON.stringify(demurrageConfig));
-        localStorage.setItem('cc_warningConfig',JSON.stringify(warningConfig));
-      }catch(e){ console.warn('V43.1-SP1 local persist skipped', e); }
-    }
-
-    function applyValidCloudStateV431(state, updatedAt){
-      if(!state || isStateEmptyV431(state)) return false;
-      applyCloudState(state);
-      if(updatedAt) lastCloudUpdatedAt = updatedAt;
-      lastValidCloudCountsV431 = getStateCountsV431(state);
-      window.__lastValidCloudStateV431 = cloneV431(state);
-      persistLocalStateV431();
-      return true;
-    }
-
-    async function loadMainStateV431(){
-      const sb = initSupabaseClient();
-      if(!sb) return null;
-      const { data, error } = await sb.from('app_state').select('data, updated_at, updated_by').eq('id', CLOUD_STATE_ID).maybeSingle();
-      if(error) throw error;
-      if(data && data.data && !isStateEmptyV431(data.data)) return { state: data.data, updated_at: data.updated_at, source: 'main_app_state' };
-      return null;
-    }
-
-    async function loadSplitStateV431(){
-      const sb = initSupabaseClient();
-      if(!sb) return null;
-      const prefix = CLOUD_STATE_ID + ':v44:';
-      const manifestId = prefix + 'manifest';
-      const { data: manifestRow, error: mErr } = await sb.from('app_state').select('data, updated_at, updated_by').eq('id', manifestId).maybeSingle();
-      if(mErr) throw mErr;
-      const manifest = manifestRow && manifestRow.data;
-      if(!manifest || !manifest.modules) return null;
-      const { data: rows, error } = await sb.from('app_state').select('id,data,updated_at').like('id', prefix + 'chunk:%');
-      if(error) throw error;
-      const byModule = {};
-      (rows || []).forEach(r => {
-        const d = r.data || {};
-        if(!d.module) return;
-        if(!byModule[d.module]) byModule[d.module] = [];
-        byModule[d.module].push(d);
-      });
-      const arrayModules = ['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig'];
-      const objectModules = ['nextIds','warningConfig'];
-      const state = { version: manifest.version || V431_SP1_VERSION, updatedAt: manifest.updatedAt, updatedBy: manifest.updatedBy };
-      arrayModules.forEach(name => {
-        const chunks = (byModule[name] || []).sort((a,b)=>(a.index||0)-(b.index||0));
-        state[name] = chunks.flatMap(c => Array.isArray(c.items) ? c.items : []);
-      });
-      objectModules.forEach(name => {
-        const chunks = (byModule[name] || []).sort((a,b)=>(a.index||0)-(b.index||0));
-        state[name] = chunks.length ? (chunks[0].value || {}) : {};
-      });
-      if(isStateEmptyV431(state)) return null;
-      return { state, updated_at: manifestRow.updated_at, source: 'v44_split_app_state' };
-    }
-
-    async function loadLatestBackupStateV431(){
-      const sb = initSupabaseClient();
-      if(!sb) return null;
-      const patterns = [CLOUD_STATE_ID + '-daily-%', CLOUD_STATE_ID + '-protected-%', CLOUD_STATE_ID + '-before-%', CLOUD_STATE_ID + '-manual-%'];
-      let candidates = [];
-      for(const pattern of patterns){
-        try{
-          const { data, error } = await sb.from('app_state').select('id,data,updated_at,updated_by').like('id', pattern).order('updated_at', { ascending:false }).limit(20);
-          if(!error && Array.isArray(data)) candidates = candidates.concat(data);
-        }catch(e){ console.warn('V43.1-SP1 backup query skipped', pattern, e); }
-      }
-      candidates.sort((a,b)=>String(b.updated_at||'').localeCompare(String(a.updated_at||'')));
-      for(const row of candidates){
-        if(row && row.data && !isStateEmptyV431(row.data)) return { state: row.data, updated_at: row.updated_at, source: row.id };
-      }
-      return null;
-    }
-
     async function loadCloudState(){
       const sb = initSupabaseClient();
       if(!sb) return false;
-      try{
-        const result = await loadMainStateV431() || await loadSplitStateV431() || await loadLatestBackupStateV431();
-        if(result && applyValidCloudStateV431(result.state, result.updated_at)){
-          console.log('V43.1-SP1 云端数据已读取:', result.source, getStateCountsV431(result.state));
-          return true;
-        }
-        console.warn('V43.1-SP1：没有读取到有效云端数据，系统不会用空数据覆盖云端。');
-        return false;
-      }catch(error){
+      const { data, error } = await sb.from('app_state').select('data, updated_at, updated_by').eq('id', CLOUD_STATE_ID).maybeSingle();
+      if(error){
         console.error('loadCloudState error', error);
-        alert('云端数据读取失败：' + (error.message || error));
+        alert('云端数据读取失败：' + error.message);
         return false;
       }
-    }
-
-    async function createProtectedBackupV431(reason){
-      const sb = initSupabaseClient();
-      if(!sb || !cloudUser) return false;
-      const payload = getCloudStatePayload();
-      if(isStateEmptyV431(payload)) return false;
-      const nowIso = new Date().toISOString();
-      const stamp = nowIso.replace(/[-:.TZ]/g,'').slice(0,14);
-      const backupPayload = cloneV431(payload);
-      backupPayload.backupMeta = {
-        type: 'protected',
-        version: V431_SP1_VERSION,
-        reason: reason || 'before_save',
-        createdAt: nowIso,
-        createdBy: cloudUser?.email || currentUser?.email || '',
-        counts: getStateCountsV431(payload)
-      };
-      try{
-        await sb.from('app_state').upsert({
-          id: CLOUD_STATE_ID + '-protected-' + stamp,
-          data: backupPayload,
-          updated_by: cloudUser?.email || '',
-          updated_at: nowIso
-        });
+      if(data && data.data){
+        applyCloudState(data.data);
+        if(data.updated_at) lastCloudUpdatedAt = data.updated_at;
         return true;
-      }catch(e){
-        console.warn('V43.1-SP1 protected backup failed', e);
-        return false;
       }
+      return false;
     }
 
     async function saveCloudState(){
       const sb = initSupabaseClient();
-      if(!sb || isCloudSaving) return false;
+      if(!sb || isCloudSaving) return;
       isCloudSaving = true;
       try{
         const payload = getCloudStatePayload();
-        const counts = getStateCountsV431(payload);
-        if(isStateEmptyV431(payload)){
-          console.error('V43.1-SP1保护：当前数据为空，禁止覆盖云端 app_state。', counts);
-          alert('数据保护：当前系统数据为空，已阻止覆盖云端。请先确认是否已成功读取云端数据。');
-          return false;
-        }
-        if(lastValidCloudCountsV431 && lastValidCloudCountsV431.score > 20 && counts.score < Math.floor(lastValidCloudCountsV431.score * 0.35)){
-          const ok = confirm(`数据保护提醒：当前准备保存的数据量明显少于最近一次云端有效数据。\n\n最近云端数据量：${lastValidCloudCountsV431.score}\n当前数据量：${counts.score}\n\n如果你不是在主动大批量删除数据，请点击“取消”。是否继续保存？`);
-          if(!ok) return false;
-        }
-        await createProtectedBackupV431('before_main_save');
         const nowIso = new Date().toISOString();
-        payload.version = V431_SP1_VERSION;
-        payload.updatedAt = nowIso;
         lastSelfSaveAt = Date.now();
         lastCloudUpdatedAt = nowIso;
         const { error } = await sb.from('app_state').upsert({
@@ -1843,13 +1676,9 @@
           updated_at: nowIso
         });
         if(error) throw error;
-        lastValidCloudCountsV431 = counts;
-        window.__lastValidCloudStateV431 = cloneV431(payload);
-        return true;
       }catch(err){
         console.error('saveCloudState error', err);
         alert('云端保存失败：' + (err.message || err));
-        return false;
       }finally{
         isCloudSaving = false;
       }
@@ -1981,13 +1810,8 @@
 
       let hasCloud = await loadCloudState();
       if(!hasCloud){
-        // V43.1-SP1：云端没有有效数据时，只读取本地缓存，不自动保存，避免本地空数据覆盖云端。
         loadLocalDataOnly();
-        if(isStateEmptyV431(getCloudStatePayload())){
-          console.warn('V43.1-SP1：本地缓存也为空，已进入系统但不会自动覆盖云端。');
-        }else{
-          console.warn('V43.1-SP1：已使用本地缓存数据，未自动写回云端。请确认后手动保存。');
-        }
+        await saveCloudState();
       }
 
       document.getElementById('loginPage').style.display='none';
@@ -2132,14 +1956,11 @@
 
         if(error) throw error;
         if(!data || !data.data) return;
-        if(typeof isStateEmptyV431 === 'function' && isStateEmptyV431(data.data)){
-          console.warn('V43.1-SP1保护：实时同步收到空数据，已忽略，避免覆盖当前页面。');
-          return;
-        }
 
         if(data.updated_at && lastCloudUpdatedAt && data.updated_at === lastCloudUpdatedAt) return;
 
-        applyValidCloudStateV431(data.data, data.updated_at);
+        applyCloudState(data.data);
+        if(data.updated_at) lastCloudUpdatedAt = data.updated_at;
 
         if(currentUser){
           const uiState = captureCurrentUiState();
@@ -2357,31 +2178,41 @@
       return bl.blNo || '-';
     }
     function createBlForContainer(containerId, vessel, blText, containerNo){
-      let carrier = normalizeText(vessel) || '未维护';
+      // V43.1-SP3 Import Strict Mode:
+      // 基础数据导入只读取模板中的提单信息，禁止自动生成“待补充提单”等任何业务数据。
+      // 如果模板没有提单号，则只保存集装箱基础数据，不进入提单/IRA与清关维护板块。
+      let carrier = normalizeText(vessel) || '';
       let raw = normalizeText(blText);
+      if(!raw){ return false; }
       let isPlaceholder = false;
-      if(!raw){
-        raw = `待补充提单-${normalizeText(containerNo)}`;
-        isPlaceholder = true;
-      }
       if(carrier === '长荣'){
         let parts = raw.split('|');
-        let masterBl = normalizeText(parts[0]) || raw;
-        let houseBl = normalizeText(parts[1]) || masterBl;
+        let masterBl = normalizeText(parts[0]);
+        let houseBl = normalizeText(parts[1]);
+        // 长荣必须保留“主提单|分提单”结构；实际业务维护按分提单号区分。
+        // 如果模板只填写了一个号，则作为分提单号使用，主提单留空，不自动复制生成。
+        if(!houseBl){ houseBl = masterBl; masterBl = ''; }
+        if(!houseBl){ return false; }
         if(!blList.find(b => b.houseBlNo === houseBl)){
-          blList.push({carrier:'长荣',masterBlNo:masterBl,houseBlNo:houseBl,iraNo:'',isCleared:false,channel:'绿色',clearanceDate:null,isPlaceholder});
+          blList.push({carrier:'长荣',masterBlNo:masterBl,houseBlNo:houseBl,iraNo:'',isCleared:false,channel:'绿色',clearanceDate:null,isPlaceholder:false});
+        } else {
+          let exist = blList.find(b => b.houseBlNo === houseBl);
+          if(exist && masterBl && !exist.masterBlNo) exist.masterBlNo = masterBl;
         }
         if(!containerBlMap.some(m => m.containerId === containerId && m.blNo === houseBl)){
           containerBlMap.push({containerId, blNo: houseBl});
         }
+        return true;
       } else {
         let blNo = raw;
+        if(!blNo){ return false; }
         if(!blList.find(b => b.blNo === blNo)){
-          blList.push({carrier,blNo,iraNo:'',isCleared:false,channel:'绿色',clearanceDate:null,isPlaceholder});
+          blList.push({carrier,blNo,iraNo:'',isCleared:false,channel:'绿色',clearanceDate:null,isPlaceholder:false});
         }
         if(!containerBlMap.some(m => m.containerId === containerId && m.blNo === blNo)){
           containerBlMap.push({containerId, blNo});
         }
+        return true;
       }
     }
 
@@ -2558,7 +2389,7 @@ function getContainerLocation(cid){
       }
     }
     
-    function updateContainerStatus(){containers.forEach(c=>{let bls=containerBlMap.filter(m=>m.containerId===c.id).map(m=>m.blNo);let allCleared=bls.length===0||bls.every(bl=>{let b=blList.find(b=>b.blNo===bl||b.houseBlNo===bl);return b?.isCleared;});c.customsStatus=allCleared?'已清关':'清关中';});}
+    function updateContainerStatus(){containers.forEach(c=>{let bls=containerBlMap.filter(m=>m.containerId===c.id).map(m=>m.blNo);let allCleared=bls.length>0&&bls.every(bl=>{let b=blList.find(b=>b.blNo===bl||b.houseBlNo===bl);return b?.isCleared;});c.customsStatus=allCleared?'已清关':'清关中';});}
     function addStock(cid,loc){locationStock=locationStock.filter(s=>s.containerId!==cid);locationStock.push({containerId:cid,location:loc,isActive:true});}
     function needsReturn(cid,to,from){if(!(to==='Rio Claro'||to==='IRA库房'||to==='工厂'))return false;if(!(from==='港口'||from==='RG堆场'))return false;if(returnRecords.some(r=>r.containerId===cid&&r.isReturnConfirmed))return false;if(returnRecords.some(r=>r.containerId===cid&&!r.isReturnConfirmed&&r.type==='return_needed'))return false;return true;}
     
@@ -3426,7 +3257,7 @@ let main=document.getElementById('mainContent');
         let workbook=XLSX.read(data,{type:'array',cellDates:true});
         let sheet=workbook.Sheets[workbook.SheetNames[0]];
         let rows=XLSX.utils.sheet_to_json(sheet,{header:1,defval:'',raw:false});
-        let success=0,dup=0,placeholder=0;
+        let success=0,dup=0,missingBl=0,blLinked=0;
         for(let i=1;i<rows.length;i++){
           let row=rows[i];
           let batch=normalizeText(row[0]);
@@ -3442,10 +3273,13 @@ let main=document.getElementById('mainContent');
           if(containers.find(c=>normalizeText(c.containerNo)===no)){dup++;continue;}
           let newId=nextIds.container++;
           containers.push({id:newId,batch,containerSeq:seq,containerNo:no,vessel,containerType:type,eta,actualPickupTime:null});
-          let blItems = blsRaw ? blsRaw.split(',').map(s=>s.trim()).filter(Boolean) : [''];
-          if(!blsRaw) placeholder++;
-          for(let bl of blItems){
-            createBlForContainer(newId, vessel, bl, no);
+          let blItems = blsRaw ? blsRaw.split(',').map(s=>s.trim()).filter(Boolean) : [];
+          if(!blItems.length){
+            missingBl++;
+          } else {
+            for(let bl of blItems){
+              if(createBlForContainer(newId, vessel, bl, no)) blLinked++;
+            }
           }
           success++;
         }
@@ -3453,7 +3287,7 @@ let main=document.getElementById('mainContent');
         saveData();
         closeModal();
         renderContainerTable();
-        alert(`成功导入 ${success} 条，跳过重复 ${dup} 条${placeholder ? `，其中 ${placeholder} 条未填写提单号，系统已用集装箱号生成待补充提单记录` : ''}`);
+        alert(`成功导入 ${success} 条，跳过重复 ${dup} 条。已按模板提单信息关联 ${blLinked} 条提单映射${missingBl ? `；${missingBl} 条未填写提单号，仅保存基础数据，未进入IRA/清关流程` : ''}`);
       };
       reader.readAsArrayBuffer(file);
     }
@@ -3612,7 +3446,7 @@ let main=document.getElementById('mainContent');
             <button class="btn btn-primary" onclick="renderBlTable()">查询</button>
             <button class="btn" onclick="clearBlSearch()">重置</button>
           </div>
-          <div style="font-size:12px;color:#909399;margin-bottom:12px;">说明：如果基础数据导入时没有填写提单号，系统会先按“待补充提单-集装箱号”生成临时记录，确保后续模块可继续维护。</div>
+          <div style="font-size:12px;color:#909399;margin-bottom:12px;">说明：基础数据批量导入采用严格模式，只读取模板中的提单信息；未填写提单号的集装箱不会自动生成提单，也不会进入IRA/清关流程。长荣按“主提单号 + 分提单号”展示，并以分提单号作为维护依据。</div>
           <div id="pendingIraEvergreen"></div>
           <div id="pendingIraSimple" style="margin-top:20px;"></div>
         </div>
@@ -9504,6 +9338,289 @@ let main=document.getElementById('mainContent');
   // 首次打开时清理一次历史残留。
   setTimeout(()=>{ try{ cleanupFactoryTasksV43(); }catch(e){ console.warn('V43 initial cleanup skipped', e); } }, 800);
 })();
+
+
+/* ==================== V43.1-SP2 数据保护中心：读取保护 + 自动备份 + 手动恢复 ====================
+   设计原则：只保护 app_state 数据，不修改任何业务流程/状态流转逻辑。
+   保护目标：防止空数据覆盖、保存前留恢复点、每天留恢复点、支持管理员恢复。
+*/
+(function(){
+  const SP2_VERSION = 'V43.1-SP2 Data Protection';
+  const BACKUP_PREFIX = CLOUD_STATE_ID + '-backup-';
+  const DAILY_PREFIX = CLOUD_STATE_ID + '-daily-';
+  const RESTORE_PREFIX = CLOUD_STATE_ID + '-before-restore-';
+  const MAX_BACKUPS = 60;
+  const PRE_SAVE_BACKUP_INTERVAL_MS = 10 * 60 * 1000;
+  let sp2BackupRunning = false;
+  let sp2LastPreSaveBackupAt = 0;
+  let sp2BlockedEmptySaveWarnedAt = 0;
+  window.__v431sp2Backups = [];
+
+  function sp2Pad(n){ return String(n).padStart(2,'0'); }
+  function sp2Date(d){ return d.getFullYear()+'-'+sp2Pad(d.getMonth()+1)+'-'+sp2Pad(d.getDate()); }
+  function sp2Stamp(){
+    const d = new Date();
+    return d.getFullYear()+sp2Pad(d.getMonth()+1)+sp2Pad(d.getDate())+'-'+sp2Pad(d.getHours())+sp2Pad(d.getMinutes())+sp2Pad(d.getSeconds());
+  }
+  function sp2Len(v){ return Array.isArray(v) ? v.length : 0; }
+  function sp2Counts(state){
+    state = state || {};
+    return {
+      containers: sp2Len(state.containers),
+      blList: sp2Len(state.blList),
+      containerBlMap: sp2Len(state.containerBlMap),
+      pickupPlans: sp2Len(state.pickupPlans),
+      transportTasks: sp2Len(state.transportTasks),
+      productionPlans: sp2Len(state.productionPlans),
+      productionRecords: sp2Len(state.productionRecords),
+      returnRecords: sp2Len(state.returnRecords)
+    };
+  }
+  function sp2IsEmptyState(state){
+    const c = sp2Counts(state || {});
+    return (c.containers + c.blList + c.containerBlMap + c.pickupPlans + c.transportTasks + c.productionPlans + c.productionRecords + c.returnRecords) === 0;
+  }
+  function sp2CurrentPayload(){
+    try{ return getCloudStatePayload(); }
+    catch(e){
+      return {
+        containers, blList, containerBlMap, transportTasks, locationStock, returnRecords,
+        pickupPlans, productionRecords, productionPlans, factoryCalendar, nextIds, storageConfig, demurrageConfig, warningConfig,
+        version: SP2_VERSION,
+        updatedAt: new Date().toISOString(),
+        updatedBy: cloudUser?.email || currentUser?.email || currentUser?.name || ''
+      };
+    }
+  }
+  function sp2BackupId(type){
+    if(type === 'daily') return DAILY_PREFIX + sp2Date(new Date());
+    if(type === 'before_restore') return RESTORE_PREFIX + sp2Stamp();
+    return BACKUP_PREFIX + sp2Stamp();
+  }
+  function sp2Meta(payload, type, reason){
+    return {
+      protectionVersion: SP2_VERSION,
+      type: type || 'manual',
+      reason: reason || '',
+      createdAt: new Date().toISOString(),
+      createdBy: cloudUser?.email || currentUser?.email || currentUser?.name || '',
+      counts: sp2Counts(payload)
+    };
+  }
+  async function sp2BackupExists(id){
+    const sb = initSupabaseClient(); if(!sb) return false;
+    const { data, error } = await sb.from('app_state').select('id').eq('id', id).maybeSingle();
+    if(error){ console.warn('SP2 backup exists check failed', error); return false; }
+    return !!data;
+  }
+  async function sp2CreateBackup(type, reason, options){
+    options = options || {};
+    const sb = initSupabaseClient();
+    if(!sb || sp2BackupRunning) return false;
+    const payload = JSON.parse(JSON.stringify(options.payload || sp2CurrentPayload()));
+    if(sp2IsEmptyState(payload)){
+      console.warn('SP2保护：当前数据为空，跳过备份，避免保存空恢复点。');
+      return false;
+    }
+    const id = options.id || sp2BackupId(type || 'manual');
+    if(type === 'daily' && await sp2BackupExists(id)) return true;
+    payload.backupMeta = sp2Meta(payload, type || 'manual', reason || '');
+    sp2BackupRunning = true;
+    try{
+      const nowIso = new Date().toISOString();
+      const { error } = await sb.from('app_state').upsert({
+        id,
+        data: payload,
+        updated_by: payload.backupMeta.createdBy,
+        updated_at: nowIso
+      });
+      if(error) throw error;
+      if(type === 'pre_save') sp2LastPreSaveBackupAt = Date.now();
+      return true;
+    }catch(e){
+      console.error('SP2创建备份失败', e);
+      if(options.showError) alert('创建备份失败：' + (e.message || e));
+      return false;
+    }finally{
+      sp2BackupRunning = false;
+    }
+  }
+  async function sp2PruneBackups(){
+    const sb = initSupabaseClient(); if(!sb) return;
+    try{
+      const { data, error } = await sb.from('app_state')
+        .select('id, updated_at')
+        .or(`id.like.${BACKUP_PREFIX}%,id.like.${DAILY_PREFIX}%,id.like.${RESTORE_PREFIX}%`)
+        .order('updated_at', {ascending:false});
+      if(error || !Array.isArray(data)) return;
+      const old = data.slice(MAX_BACKUPS);
+      for(const row of old){
+        try{ await sb.from('app_state').delete().eq('id', row.id); }catch(e){ console.warn('SP2删除旧备份失败', row.id, e); }
+      }
+    }catch(e){ console.warn('SP2备份清理失败', e); }
+  }
+  async function sp2EnsureDailyBackup(reason){
+    const id = sp2BackupId('daily');
+    const payload = sp2CurrentPayload();
+    if(sp2IsEmptyState(payload)) return false;
+    const ok = await sp2CreateBackup('daily', reason || 'daily_login_backup', {id, payload});
+    if(ok) sp2PruneBackups();
+    return ok;
+  }
+  async function sp2FindLatestNonEmptyBackup(){
+    const sb = initSupabaseClient(); if(!sb) return null;
+    const { data, error } = await sb.from('app_state')
+      .select('id, data, updated_at, updated_by')
+      .or(`id.like.${BACKUP_PREFIX}%,id.like.${DAILY_PREFIX}%,id.like.${RESTORE_PREFIX}%`)
+      .order('updated_at', {ascending:false})
+      .limit(20);
+    if(error){ console.warn('SP2读取备份失败', error); return null; }
+    return (data || []).find(row => row && row.data && !sp2IsEmptyState(row.data)) || null;
+  }
+
+  const sp2BaseLoadCloudState = loadCloudState;
+  loadCloudState = window.loadCloudState = async function(){
+    const sb = initSupabaseClient();
+    if(!sb) return false;
+    try{
+      const { data, error } = await sb.from('app_state').select('data, updated_at, updated_by').eq('id', CLOUD_STATE_ID).maybeSingle();
+      if(error) throw error;
+      if(data && data.data && !sp2IsEmptyState(data.data)){
+        applyCloudState(data.data);
+        if(data.updated_at) lastCloudUpdatedAt = data.updated_at;
+        setTimeout(()=>{ try{ sp2EnsureDailyBackup('login_daily_backup'); }catch(e){} }, 1000);
+        return true;
+      }
+      const backup = await sp2FindLatestNonEmptyBackup();
+      if(backup && backup.data){
+        applyCloudState(backup.data);
+        if(backup.updated_at) lastCloudUpdatedAt = backup.updated_at;
+        alert('主数据为空，系统已临时读取最近有效备份：' + backup.id + '\n请检查数据后，在“自动备份中心”执行恢复。');
+        return true;
+      }
+      console.warn('SP2保护：云端主数据为空，且未找到有效备份。');
+      return false;
+    }catch(e){
+      console.error('SP2 loadCloudState error', e);
+      alert('云端数据读取失败：' + (e.message || e));
+      try{ return await sp2BaseLoadCloudState.apply(this, arguments); }catch(_){ return false; }
+    }
+  };
+
+  const sp2BaseSaveCloudState = saveCloudState;
+  saveCloudState = window.saveCloudState = async function(){
+    const sb = initSupabaseClient();
+    if(!sb || isCloudSaving) return;
+    const payload = sp2CurrentPayload();
+    if(sp2IsEmptyState(payload)){
+      const now = Date.now();
+      if(now - sp2BlockedEmptySaveWarnedAt > 5000){
+        sp2BlockedEmptySaveWarnedAt = now;
+        alert('SP2数据保护：检测到当前系统数据为空，已阻止覆盖云端主数据。');
+      }
+      console.error('SP2 blocked empty saveCloudState');
+      return;
+    }
+    try{
+      if(Date.now() - sp2LastPreSaveBackupAt > PRE_SAVE_BACKUP_INTERVAL_MS){
+        await sp2CreateBackup('pre_save', 'before_cloud_save', {payload});
+        sp2PruneBackups();
+      }
+    }catch(e){ console.warn('SP2保存前备份失败，不阻断主保存', e); }
+    return sp2BaseSaveCloudState.apply(this, arguments);
+  };
+
+  window.manualCreateSP2Backup = async function(){
+    const ok = await sp2CreateBackup('manual', 'manual_backup', {showError:true});
+    if(ok){ alert('已创建手动备份。'); await window.refreshSP2BackupList(false); }
+    else alert('创建失败：当前数据为空或云端不可用。');
+  };
+  window.downloadSP2Backup = function(id){
+    const b = (window.__v431sp2Backups || []).find(x => x.id === id);
+    if(!b){ alert('找不到备份'); return; }
+    const blob = new Blob([JSON.stringify(b.data, null, 2)], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'container_backup_' + id.replace(/[^a-zA-Z0-9_-]/g,'_') + '.json';
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
+  };
+  async function sp2LoadBackupList(){
+    const sb = initSupabaseClient(); if(!sb) return [];
+    const { data, error } = await sb.from('app_state')
+      .select('id, data, updated_at, updated_by')
+      .or(`id.like.${BACKUP_PREFIX}%,id.like.${DAILY_PREFIX}%,id.like.${RESTORE_PREFIX}%`)
+      .order('updated_at', {ascending:false})
+      .limit(MAX_BACKUPS);
+    if(error){ alert('读取备份列表失败：' + error.message); return []; }
+    window.__v431sp2Backups = (data || []).map(row => ({
+      id: row.id,
+      updated_at: row.updated_at,
+      updated_by: row.updated_by,
+      data: row.data,
+      meta: row.data && row.data.backupMeta ? row.data.backupMeta : {},
+      counts: row.data && row.data.backupMeta && row.data.backupMeta.counts ? row.data.backupMeta.counts : sp2Counts(row.data || {})
+    })).filter(b => b.data && !sp2IsEmptyState(b.data));
+    return window.__v431sp2Backups;
+  }
+  window.refreshSP2BackupList = async function(showMsg){
+    const box = document.getElementById('sp2BackupList');
+    if(box) box.innerHTML = '正在读取备份列表...';
+    const list = await sp2LoadBackupList();
+    if(box){
+      if(!list.length){
+        box.innerHTML = '<div class="empty-state">暂无有效备份。请先点击“立即创建备份”。</div>';
+      }else{
+        box.innerHTML = `<table class="data-table"><thead><tr><th>备份ID</th><th>类型</th><th>基础数据</th><th>提箱计划</th><th>运输任务</th><th>生产计划</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${list.map(b=>`<tr><td style="font-size:12px;max-width:260px;word-break:break-all;">${b.id}</td><td>${b.meta.type || '-'}</td><td>${b.counts.containers||0}</td><td>${b.counts.pickupPlans||0}</td><td>${b.counts.transportTasks||0}</td><td>${b.counts.productionPlans||0}</td><td>${formatDateTime ? formatDateTime(b.updated_at) : (b.updated_at||'-')}</td><td><button class="btn btn-secondary" onclick="downloadSP2Backup('${b.id}')">下载</button> <button class="btn btn-danger" onclick="restoreSP2Backup('${b.id}')">恢复</button></td></tr>`).join('')}</tbody></table>`;
+      }
+    }
+    if(showMsg !== false && typeof showRealtimeSyncHint === 'function') showRealtimeSyncHint('备份列表已刷新');
+  };
+  window.restoreSP2Backup = async function(id){
+    const b = (window.__v431sp2Backups || []).find(x => x.id === id);
+    if(!b || !b.data){ alert('找不到备份'); return; }
+    if(sp2IsEmptyState(b.data)){ alert('该备份为空，禁止恢复。'); return; }
+    const c = sp2Counts(b.data);
+    if(!confirm(`确认恢复该备份吗？\n\n基础数据：${c.containers||0}\n提箱计划：${c.pickupPlans||0}\n运输任务：${c.transportTasks||0}\n生产计划：${c.productionPlans||0}\n\n恢复前系统会先创建当前数据保护点。`)) return;
+    await sp2CreateBackup('before_restore', 'before_restore_' + id, {showError:true});
+    applyCloudState(JSON.parse(JSON.stringify(b.data)));
+    if(typeof saveLocalData === 'function') saveLocalData();
+    await saveCloudState();
+    alert('恢复完成。请检查基础数据、提箱计划和运输任务。');
+    currentMenu = 'dashboard'; renderSidebar(); renderContent();
+  };
+  window.renderSP2BackupCenter = async function(container){
+    const payload = sp2CurrentPayload();
+    const c = sp2Counts(payload);
+    const empty = sp2IsEmptyState(payload);
+    container.innerHTML = `<div class="card"><div class="card-header"><span class="card-title">🛡️ 自动备份中心 V43.1-SP2</span><span class="status-badge ${empty?'status-danger':'status-success'}">${empty?'当前为空，禁止覆盖':'数据保护已开启'}</span></div><div style="line-height:1.8;color:#606266;margin-bottom:12px;">本中心只保护 Supabase app_state 主数据，不修改任何业务流程。系统会阻止空数据覆盖云端，并在保存前/每日登录/恢复前创建恢复点。</div><div class="stats-grid"><div class="stat-card"><div class="stat-number">${c.containers||0}</div><div class="stat-label">基础数据</div></div><div class="stat-card"><div class="stat-number">${c.blList||0}</div><div class="stat-label">提单</div></div><div class="stat-card"><div class="stat-number">${c.pickupPlans||0}</div><div class="stat-label">提箱计划</div></div><div class="stat-card"><div class="stat-number">${c.transportTasks||0}</div><div class="stat-label">运输任务</div></div><div class="stat-card"><div class="stat-number">${c.productionPlans||0}</div><div class="stat-label">生产计划</div></div></div><div style="margin:12px 0;"><button class="btn btn-primary" onclick="manualCreateSP2Backup()">立即创建备份</button><button class="btn btn-secondary" onclick="refreshSP2BackupList()">刷新备份列表</button><button class="btn btn-warning" onclick="downloadCloudBackup()">下载当前主数据</button></div><div id="sp2BackupList" class="card" style="box-shadow:none;border:1px solid #ebeef5;">正在读取备份列表...</div></div>`;
+    await window.refreshSP2BackupList(false);
+  };
+
+  try{
+    if(Array.isArray(allMenus) && !allMenus.some(m => m.id === 'autoBackupCenter')){
+      allMenus.push({id:'autoBackupCenter', name:'自动备份中心', icon:'🛡️', roles:['Admin','订购科']});
+    }
+    if(Array.isArray(permissionModules) && !permissionModules.some(m => m.id === 'autoBackupCenter')){
+      permissionModules.push({id:'autoBackupCenter', name:'自动备份中心'});
+    }
+  }catch(e){ console.warn('SP2菜单注册失败', e); }
+
+  const sp2BaseRenderContent = renderContent;
+  renderContent = window.renderContent = function(){
+    if(currentMenu === 'autoBackupCenter'){
+      const main = document.getElementById('mainContent');
+      window.renderSP2BackupCenter(main);
+      if(typeof applyLanguage === 'function') applyLanguage();
+      return;
+    }
+    return sp2BaseRenderContent.apply(this, arguments);
+  };
+
+  setTimeout(()=>{ try{ if(cloudUser || currentUser) sp2EnsureDailyBackup('delayed_daily_check'); }catch(e){} }, 3000);
+  console.log('V43.1-SP2 Data Protection loaded');
+})();
+
 </script>
 
 </body>
