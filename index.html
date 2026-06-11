@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V45.00 Dashboard Workday Sync</title>
+  <title>集装箱智能监控管理系统 V45.1 Dashboard Workday Sync</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
     /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
@@ -11591,6 +11591,145 @@ let main=document.getElementById('mainContent');
 
   try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V45.0'; }catch(e){}
   console.log('V45.0 stable patch loaded');
+})();
+</script>
+
+
+<script>
+/* ==================== V45.1 紧急修复：确认提箱后任务消失/未进入到货确认 ====================
+   根因：确认提箱依赖旧同步函数，有时没有稳定生成/更新 transportTasks，导致：
+   1) 待提箱行消失；2) 运输中行没有出现；3) 非工厂目的地无法进入到货确认。
+   修复：确认提箱时直接按当前行唯一Key生成/更新一条运输任务，并保持 in_transit 状态。
+*/
+(function(){
+  const PATCH_VERSION = 'V45.1';
+  const norm = v => String(v ?? '').trim();
+  const arr = v => Array.isArray(v) ? v : [];
+  function safeGetDatePart(v){ try { return typeof getDatePart === 'function' ? getDatePart(v) : String(v||'').slice(0,10); } catch(e){ return String(v||'').slice(0,10); } }
+  function makeKey(obj){
+    try{
+      const payload = {id:obj.id??null, containerId:obj.containerId??null, containerNo:obj.containerNo||'', batch:obj.batch||'', seq:obj.containerSeq||obj.seq||''};
+      return btoa(unescape(encodeURIComponent(JSON.stringify(payload)))).replace(/=+$/,'');
+    }catch(e){ return String(obj.containerNo || obj.id || '').replace(/[^a-zA-Z0-9_-]/g,'_'); }
+  }
+  function readKey(key){
+    try{ let s=String(key||''); while(s.length%4) s+='='; return JSON.parse(decodeURIComponent(escape(atob(s)))); }
+    catch(e){ return {containerNo:String(key||'')}; }
+  }
+  function findPlanByKey(keyObj){
+    const plans = arr(typeof pickupPlans !== 'undefined' ? pickupPlans : []).filter(p => p && p.status !== 'cancelled');
+    let cands = [];
+    if(keyObj.id != null) cands = plans.filter(p => norm(p.id) === norm(keyObj.id));
+    if(!cands.length && keyObj.containerNo) cands = plans.filter(p => norm(p.containerNo) === norm(keyObj.containerNo));
+    if(!cands.length && keyObj.containerId != null) cands = plans.filter(p => norm(p.containerId) === norm(keyObj.containerId));
+    if(cands.length > 1 && keyObj.batch){ const tmp=cands.filter(p => norm(p.batch) === norm(keyObj.batch)); if(tmp.length) cands=tmp; }
+    if(cands.length > 1 && keyObj.seq){ const tmp=cands.filter(p => norm(p.containerSeq || p.seq) === norm(keyObj.seq)); if(tmp.length) cands=tmp; }
+    // 优先未确认计划；如果页面刚刚局部刷新，也允许找到已确认计划用于保持运输任务
+    const pending = cands.filter(p => p.status !== 'confirmed');
+    return pending[0] || cands[0] || null;
+  }
+  function findContainer(plan){
+    return arr(typeof containers !== 'undefined' ? containers : []).find(c => norm(c.id) === norm(plan.containerId) || norm(c.containerNo) === norm(plan.containerNo));
+  }
+  function isFactoryDest(dest){ return norm(dest) === '工厂' || String(dest||'').toLowerCase() === 'factory'; }
+  function taskStarted(t){ return !!(t && (t.gateArrivalTime || t.gateReleaseTime || t.waitingAreaTime || t.unloadStartTime || t.unloadFinishTime || t.actualArrival || t.status === 'arrived')) ; }
+  function findOrCreateTransitTask(plan, cont){
+    if(typeof transportTasks === 'undefined' || !Array.isArray(transportTasks)) window.transportTasks = transportTasks = [];
+    const candidates = transportTasks.filter(t => t && !t.cancelled && t.status !== 'cancelled' && (
+      norm(t.sourcePlanId) === norm(plan.id) ||
+      (norm(t.source) === 'pickupPlan' && norm(t.containerId) === norm(plan.containerId)) ||
+      (plan.containerNo && norm(t.containerNo) === norm(plan.containerNo) && norm(t.source || 'pickupPlan') === 'pickupPlan')
+    ));
+    let task = candidates.find(t => t.status === 'in_transit') || candidates[0];
+    if(!task){
+      const idBase = (typeof nextIds !== 'undefined' && nextIds && nextIds.task) ? nextIds.task++ : (Date.now());
+      task = { id:idBase, source:'pickupPlan', sourcePlanId:plan.id, createdAt:new Date().toISOString(), publishedAt:new Date().toISOString() };
+      transportTasks.push(task);
+    }
+    // 如果旧任务已经进入执行流程，不允许从工厂改成非工厂，避免现场流程混乱
+    if(taskStarted(task) && isFactoryDest(task.to) && !isFactoryDest(plan.destination)){
+      alert('该集装箱已进入门岗/卸货口流程，不能把目的地从工厂改为其他地点。');
+      return null;
+    }
+    task.source = 'pickupPlan';
+    task.sourcePlanId = plan.id;
+    task.containerId = plan.containerId;
+    task.containerNo = plan.containerNo || (cont && cont.containerNo) || task.containerNo || '';
+    task.containerSeq = (cont && cont.containerSeq) || plan.containerSeq || task.containerSeq || '';
+    task.batch = plan.batch || (cont && cont.batch) || task.batch || '';
+    task.blNo = (typeof getTaskBlText === 'function' ? getTaskBlText(plan) : (plan.blNo || task.blNo || ''));
+    task.iraNo = (typeof getIraList === 'function' ? getIraList(plan.containerId) : (plan.iraNo || task.iraNo || ''));
+    task.from = '港口';
+    task.to = plan.destination;
+    task.destination = plan.destination;
+    task.carrier = plan.carrier || task.carrier || 'RG';
+    task.status = 'in_transit';
+    task.operationStatus = isFactoryDest(plan.destination) ? (task.operationStatus || 'not_arrived') : '';
+    task.estimatedArrival = plan.arrivalDate || task.estimatedArrival || '';
+    task.arrivalDate = plan.arrivalDate || task.arrivalDate || '';
+    task.unloadingDock = plan.unloadingDock || task.unloadingDock || '';
+    task.actualPickupTime = plan.actualPickupTime || task.actualPickupTime || '';
+    task.cancelled = false;
+    task.cancelReason = '';
+    task.lastPickupConfirmSyncAt = new Date().toISOString();
+    // 撤回同一提箱计划产生的未执行重复任务，保留当前task
+    for(const t of candidates){
+      if(t === task) continue;
+      if(taskStarted(t)) continue;
+      t.cancelled = true; t.status = 'cancelled'; t.cancelReason = 'V45.1确认提箱后自动清理重复运输任务'; t.cancelTime = new Date().toISOString();
+    }
+    return task;
+  }
+  function pickupDateInputValue(key, plan){
+    return document.getElementById('pickupTimeKey_'+key)?.value || document.getElementById('pickupTime_'+plan.id)?.value || '';
+  }
+  window.confirmPickupTaskByKeyV451 = function(key){
+    const keyObj = readKey(key);
+    const plan = findPlanByKey(keyObj);
+    if(!plan){ alert('找不到当前行对应的提箱计划，请刷新页面后重试。'); return; }
+    if(plan.status === 'confirmed'){
+      // 已确认但运输任务缺失时，允许补建运输中任务
+      const cont0 = findContainer(plan);
+      const t0 = findOrCreateTransitTask(plan, cont0);
+      if(t0){ try{ saveData(); }catch(e){} alert('已补建运输中任务 ' + (plan.containerNo||'')); }
+      return;
+    }
+    const actual = pickupDateInputValue(key, plan);
+    if(!actual){ alert('请填写实际提箱日期'); return; }
+    const cont = findContainer(plan);
+    if(cont) cont.actualPickupTime = actual;
+    plan.status = 'confirmed';
+    plan.actualPickupTime = actual;
+    plan.needReconfirm = false;
+    const task = findOrCreateTransitTask(plan, cont);
+    if(!task) return;
+    const keepDate = document.querySelector('.date-tab.active')?.dataset?.date || safeGetDatePart(plan.arrivalDate || task.estimatedArrival);
+    const keepScroll = window.scrollY;
+    try{ if(typeof persistLocal === 'function') persistLocal(stateFromGlobals ? stateFromGlobals() : null, true); }catch(e){}
+    try{ saveData(); }catch(e){ console.warn('saveData failed after confirm pickup', e); alert('本地状态已更新，但云端保存失败，请稍后检查同步状态。'); }
+    const main = document.getElementById('mainContent');
+    try{ if(main && keepDate && typeof window.renderTransportTasksWithDate === 'function') window.renderTransportTasksWithDate(main, keepDate); else if(typeof renderContent === 'function') renderContent(); }catch(e){ try{ renderContent(); }catch(_){} }
+    setTimeout(()=>window.scrollTo(0, keepScroll), 0);
+    alert('已确认提箱 ' + (plan.containerNo || ''));
+  };
+  window.confirmPickupTaskByKeyV45 = window.confirmPickupTaskByKeyV451;
+  window.confirmPickupTaskByKey = window.confirmPickupTaskByKeyV451;
+  window.confirmPickupTask = function(planId){
+    const plans = arr(typeof pickupPlans !== 'undefined' ? pickupPlans : []).filter(p => p && norm(p.id) === norm(planId) && p.status !== 'cancelled');
+    const plan = plans.find(p => p.status !== 'confirmed') || plans[0];
+    if(!plan){ alert('找不到计划，请刷新后重试。'); return; }
+    return window.confirmPickupTaskByKeyV451(makeKey(plan));
+  };
+  // 确保操作列继续调用最新确认函数
+  window.v45ActionCell = function(item){
+    if(item.type === 'pending'){
+      const key = makeKey(item);
+      return `<input type="date" id="pickupTimeKey_${key}" class="form-control" style="width:125px;margin-bottom:4px;"><br><button class="btn btn-sm btn-success" onclick="confirmPickupTaskByKeyV451('${key}')">确认提箱</button>`;
+    }
+    return `<button class="btn btn-sm btn-warning" onclick="editDynamicTask(${item.id})">编辑</button>`;
+  };
+  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V45.1'; }catch(e){}
+  console.log('V45.1 emergency transport pickup flow patch loaded');
 })();
 </script>
 
