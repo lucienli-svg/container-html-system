@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V42.24 Dashboard Workday Sync</title>
+  <title>集装箱智能监控管理系统 V45.00 Dashboard Workday Sync</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
     /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
@@ -11358,6 +11358,239 @@ let main=document.getElementById('mainContent');
 
   try{ document.title = 'Sistema Inteligente de Monitoramento de Contêineres V44.5'; }catch(e){}
   console.log('V44.5 pickup confirmation key patch loaded');
+})();
+</script>
+
+
+
+<script>
+/* ==================== V45.0 上线稳定版：保存稳定 + 运输任务精准确认 ====================
+   目标：基于当前 app_state 分片模式，先稳定上线运行。
+   1) 云端保存使用更小分片/小批量，降低 statement timeout 风险。
+   2) 所有关键操作先保存到 LocalStorage，再后台同步云端；云端失败不回滚页面。
+   3) 运输任务确认提箱改为按当前行唯一 key 操作，避免点击 A 箱确认 B 箱。
+   4) 删除/绕开“计划ID重复，刷新页面”循环提示。
+============================================================================ */
+(function(){
+  const V45_VERSION = 'V45.0 Stable AppState Split';
+  const BASE_ID = (typeof CLOUD_STATE_ID !== 'undefined' ? CLOUD_STATE_ID : 'container-monitoring-main');
+  const PREFIX = BASE_ID + ':v45:';
+  const MANIFEST_ID = PREFIX + 'manifest';
+  const CHUNK_SIZE = 50;
+  const UPSERT_BATCH = 5;
+  const arrayModules = ['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig'];
+  const objectModules = ['nextIds','warningConfig'];
+  let v45Saving = false;
+  let v45Queued = false;
+  let v45QueuedReason = '';
+
+  function arr(v){ return Array.isArray(v) ? v : []; }
+  function norm(v){ return String(v ?? '').trim(); }
+  function now(){ return new Date().toISOString(); }
+  function parse(key, fallback){ try{ const raw=localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }catch(e){ return fallback; } }
+  function score(st){ st=st||{}; return arr(st.containers).length + arr(st.blList).length + arr(st.containerBlMap).length + arr(st.transportTasks).length + arr(st.locationStock).length + arr(st.returnRecords).length + arr(st.pickupPlans).length + arr(st.productionRecords).length + arr(st.productionPlans).length; }
+  function isEmpty(st){ return !st || typeof st !== 'object' || score(st) === 0; }
+  function chunk(a,size){ const out=[]; a=arr(a); for(let i=0;i<a.length;i+=size) out.push(a.slice(i,i+size)); if(!out.length) out.push([]); return out; }
+  function stateFromGlobals(){
+    try{ if(typeof compactLargeStorageFields === 'function') compactLargeStorageFields(); }catch(e){}
+    return {
+      containers: arr(typeof containers !== 'undefined' ? containers : []),
+      blList: arr(typeof blList !== 'undefined' ? blList : []),
+      containerBlMap: arr(typeof containerBlMap !== 'undefined' ? containerBlMap : []),
+      transportTasks: arr(typeof transportTasks !== 'undefined' ? transportTasks : []),
+      locationStock: arr(typeof locationStock !== 'undefined' ? locationStock : []),
+      returnRecords: arr(typeof returnRecords !== 'undefined' ? returnRecords : []),
+      pickupPlans: arr(typeof pickupPlans !== 'undefined' ? pickupPlans : []),
+      productionRecords: arr(typeof productionRecords !== 'undefined' ? productionRecords : []),
+      productionPlans: arr(typeof productionPlans !== 'undefined' ? productionPlans : []),
+      factoryCalendar: arr(typeof factoryCalendar !== 'undefined' ? factoryCalendar : []),
+      storageConfig: arr(typeof storageConfig !== 'undefined' ? storageConfig : []),
+      demurrageConfig: arr(typeof demurrageConfig !== 'undefined' ? demurrageConfig : []),
+      nextIds: (typeof nextIds !== 'undefined' && nextIds) ? nextIds : parse('cc_nextIds', {container:1, task:1, plan:1, production:1}),
+      warningConfig: (typeof warningConfig !== 'undefined' && warningConfig) ? warningConfig : parse('cc_warningConfig', {storageWarningDays:5, demurrageWarningDays:7}),
+      version: V45_VERSION,
+      updatedAt: now(),
+      updatedBy: (typeof cloudUser !== 'undefined' && cloudUser?.email) || (typeof currentUser !== 'undefined' && (currentUser?.email || currentUser?.name)) || ''
+    };
+  }
+  function persistLocal(st, dirty){
+    st = st || stateFromGlobals();
+    if(isEmpty(st)) return false;
+    try{
+      localStorage.setItem('cc_containers', JSON.stringify(arr(st.containers)));
+      localStorage.setItem('cc_blList', JSON.stringify(arr(st.blList)));
+      localStorage.setItem('cc_containerBlMap', JSON.stringify(arr(st.containerBlMap)));
+      localStorage.setItem('cc_transportTasks', JSON.stringify(arr(st.transportTasks)));
+      localStorage.setItem('cc_locationStock', JSON.stringify(arr(st.locationStock)));
+      localStorage.setItem('cc_returnRecords', JSON.stringify(arr(st.returnRecords)));
+      localStorage.setItem('cc_pickupPlans', JSON.stringify(arr(st.pickupPlans)));
+      localStorage.setItem('cc_productionRecords', JSON.stringify(arr(st.productionRecords)));
+      localStorage.setItem('cc_productionPlans', JSON.stringify(arr(st.productionPlans)));
+      localStorage.setItem('cc_factoryCalendar', JSON.stringify(arr(st.factoryCalendar)));
+      localStorage.setItem('cc_storageConfig', JSON.stringify(arr(st.storageConfig)));
+      localStorage.setItem('cc_demurrageConfig', JSON.stringify(arr(st.demurrageConfig)));
+      localStorage.setItem('cc_nextIds', JSON.stringify(st.nextIds || {}));
+      localStorage.setItem('cc_warningConfig', JSON.stringify(st.warningConfig || {}));
+      localStorage.setItem('cc_localUpdatedAt', now());
+      localStorage.setItem('cc_version', V45_VERSION);
+      if(dirty){ localStorage.setItem('cc_dirty','1'); localStorage.setItem('cc_dirtyAt', now()); }
+      return true;
+    }catch(e){ console.warn('V45 local persist failed', e); return false; }
+  }
+  function applyState(st){
+    if(isEmpty(st)) return false;
+    containers = arr(st.containers); blList = arr(st.blList); containerBlMap = arr(st.containerBlMap);
+    transportTasks = arr(st.transportTasks); locationStock = arr(st.locationStock); returnRecords = arr(st.returnRecords);
+    pickupPlans = arr(st.pickupPlans); productionRecords = arr(st.productionRecords); productionPlans = arr(st.productionPlans);
+    factoryCalendar = arr(st.factoryCalendar); storageConfig = arr(st.storageConfig); demurrageConfig = arr(st.demurrageConfig);
+    nextIds = st.nextIds || {container:1, task:1, plan:1, production:1};
+    warningConfig = st.warningConfig || {storageWarningDays:5, demurrageWarningDays:7};
+    try{ if(typeof updateContainerStatus === 'function') updateContainerStatus(); }catch(e){}
+    try{ if(typeof updateDailyFees === 'function') updateDailyFees(); }catch(e){}
+    return true;
+  }
+  async function loadV45Cloud(){
+    const sb = (typeof initSupabaseClient === 'function') ? initSupabaseClient() : null; if(!sb) return null;
+    const {data: mf, error: me} = await sb.from('app_state').select('data,updated_at,updated_by').eq('id', MANIFEST_ID).maybeSingle();
+    if(me) throw me;
+    if(!mf || !mf.data || !mf.data.modules) return null;
+    const manifest=mf.data;
+    const {data: rows, error} = await sb.from('app_state').select('id,data').like('id', PREFIX+'chunk:%');
+    if(error) throw error;
+    const grouped={}; arr(rows).forEach(r=>{const d=r.data||{}; if(d.module) (grouped[d.module]||(grouped[d.module]=[])).push(d);});
+    const st={version:manifest.version||V45_VERSION, updatedAt:manifest.updatedAt||mf.updated_at, updatedBy:manifest.updatedBy||mf.updated_by};
+    for(const name of arrayModules){ st[name]=arr(grouped[name]).sort((a,b)=>(a.index||0)-(b.index||0)).flatMap(c=>arr(c.items)); }
+    for(const name of objectModules){ st[name]=arr(grouped[name]).sort((a,b)=>(a.index||0)-(b.index||0))[0]?.value || {}; }
+    return isEmpty(st) ? null : st;
+  }
+  function stateFromLocal(){
+    return {
+      containers: parse('cc_containers', []), blList: parse('cc_blList', []), containerBlMap: parse('cc_containerBlMap', []), transportTasks: parse('cc_transportTasks', []),
+      locationStock: parse('cc_locationStock', []), returnRecords: parse('cc_returnRecords', []), pickupPlans: parse('cc_pickupPlans', []), productionRecords: parse('cc_productionRecords', []),
+      productionPlans: parse('cc_productionPlans', []), factoryCalendar: parse('cc_factoryCalendar', []), storageConfig: parse('cc_storageConfig', []), demurrageConfig: parse('cc_demurrageConfig', []),
+      nextIds: parse('cc_nextIds', {container:1, task:1, plan:1, production:1}), warningConfig: parse('cc_warningConfig', {storageWarningDays:5, demurrageWarningDays:7}),
+      updatedAt: localStorage.getItem('cc_localUpdatedAt') || '', version: localStorage.getItem('cc_version') || 'local'
+    };
+  }
+  async function saveV45(reason){
+    const sb = (typeof initSupabaseClient === 'function') ? initSupabaseClient() : null; if(!sb) return false;
+    if(typeof cloudUser !== 'undefined' && !cloudUser) return false;
+    if(v45Saving){ v45Queued = true; v45QueuedReason = reason || v45QueuedReason; return false; }
+    v45Saving = true;
+    try{
+      const st = stateFromGlobals();
+      if(isEmpty(st) && !window.__allowEmptyCloudOverwrite){ console.error('V45保护：阻止空数据覆盖云端'); return false; }
+      persistLocal(st, true);
+      const updatedAt = now();
+      const updatedBy = (typeof cloudUser !== 'undefined' && cloudUser?.email) || '';
+      const manifest = {version:V45_VERSION, mode:'stable_split_app_state', reason:reason||'save', updatedAt, updatedBy, chunkSize:CHUNK_SIZE, modules:{}, score:score(st)};
+      const rows=[];
+      for(const name of arrayModules){ const chunks=chunk(st[name], CHUNK_SIZE); manifest.modules[name]={type:'array', length:arr(st[name]).length, chunks:chunks.length}; chunks.forEach((items,index)=>rows.push({id:`${PREFIX}chunk:${name}:${index}`, data:{module:name,index,items}, updated_by:updatedBy, updated_at:updatedAt})); }
+      for(const name of objectModules){ manifest.modules[name]={type:'object', chunks:1}; rows.push({id:`${PREFIX}chunk:${name}:0`, data:{module:name,index:0,value:st[name]||{}}, updated_by:updatedBy, updated_at:updatedAt}); }
+      for(let i=0;i<rows.length;i+=UPSERT_BATCH){ const {error}=await sb.from('app_state').upsert(rows.slice(i,i+UPSERT_BATCH)); if(error) throw error; }
+      const {error: mfErr}=await sb.from('app_state').upsert({id:MANIFEST_ID, data:manifest, updated_by:updatedBy, updated_at:updatedAt}); if(mfErr) throw mfErr;
+      try{ await sb.from('app_state').upsert({id:BASE_ID, data:{version:V45_VERSION, storageMode:'v45_split', manifestId:MANIFEST_ID, updatedAt, score:score(st)}, updated_by:updatedBy, updated_at:updatedAt}); }catch(e){}
+      localStorage.setItem('cc_dirty','0'); localStorage.setItem('cc_lastCloudSaveAt', updatedAt); localStorage.setItem('cc_lastSyncTime', updatedAt);
+      try{ if(typeof showRealtimeSyncHint==='function') showRealtimeSyncHint('云端已保存'); }catch(e){}
+      return true;
+    }catch(e){
+      console.error('V45 cloud save failed', e);
+      localStorage.setItem('cc_dirty','1'); localStorage.setItem('cc_dirtyError', String(e.message||e));
+      alert('云端保存失败：' + (e.message||e) + '\n本地已保留本次修改，请不要切换电脑操作。');
+      return false;
+    }finally{
+      v45Saving = false;
+      if(v45Queued){ const r=v45QueuedReason||'queued'; v45Queued=false; v45QueuedReason=''; setTimeout(()=>saveV45(r), 500); }
+    }
+  }
+
+  window.saveCloudState = saveCloudState = async function(){ return saveV45('saveCloudState'); };
+  window.saveCloudStateV45 = saveV45;
+  window.saveData = saveData = function(){ const st=stateFromGlobals(); persistLocal(st, true); setTimeout(()=>saveV45('saveData'), 0); };
+  window.loadCloudState = loadCloudState = async function(){
+    const local=stateFromLocal();
+    const localValid=!isEmpty(local);
+    const localDirty=localStorage.getItem('cc_dirty')==='1';
+    let cloud=null;
+    try{ cloud=await loadV45Cloud(); }catch(e){ console.warn('V45 cloud load failed', e); }
+    if(localValid && localDirty){ applyState(local); setTimeout(()=>saveV45('startup_dirty_local'), 800); return true; }
+    if(cloud && !isEmpty(cloud)){ applyState(cloud); persistLocal(cloud, false); return true; }
+    if(localValid){ applyState(local); persistLocal(local, true); setTimeout(()=>saveV45('startup_local_bootstrap'), 800); return true; }
+    // 兼容旧版本分片/大JSON读取
+    try{ if(typeof loadStateV44 === 'function'){ const old=await loadStateV44(); if(old && !isEmpty(old)){ applyState(old); persistLocal(old,true); setTimeout(()=>saveV45('migrate_from_v44'), 1000); return true; } } }catch(e){}
+    return false;
+  };
+
+  // ----- 运输任务唯一Key确认提箱 -----
+  function encKey(obj){ try{ return btoa(unescape(encodeURIComponent(JSON.stringify({id:obj.id??null, containerId:obj.containerId??null, containerNo:obj.containerNo||'', batch:obj.batch||'', seq:obj.containerSeq||obj.seq||''})))).replace(/=+$/,''); }catch(e){ return String(obj.containerNo||obj.id||'').replace(/[^a-zA-Z0-9_-]/g,'_'); } }
+  function decKey(key){ try{ let s=String(key||''); while(s.length%4) s+='='; return JSON.parse(decodeURIComponent(escape(atob(s)))); }catch(e){ return {containerNo:String(key||'')}; } }
+  function findPendingPlanByKey(k){
+    const list = arr(typeof pickupPlans !== 'undefined' ? pickupPlans : []).filter(p=>p && p.status!=='confirmed' && p.status!=='cancelled');
+    let a = list.filter(p=>k.containerNo && norm(p.containerNo)===norm(k.containerNo));
+    if(!a.length && k.containerId!=null) a=list.filter(p=>norm(p.containerId)===norm(k.containerId));
+    if(!a.length && k.id!=null) a=list.filter(p=>norm(p.id)===norm(k.id));
+    if(a.length>1 && k.batch){ const b=a.filter(p=>norm(p.batch)===norm(k.batch)); if(b.length) a=b; }
+    if(a.length>1 && k.seq){ const b=a.filter(p=>norm(p.containerSeq||p.seq)===norm(k.seq)); if(b.length) a=b; }
+    return a[0] || null;
+  }
+  window.confirmPickupTaskByKeyV45 = function(key){
+    const k=decKey(key); const plan=findPendingPlanByKey(k);
+    if(!plan){ alert('找不到当前行对应的待确认提箱计划，请刷新页面后重试。'); return; }
+    const actual = document.getElementById('pickupTimeKey_'+key)?.value || document.getElementById('pickupTime_'+plan.id)?.value || '';
+    if(!actual){ alert('请填写实际提箱日期'); return; }
+    const cont = arr(typeof containers !== 'undefined' ? containers : []).find(c=>norm(c.id)===norm(plan.containerId) || norm(c.containerNo)===norm(plan.containerNo));
+    if(cont) cont.actualPickupTime = actual;
+    plan.status='confirmed'; plan.actualPickupTime=actual; plan.needReconfirm=false;
+    try{ if(typeof syncPickupPlanTransportLink432 === 'function') syncPickupPlanTransportLink432(plan, {createIfMissing:true}); }catch(e){ console.warn(e); }
+    const keepDate = document.querySelector('.date-tab.active')?.dataset?.date || (typeof getDatePart==='function' ? getDatePart(plan.arrivalDate) : '');
+    const keepScroll = window.scrollY;
+    saveData();
+    try{ if(keepDate && typeof window.renderTransportTasksWithDate==='function') window.renderTransportTasksWithDate(document.getElementById('mainContent'), keepDate); else if(typeof renderContent==='function') renderContent(); }catch(e){ try{ renderContent(); }catch(_){} }
+    setTimeout(()=>window.scrollTo(0, keepScroll), 0);
+    alert('已确认提箱 ' + (plan.containerNo||''));
+  };
+  window.confirmPickupTask = function(planId){
+    const list=arr(typeof pickupPlans !== 'undefined' ? pickupPlans : []).filter(p=>p && p.status!=='confirmed' && p.status!=='cancelled' && norm(p.id)===norm(planId));
+    if(list.length>=1) return window.confirmPickupTaskByKeyV45(encKey(list[0]));
+    alert('找不到计划，请刷新后重试。');
+  };
+  window.v45ActionCell = function(item){
+    if(item.type === 'pending'){
+      const key=encKey(item);
+      return `<input type="date" id="pickupTimeKey_${key}" class="form-control" style="width:125px;margin-bottom:4px;"><br><button class="btn btn-sm btn-success" onclick="confirmPickupTaskByKeyV45('${key}')">确认提箱</button>`;
+    }
+    return `<button class="btn btn-sm btn-warning" onclick="editDynamicTask(${item.id})">编辑</button>`;
+  };
+  // 重写运输任务渲染，使操作列一定使用唯一key按钮。
+  function dateOfTask(t){ return (typeof getDatePart==='function') ? getDatePart(t.arrivalDate || t.estimatedArrival || t.planDate || '') : String(t.arrivalDate||t.estimatedArrival||'').slice(0,10); }
+  function originOf(t){ return t.from || t.origin || t.fromLocation || t.source || (t.type==='pending'?'港口':'港口'); }
+  function isPortTask(t){ const o=originOf(t); return t.type==='pending' || o==='港口' || String(o).toLowerCase().includes('port'); }
+  function isJsl(){ return currentUser && (currentUser.carrier==='JSL' || currentUser.role==='运输公司JSL' || currentUser.cloudRole==='JSL'); }
+  function destOf(t){ return t.type==='pending' ? t.destination : t.to; }
+  function planTime(t){ return t.type==='pending' ? t.arrivalDate : t.estimatedArrival; }
+  function badge(t){ return t.type==='pending' ? `<span class="status-badge ${t.needReconfirm?'status-warning':'status-pending'}">${t.needReconfirm?'需二次确认':'待确认提箱'}</span>` : `<span class="status-badge status-transport">运输中</span>`; }
+  function taskData(selectedDate){
+    const p=arr(pickupPlans).filter(x=>canViewCarrier(x.carrier) && x.status!=='confirmed' && x.status!=='cancelled' && !isProducedCompletedContainerId(x.containerId)).map(x=>({...x,type:'pending',from:'港口'}));
+    const tr=arr(transportTasks).filter(x=>canViewCarrier(x.carrier) && x.status==='in_transit' && isTransportCompanyVisibleTask(x)).map(x=>({...x,type:'transit'}));
+    const all=[...p,...tr]; const dates=Array.from(new Set(all.map(dateOfTask).filter(Boolean))).sort(); const d=selectedDate||dates[0]||''; const day=all.filter(x=>dateOfTask(x)===d);
+    let port=day.filter(isPortTask); let other=day.filter(x=>!isPortTask(x)); if(isJsl()) other=[];
+    const cmp=(a,b)=>String(planTime(a)||'').localeCompare(String(planTime(b)||'')) || String(a.batch||'').localeCompare(String(b.batch||'')) || Number(a.containerSeq||0)-Number(b.containerSeq||0);
+    port.sort(cmp); other.sort(cmp); return {dates, selectedDate:d, port, other};
+  }
+  window.renderTransportTasks = function(container){ const d=taskData(); renderTransportLayout(container,d.selectedDate,d.dates,d.port,d.other); };
+  window.renderTransportTasksWithDate = function(container, selectedDate){ const d=taskData(selectedDate); renderTransportLayout(container, selectedDate||d.selectedDate, d.dates, d.port, d.other); };
+  function renderTransportLayout(container, selectedDate, dates, port, other){
+    const tabs = dates.length ? `<div class="transport-date-scroll">${dates.map(d=>`<div class="date-tab ${selectedDate===d?'active':''}" data-date="${d}" style="background:${selectedDate===d?'#2a5298':'#f0f2f5'};color:${selectedDate===d?'white':'#333'};padding:8px 18px;border-radius:30px;cursor:pointer;">📅 ${fmtDate(d)}</div>`).join('')}</div>` : '<div style="margin-bottom:20px;padding:10px;background:#fef0e6;border-radius:8px;text-align:center;">✅ 当前没有待执行运输任务</div>';
+    container.innerHTML = `<div class="card"><div class="card-header"><span class="card-title">🚛 运输任务${isAdminUser()?'（Admin：RG+JSL全部）':''}</span><button class="btn export-btn" onclick="exportTransportTasks()">📥 导出运输任务</button></div><div class="search-bar"><input type="date" id="transportPlanDate" value="${selectedDate||''}"><button class="btn btn-primary" onclick="searchTransportPlanByDate()">查询日期</button><button class="btn" onclick="resetTransportPlanDate()">重置</button></div>${tabs}<div class="section-divider"></div><div class="section-label">🚢 港口提箱任务</div><div id="portTransportTaskTable"></div>${!isJsl()?'<div class="section-divider"></div><div class="section-label">🚚 其他运输任务（RG堆场 / Rio Claro / IRA → 工厂）</div><div id="otherTransportTaskTable"></div>':''}</div>`;
+    document.querySelectorAll('.date-tab').forEach(el=>el.addEventListener('click',()=>window.renderTransportTasksWithDate(container, el.dataset.date)));
+    if(port.length) renderTable('portTransportTaskTable',['批次','集装箱号','提单号','IRA号','目的地','计划时间','卸货口','状态','操作'],port,item=>{const tr=document.createElement('tr'); const dest=destOf(item); tr.innerHTML=`<td>${item.batch||'-'}</td><td>${item.containerNo||'-'}</td><td>${getTaskBlText(item)}</td><td>${getIraList(item.containerId)||item.iraNo||'-'}</td><td><span class="status-badge ${getDestClass(dest)}">${dest||'-'}</span></td><td>${fmtDateTime(planTime(item))}</td><td>${item.unloadingDock||'-'}</td><td>${badge(item)}</td><td>${window.v45ActionCell(item)}</td>`; return tr;}); else document.getElementById('portTransportTaskTable').innerHTML='<div style="padding:18px;text-align:center;color:#909399;">该日期暂无港口提箱任务</div>';
+    if(!isJsl()){ if(other.length) renderTable('otherTransportTaskTable',['批次','集装箱号','提单号','IRA号','来源地','目的地','车型','卸货口','计划到达时间','状态','操作'],other,item=>{const tr=document.createElement('tr'); const dest=destOf(item), o=originOf(item); tr.innerHTML=`<td>${item.batch||'-'}</td><td>${item.containerNo||'-'}</td><td>${getTaskBlText(item)}</td><td>${getIraList(item.containerId)||item.iraNo||'-'}</td><td>${o||'-'}</td><td><span class="status-badge ${getDestClass(dest)}">${dest||'-'}</span></td><td>${v42VehicleTypeFromOrigin(o)}</td><td>${item.unloadingDock||'-'}</td><td>${fmtDateTime(planTime(item))}</td><td>${badge(item)}</td><td>${window.v45ActionCell(item)}</td>`; return tr;}); else document.getElementById('otherTransportTaskTable').innerHTML='<div style="padding:18px;text-align:center;color:#909399;">该日期暂无其他运输任务</div>'; }
+  }
+  window.searchTransportPlanByDate = function(){ const d=document.getElementById('transportPlanDate')?.value; if(!d){alert('请选择查询日期'); return;} window.renderTransportTasksWithDate(document.getElementById('mainContent'), d); };
+  window.resetTransportPlanDate = function(){ window.renderTransportTasks(document.getElementById('mainContent')); };
+
+  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V45.0'; }catch(e){}
+  console.log('V45.0 stable patch loaded');
 })();
 </script>
 
