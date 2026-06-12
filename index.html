@@ -10108,5 +10108,339 @@ let main=document.getElementById('mainContent');
 })();
 </script>
 
+<script>
+/* ==================== V43.1-SP7 运输任务确认提箱后保留修复 ====================
+   目标：恢复旧版正确逻辑：
+   1) 点击“确认提箱”后，提箱计划从待确认移除，但运输任务必须进入/保留在“运输中”。
+   2) 运输任务必须保留“编辑”按钮。
+   3) 只有卸货完成/确认收货后，运输任务才从运输任务板块移除。
+   原则：不改基础数据导入、不改IRA/清关、不改门岗状态机，只修运输任务显示与确认提箱后的任务保留。
+*/
+(function(){
+  function sp7SameId(a,b){ return String(a ?? '').trim() === String(b ?? '').trim(); }
+  function sp7DatePart(v){
+    if(typeof getDatePart === 'function') return getDatePart(v || '');
+    return String(v || '').split('T')[0] || '';
+  }
+  function sp7FindPlan(planId){
+    return (pickupPlans || []).find(p => sp7SameId(p.id, planId)) || null;
+  }
+  function sp7FindContainer(containerId){
+    return (containers || []).find(c => sp7SameId(c.id, containerId)) || null;
+  }
+  function sp7GetPickupInputValue(planId, plan){
+    const keys = [`pickupTime_${planId}`, plan ? `pickupTime_${plan.id}` : ''].filter(Boolean);
+    for(const k of keys){
+      const el = document.getElementById(k);
+      if(el) return el.value;
+    }
+    const filled = Array.from(document.querySelectorAll('input[id^="pickupTime_"]')).filter(el => el.value);
+    return filled.length === 1 ? filled[0].value : '';
+  }
+  function sp7IsFinishedTransportTask(t){
+    if(!t) return true;
+    if(t.cancelled || t.status === 'cancelled' || t.status === 'completed') return true;
+    if(t.operationStatus === 'unloaded' || t.unloadFinishTime) return true;
+    return false;
+  }
+  function sp7IsActiveTransitTask(t){
+    if(!t || sp7IsFinishedTransportTask(t)) return false;
+    if(!(typeof canViewCarrier !== 'function' || canViewCarrier(t.carrier))) return false;
+    if(typeof isOperationalVisibleTask === 'function' && !isOperationalVisibleTask(t)) return false;
+    return String(t.status || '') === 'in_transit';
+  }
+  function sp7FindOrCreateTransitTask(plan, cont, actualTime){
+    let task = (transportTasks || []).find(t =>
+      t && !t.cancelled &&
+      (sp7SameId(t.sourcePlanId, plan.id) ||
+       (sp7SameId(t.containerId, plan.containerId) && String(t.source || '') === 'pickupPlan' && !sp7IsFinishedTransportTask(t)))
+    );
+    if(!task){
+      task = { id: nextIds.task++, source: 'pickupPlan', sourcePlanId: plan.id, createdAt: new Date().toISOString() };
+      transportTasks.push(task);
+    }
+    task.source = 'pickupPlan';
+    task.sourcePlanId = plan.id;
+    task.containerId = plan.containerId;
+    task.containerNo = plan.containerNo || (cont && cont.containerNo) || task.containerNo || '';
+    task.containerSeq = (cont && cont.containerSeq) || plan.containerSeq || task.containerSeq || '';
+    task.batch = plan.batch || (cont && cont.batch) || task.batch || '';
+    task.blNo = typeof getTaskBlText === 'function' ? getTaskBlText(plan) : (task.blNo || '');
+    task.iraNo = typeof getIraList === 'function' ? getIraList(plan.containerId) : (task.iraNo || '');
+    task.from = '港口';
+    task.to = plan.destination || task.to || '';
+    task.carrier = plan.carrier || task.carrier || 'RG';
+    task.status = 'in_transit';
+    task.operationStatus = task.to === '工厂' ? (task.operationStatus || 'not_arrived') : (task.operationStatus || '');
+    task.estimatedArrival = plan.arrivalDate || task.estimatedArrival || '';
+    task.unloadingDock = plan.unloadingDock || task.unloadingDock || '';
+    task.actualPickupTime = actualTime;
+    task.publishedAt = task.publishedAt || new Date().toISOString();
+    task.gateArrivalTime = task.gateArrivalTime || '';
+    task.gateReleaseTime = task.gateReleaseTime || '';
+    task.waitingAreaTime = task.waitingAreaTime || '';
+    task.unloadStartTime = task.unloadStartTime || '';
+    task.unloadFinishTime = task.unloadFinishTime || '';
+    return task;
+  }
+  function sp7TransportSort(a,b){
+    return String(a.estimatedArrival || '').localeCompare(String(b.estimatedArrival || ''), 'zh-CN', {numeric:true}) ||
+           String(a.batch || '').localeCompare(String(b.batch || ''), 'zh-CN', {numeric:true}) ||
+           String(a.containerSeq || '').localeCompare(String(b.containerSeq || ''), 'zh-CN', {numeric:true}) ||
+           String(a.containerNo || '').localeCompare(String(b.containerNo || ''), 'zh-CN', {numeric:true});
+  }
+  function sp7PendingSort(a,b){
+    return String(a.arrivalDate || '').localeCompare(String(b.arrivalDate || ''), 'zh-CN', {numeric:true}) ||
+           String(a.batch || '').localeCompare(String(b.batch || ''), 'zh-CN', {numeric:true}) ||
+           String(a.containerSeq || '').localeCompare(String(b.containerSeq || ''), 'zh-CN', {numeric:true});
+  }
+  function sp7PendingTasks(){
+    return (pickupPlans || [])
+      .filter(p => (typeof canViewCarrier !== 'function' || canViewCarrier(p.carrier)) && p.status !== 'confirmed' && p.status !== 'cancelled' && !(typeof isProducedCompletedContainerId === 'function' && isProducedCompletedContainerId(p.containerId)))
+      .sort(sp7PendingSort);
+  }
+  function sp7TransitTasks(){
+    return (transportTasks || []).filter(sp7IsActiveTransitTask).sort(sp7TransportSort);
+  }
+  function sp7RenderTransport(container, selectedDate){
+    const myPickupTasks = sp7PendingTasks();
+    const myTransitTasks = sp7TransitTasks();
+    const dateGroups = new Map();
+    myPickupTasks.forEach(t => { const d = sp7DatePart(t.arrivalDate); if(d){ if(!dateGroups.has(d)) dateGroups.set(d, []); dateGroups.get(d).push(t); } });
+    myTransitTasks.forEach(t => { const d = sp7DatePart(t.estimatedArrival || t.actualPickupTime); if(d){ if(!dateGroups.has(d)) dateGroups.set(d, []); dateGroups.get(d).push(t); } });
+    const activeDates = Array.from(dateGroups.keys()).filter(d => dateGroups.get(d).length > 0).sort();
+    if(!selectedDate) selectedDate = activeDates.length ? activeDates[0] : null;
+    const filteredPickup = selectedDate ? myPickupTasks.filter(p => sp7DatePart(p.arrivalDate) === selectedDate) : [];
+    const filteredTransit = selectedDate ? myTransitTasks.filter(t => sp7DatePart(t.estimatedArrival || t.actualPickupTime) === selectedDate) : [];
+    const dateTabsHtml = activeDates.length > 0 ? `<div class="transport-date-scroll">${activeDates.map(d => `<div class="date-tab ${selectedDate===d?'active':''}" data-date="${d}" style="background:${selectedDate===d?'#2a5298':'#f0f2f5'};color:${selectedDate===d?'white':'#333'};padding:8px 18px;border-radius:30px;cursor:pointer;">📅 ${typeof fmtDate==='function'?fmtDate(d):d}</div>`).join('')}</div>` : '<div style="margin-bottom:20px;padding:10px;background:#fef0e6;border-radius:8px;text-align:center;">✅ 所有日期的计划均已完成</div>';
+    let html = `<div class="card"><div class="card-header"><span class="card-title">🚛 运输任务${typeof isAdminUser==='function'&&isAdminUser()?'（Admin：RG+JSL全部）':''}</span><button class="btn export-btn" onclick="exportTransportTasks()">📥 导出运输任务</button></div>
+      <div class="search-bar"><input type="date" id="transportPlanDate" value="${selectedDate||''}" title="按日期查询到箱计划"><button class="btn btn-primary" onclick="searchTransportPlanByDate()">查询日期</button><button class="btn" onclick="resetTransportPlanDate()">重置</button></div>
+      ${dateTabsHtml}`;
+    if(filteredPickup.length > 0) html += '<div class="section-divider"></div><div class="section-label">📋 待确认提箱</div><div id="pendingPickupTable"></div>';
+    else if(selectedDate) html += '<div class="section-divider"></div><div style="padding:20px;text-align:center">✅ 该日期暂无待确认提箱任务</div>';
+    if(filteredTransit.length > 0) html += '<div class="section-divider"></div><div class="section-label">🚛 运输中</div><div id="inTransitTable"></div>';
+    else if(selectedDate && filteredPickup.length === 0) html += '<div style="padding:20px;text-align:center">📭 该日期暂无运输任务</div>';
+    html += '</div>';
+    container.innerHTML = html;
+    document.querySelectorAll('.date-tab').forEach(el => el.addEventListener('click', () => sp7RenderTransport(container, el.dataset.date)));
+    setTimeout(() => { let active = document.querySelector('.date-tab.active'); if(active) active.scrollIntoView({inline:'center', block:'nearest'}); }, 0);
+    if(filteredPickup.length > 0 && typeof renderTable === 'function'){
+      renderTable('pendingPickupTable',['批次','集装箱号','提单号','IRA号','计划到货时间','目的地','卸货口','实际提箱时间','状态','操作'],filteredPickup,(item)=>{
+        let destClass = typeof getDestClass === 'function' ? getDestClass(item.destination) : '';
+        let tr = document.createElement('tr');
+        tr.innerHTML = `<td>${item.batch||'-'}</td><td>${item.containerNo||'-'}</td><td>${typeof getTaskBlText==='function'?getTaskBlText(item):'-'}</td><td>${(typeof getIraList==='function'?getIraList(item.containerId):'')||item.iraNo||'-'}</td><td>${typeof fmtDateTime==='function'?fmtDateTime(item.arrivalDate):(item.arrivalDate||'-')}</td><td><span class="status-badge ${destClass}">${item.destination||'-'}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="date" id="pickupTime_${item.id}" class="form-control" style="width:125px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTask('${item.id}')">确认提箱</button></td>`;
+        return tr;
+      });
+    }
+    if(filteredTransit.length > 0 && typeof renderTable === 'function'){
+      renderTable('inTransitTable',['批次','集装箱号','提单号','IRA号','计划到货时间','目的地','卸货口','状态','操作'],filteredTransit,(item)=>{
+        let destClass = typeof getDestClass === 'function' ? getDestClass(item.to) : '';
+        let tr = document.createElement('tr');
+        tr.innerHTML = `<td>${item.batch||'-'}</td><td>${item.containerNo||'-'}</td><td>${typeof getTaskBlText==='function'?getTaskBlText(item):(item.blNo||'-')}</td><td>${(typeof getIraList==='function'?getIraList(item.containerId):'')||item.iraNo||'-'}</td><td>${typeof fmtDateTime==='function'?fmtDateTime(item.estimatedArrival):(item.estimatedArrival||'-')}</td><td><span class="status-badge ${destClass}">${item.to||'-'}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge status-transport">运输中</span></td><td><button class="btn btn-sm btn-warning" onclick="editDynamicTask('${item.id}')">编辑</button></td>`;
+        return tr;
+      });
+    }
+  }
+
+  window.renderTransportTasks = function(container){ sp7RenderTransport(container); };
+  window.renderTransportTasksWithDate = function(container, selectedDate){ sp7RenderTransport(container, selectedDate); };
+  window.searchTransportPlanByDate = function(){
+    const d = document.getElementById('transportPlanDate')?.value;
+    if(!d){ alert('请选择日期'); return; }
+    sp7RenderTransport(document.getElementById('mainContent'), d);
+  };
+  window.resetTransportPlanDate = function(){ sp7RenderTransport(document.getElementById('mainContent')); };
+  window.isTransportCompanyVisibleTask = isTransportCompanyVisibleTask = function(t){ return sp7IsActiveTransitTask(t); };
+
+  window.confirmPickupTask = function(planId){
+    const plan = sp7FindPlan(planId);
+    if(!plan){
+      console.warn('SP7 找不到提箱计划', planId, (pickupPlans || []).map(p => p.id));
+      alert('找不到计划：请刷新页面后重试。如仍出现，请检查该任务是否已被取消或已确认。');
+      return;
+    }
+    const actualTime = sp7GetPickupInputValue(planId, plan);
+    if(!actualTime){ alert('请填写实际提箱日期'); return; }
+    const cont = sp7FindContainer(plan.containerId);
+    if(cont) cont.actualPickupTime = actualTime;
+    plan.status = 'confirmed';
+    plan.actualPickupTime = actualTime;
+    plan.needReconfirm = false;
+    const task = sp7FindOrCreateTransitTask(plan, cont, actualTime);
+    task.status = 'in_transit';
+    if(typeof saveData === 'function') saveData();
+    const activeTab = document.querySelector('.date-tab.active');
+    const keepDate = activeTab?.dataset?.date || sp7DatePart(plan.arrivalDate || task.estimatedArrival || actualTime);
+    const main = document.getElementById('mainContent');
+    if(main) sp7RenderTransport(main, keepDate);
+    alert(`已确认提箱 ${plan.containerNo || ''}，运输任务已保留在“运输中”。`);
+  };
+
+  console.log('V43.1-SP7 Transport Keep After Pickup loaded');
+})();
+
+</script>
+
+<script>
+/* ==================== V43.1-SP8 港口提箱确认精确绑定修复 ====================
+   问题：当 pickupPlans 中存在重复/旧 plan.id 时，按钮只传 plan.id 会命中第一条旧计划，
+   导致点击 A 集装箱却提示 B 集装箱已确认提箱。
+   修复：渲染时为每一行生成 rowKey，并同时传入 planId + containerId + containerNo + inputId；
+   确认时按 containerId/containerNo 优先精确匹配，禁止只按 plan.id 命中旧数据。
+*/
+(function(){
+  function s8(v){ return String(v ?? '').trim(); }
+  function s8Same(a,b){ return s8(a) === s8(b); }
+  function s8Esc(v){ return String(v ?? '').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,' '); }
+  function s8DatePart(v){ if(typeof getDatePart === 'function') return getDatePart(v || ''); return s8(v).split('T')[0] || ''; }
+  function s8FindContainer(containerId, containerNo){
+    return (containers || []).find(c => s8Same(c.id, containerId)) ||
+           (containers || []).find(c => s8Same(c.containerNo, containerNo)) || null;
+  }
+  function s8FindPlanExact(planId, containerId, containerNo){
+    const candidates = (pickupPlans || []).filter(p => p && p.status !== 'cancelled');
+    // 优先按 containerId 精确定位，因为这是业务对象的真实唯一关联。
+    let p = candidates.find(x => s8Same(x.containerId, containerId) && s8Same(x.containerNo, containerNo) && x.status !== 'confirmed');
+    if(p) return p;
+    p = candidates.find(x => s8Same(x.containerId, containerId) && x.status !== 'confirmed');
+    if(p) return p;
+    p = candidates.find(x => s8Same(x.containerNo, containerNo) && x.status !== 'confirmed');
+    if(p) return p;
+    // 最后才允许按 planId 找，但必须再校验 containerNo，避免命中旧重复ID。
+    p = candidates.find(x => s8Same(x.id, planId) && (!containerNo || s8Same(x.containerNo, containerNo)));
+    return p || null;
+  }
+  function s8GetInputValue(inputId){
+    const el = document.getElementById(inputId);
+    return el ? el.value : '';
+  }
+  function s8IsFinishedTask(t){
+    if(!t) return true;
+    return !!(t.cancelled || t.status === 'cancelled' || t.status === 'completed' || t.operationStatus === 'unloaded' || t.unloadFinishTime);
+  }
+  function s8ActiveTransitTask(t){
+    if(!t || s8IsFinishedTask(t)) return false;
+    if(typeof canViewCarrier === 'function' && !canViewCarrier(t.carrier)) return false;
+    if(typeof isOperationalVisibleTask === 'function' && !isOperationalVisibleTask(t)) return false;
+    return s8(t.status) === 'in_transit';
+  }
+  function s8PendingSort(a,b){
+    return s8(a.arrivalDate).localeCompare(s8(b.arrivalDate),'zh-CN',{numeric:true}) ||
+           s8(a.batch).localeCompare(s8(b.batch),'zh-CN',{numeric:true}) ||
+           s8(a.containerSeq).localeCompare(s8(b.containerSeq),'zh-CN',{numeric:true}) ||
+           s8(a.containerNo).localeCompare(s8(b.containerNo),'zh-CN',{numeric:true});
+  }
+  function s8TransportSort(a,b){
+    return s8(a.estimatedArrival).localeCompare(s8(b.estimatedArrival),'zh-CN',{numeric:true}) ||
+           s8(a.batch).localeCompare(s8(b.batch),'zh-CN',{numeric:true}) ||
+           s8(a.containerSeq).localeCompare(s8(b.containerSeq),'zh-CN',{numeric:true}) ||
+           s8(a.containerNo).localeCompare(s8(b.containerNo),'zh-CN',{numeric:true});
+  }
+  function s8PendingTasks(){
+    return (pickupPlans || [])
+      .filter(p => (typeof canViewCarrier !== 'function' || canViewCarrier(p.carrier)) && p.status !== 'confirmed' && p.status !== 'cancelled' && !(typeof isProducedCompletedContainerId === 'function' && isProducedCompletedContainerId(p.containerId)))
+      .sort(s8PendingSort);
+  }
+  function s8TransitTasks(){ return (transportTasks || []).filter(s8ActiveTransitTask).sort(s8TransportSort); }
+  function s8FindOrCreateTask(plan, cont, actualTime){
+    let task = (transportTasks || []).find(t => t && !s8IsFinishedTask(t) && (s8Same(t.sourcePlanId, plan.id) || s8Same(t.containerId, plan.containerId)));
+    if(!task){ task = {id: nextIds.task++, source:'pickupPlan', sourcePlanId: plan.id, createdAt:new Date().toISOString()}; transportTasks.push(task); }
+    task.source = 'pickupPlan';
+    task.sourcePlanId = plan.id;
+    task.containerId = plan.containerId;
+    task.containerNo = plan.containerNo || (cont && cont.containerNo) || task.containerNo || '';
+    task.containerSeq = (cont && cont.containerSeq) || plan.containerSeq || task.containerSeq || '';
+    task.batch = plan.batch || (cont && cont.batch) || task.batch || '';
+    task.blNo = typeof getTaskBlText === 'function' ? getTaskBlText(plan) : (task.blNo || '');
+    task.iraNo = typeof getIraList === 'function' ? getIraList(plan.containerId) : (task.iraNo || '');
+    task.from = '港口';
+    task.to = plan.destination || task.to || '';
+    task.carrier = plan.carrier || task.carrier || 'RG';
+    task.status = 'in_transit';
+    task.operationStatus = task.to === '工厂' ? (task.operationStatus || 'not_arrived') : (task.operationStatus || '');
+    task.estimatedArrival = plan.arrivalDate || task.estimatedArrival || '';
+    task.unloadingDock = plan.unloadingDock || task.unloadingDock || '';
+    task.actualPickupTime = actualTime;
+    task.publishedAt = task.publishedAt || new Date().toISOString();
+    task.gateArrivalTime = task.gateArrivalTime || '';
+    task.gateReleaseTime = task.gateReleaseTime || '';
+    task.waitingAreaTime = task.waitingAreaTime || '';
+    task.unloadStartTime = task.unloadStartTime || '';
+    task.unloadFinishTime = task.unloadFinishTime || '';
+    return task;
+  }
+  window.confirmPickupTaskExactSP8 = function(planId, containerId, containerNo, inputId){
+    const plan = s8FindPlanExact(planId, containerId, containerNo);
+    if(!plan){
+      console.warn('SP8 找不到精确提箱计划', {planId, containerId, containerNo}, pickupPlans || []);
+      alert('找不到该集装箱对应的提箱计划，请刷新页面后重试。');
+      return;
+    }
+    if(containerNo && !s8Same(plan.containerNo, containerNo)){
+      alert(`计划匹配异常：当前点击 ${containerNo}，但系统匹配到 ${plan.containerNo || '-'}。已阻止确认，请联系管理员检查重复计划ID。`);
+      return;
+    }
+    const actualTime = s8GetInputValue(inputId);
+    if(!actualTime){ alert('请填写实际提箱日期'); return; }
+    const cont = s8FindContainer(plan.containerId, plan.containerNo);
+    if(cont) cont.actualPickupTime = actualTime;
+    plan.status = 'confirmed';
+    plan.actualPickupTime = actualTime;
+    plan.needReconfirm = false;
+    const task = s8FindOrCreateTask(plan, cont, actualTime);
+    if(typeof saveData === 'function') saveData();
+    const keepDate = document.querySelector('.date-tab.active')?.dataset?.date || s8DatePart(plan.arrivalDate || task.estimatedArrival || actualTime);
+    const main = document.getElementById('mainContent');
+    if(main) s8RenderTransport(main, keepDate);
+    alert(`已确认提箱 ${plan.containerNo || ''}，运输任务已保留在“运输中”。`);
+  };
+  window.confirmPickupTask = function(planId){
+    const plan = s8FindPlanExact(planId, '', '');
+    if(!plan){ alert('找不到计划'); return; }
+    const inputId = `pickupTime_${s8(plan.id)}_${s8(plan.containerId)}`.replace(/[^a-zA-Z0-9_\-]/g,'_');
+    return window.confirmPickupTaskExactSP8(plan.id, plan.containerId, plan.containerNo, inputId);
+  };
+  function s8RenderTransport(container, selectedDate){
+    const pickups = s8PendingTasks(); const transits = s8TransitTasks();
+    const groups = new Map();
+    pickups.forEach(p=>{const d=s8DatePart(p.arrivalDate); if(d){ if(!groups.has(d)) groups.set(d,[]); groups.get(d).push(p); }});
+    transits.forEach(t=>{const d=s8DatePart(t.estimatedArrival || t.actualPickupTime); if(d){ if(!groups.has(d)) groups.set(d,[]); groups.get(d).push(t); }});
+    const dates = Array.from(groups.keys()).filter(d=>groups.get(d).length).sort();
+    if(!selectedDate) selectedDate = dates[0] || null;
+    const filteredPickup = selectedDate ? pickups.filter(p=>s8DatePart(p.arrivalDate)===selectedDate) : [];
+    const filteredTransit = selectedDate ? transits.filter(t=>s8DatePart(t.estimatedArrival || t.actualPickupTime)===selectedDate) : [];
+    const tabs = dates.length ? `<div class="transport-date-scroll">${dates.map(d=>`<div class="date-tab ${selectedDate===d?'active':''}" data-date="${d}" style="background:${selectedDate===d?'#2a5298':'#f0f2f5'};color:${selectedDate===d?'white':'#333'};padding:8px 18px;border-radius:30px;cursor:pointer;">📅 ${typeof fmtDate==='function'?fmtDate(d):d}</div>`).join('')}</div>` : '<div style="margin-bottom:20px;padding:10px;background:#fef0e6;border-radius:8px;text-align:center;">✅ 所有日期的计划均已完成</div>';
+    let html = `<div class="card"><div class="card-header"><span class="card-title">🚛 运输任务${typeof isAdminUser==='function'&&isAdminUser()?'（Admin：RG+JSL全部）':''}</span><button class="btn export-btn" onclick="exportTransportTasks()">📥 导出运输任务</button></div><div class="search-bar"><input type="date" id="transportPlanDate" value="${selectedDate||''}" title="按日期查询到箱计划"><button class="btn btn-primary" onclick="searchTransportPlanByDate()">查询日期</button><button class="btn" onclick="resetTransportPlanDate()">重置</button></div>${tabs}`;
+    if(filteredPickup.length) html += '<div class="section-divider"></div><div class="section-label">📋 待确认提箱</div><div id="pendingPickupTable"></div>'; else if(selectedDate) html += '<div class="section-divider"></div><div style="padding:20px;text-align:center">✅ 该日期暂无待确认提箱任务</div>';
+    if(filteredTransit.length) html += '<div class="section-divider"></div><div class="section-label">🚛 运输中</div><div id="inTransitTable"></div>'; else if(selectedDate && !filteredPickup.length) html += '<div style="padding:20px;text-align:center">📭 该日期暂无运输任务</div>';
+    html += '</div>'; container.innerHTML = html;
+    document.querySelectorAll('.date-tab').forEach(el=>el.addEventListener('click',()=>s8RenderTransport(container, el.dataset.date)));
+    if(filteredPickup.length && typeof renderTable === 'function'){
+      renderTable('pendingPickupTable',['批次','集装箱号','提单号','IRA号','计划到货时间','目的地','卸货口','实际提箱时间','状态','操作'],filteredPickup,(item)=>{
+        const inputId = `pickupTime_${s8(item.id)}_${s8(item.containerId)}`.replace(/[^a-zA-Z0-9_\-]/g,'_');
+        const destClass = typeof getDestClass === 'function' ? getDestClass(item.destination) : '';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${item.batch||'-'}</td><td>${item.containerNo||'-'}</td><td>${typeof getTaskBlText==='function'?getTaskBlText(item):'-'}</td><td>${(typeof getIraList==='function'?getIraList(item.containerId):'')||item.iraNo||'-'}</td><td>${typeof fmtDateTime==='function'?fmtDateTime(item.arrivalDate):(item.arrivalDate||'-')}</td><td><span class="status-badge ${destClass}">${item.destination||'-'}</span></td><td>${item.unloadingDock||'-'}</td><td><input type="date" id="${inputId}" class="form-control" style="width:125px;"></td><td><span class="status-badge ${item.needReconfirm?'status-warning':'status-pending'}">${item.needReconfirm?'需二次确认':'待确认'}</span></td><td><button class="btn btn-sm btn-success" onclick="confirmPickupTaskExactSP8('${s8Esc(item.id)}','${s8Esc(item.containerId)}','${s8Esc(item.containerNo)}','${s8Esc(inputId)}')">确认提箱</button></td>`;
+        return tr;
+      });
+    }
+    if(filteredTransit.length && typeof renderTable === 'function'){
+      renderTable('inTransitTable',['批次','集装箱号','提单号','IRA号','计划到货时间','目的地','卸货口','状态','操作'],filteredTransit,(item)=>{
+        const destClass = typeof getDestClass === 'function' ? getDestClass(item.to) : '';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${item.batch||'-'}</td><td>${item.containerNo||'-'}</td><td>${typeof getTaskBlText==='function'?getTaskBlText(item):(item.blNo||'-')}</td><td>${(typeof getIraList==='function'?getIraList(item.containerId):'')||item.iraNo||'-'}</td><td>${typeof fmtDateTime==='function'?fmtDateTime(item.estimatedArrival):(item.estimatedArrival||'-')}</td><td><span class="status-badge ${destClass}">${item.to||'-'}</span></td><td>${item.unloadingDock||'-'}</td><td><span class="status-badge status-transport">运输中</span></td><td><button class="btn btn-sm btn-warning" onclick="editDynamicTask('${s8Esc(item.id)}')">编辑</button></td>`;
+        return tr;
+      });
+    }
+  }
+  window.renderTransportTasks = function(container){ s8RenderTransport(container); };
+  window.renderTransportTasksWithDate = function(container, selectedDate){ s8RenderTransport(container, selectedDate); };
+  window.searchTransportPlanByDate = function(){ const d=document.getElementById('transportPlanDate')?.value; if(!d){alert('请选择日期');return;} s8RenderTransport(document.getElementById('mainContent'), d); };
+  window.resetTransportPlanDate = function(){ s8RenderTransport(document.getElementById('mainContent')); };
+  window.isTransportCompanyVisibleTask = isTransportCompanyVisibleTask = function(t){ return s8ActiveTransitTask(t); };
+  console.log('V43.1-SP8 Pickup Exact Binding loaded');
+})();
+</script>
+
 </body>
 </html>
