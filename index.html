@@ -10637,5 +10637,111 @@ let main=document.getElementById('mainContent');
 })();
 </script>
 
+<script>
+/* ==================== V43.1-SP10 RG Arrival Destination Fix ====================
+   修复：到货确认点击 RG堆场任务时，若存在重复 task.id，旧函数可能命中工厂任务，错误提示“已到达工厂，请继续确认掏箱”。
+   原则：到货确认页面只允许 RG堆场 / Rio Claro / IRA库房，工厂路线不在此确认。
+*/
+(function(){
+  function norm(v){ return String(v ?? '').trim(); }
+  function same(a,b){ return norm(a) === norm(b); }
+  function isDone(t){
+    return !t || t.cancelled || t.status==='cancelled' || t.status==='completed' || t.status==='done' ||
+           t.operationStatus==='completed' || t.operationStatus==='unloaded' || !!t.unloadFinishTime;
+  }
+  function isArrivalDestination(to){ return ['RG堆场','Rio Claro','IRA库房'].includes(norm(to)); }
+  function needsUnpack(to){ return ['Rio Claro','IRA库房'].includes(norm(to)); }
+  function needsReturn(to){ return ['Rio Claro','IRA库房','工厂'].includes(norm(to)); }
+  function addStockSafe(containerId, location){
+    if(typeof addStock === 'function') return addStock(containerId, location);
+    if(!Array.isArray(locationStock)) window.locationStock = locationStock = [];
+    const old = locationStock.find(x => same(x.containerId, containerId));
+    if(old) old.location = location;
+    else locationStock.push({containerId, location, date:new Date().toISOString()});
+  }
+  function findArrivalTask(taskId, containerId, containerNo, destination){
+    const rows = (transportTasks || []).filter(t => t && !isDone(t));
+    let candidates = rows.filter(t => same(t.id, taskId));
+    if(containerId) candidates = candidates.filter(t => same(t.containerId, containerId));
+    if(containerNo) candidates = candidates.filter(t => same(t.containerNo, containerNo));
+    if(destination) candidates = candidates.filter(t => same(t.to, destination));
+
+    let t = candidates.find(x => norm(x.status)==='in_transit' && isArrivalDestination(x.to));
+    if(t) return t;
+    t = candidates.find(x => isArrivalDestination(x.to));
+    if(t) return t;
+
+    // 如果只按 taskId 命中到工厂任务，说明 ID 重复或按钮绑定错误，禁止误确认。
+    const wrongFactory = rows.find(x => same(x.id, taskId) && norm(x.to)==='工厂');
+    if(wrongFactory){
+      return {__error:true, message:'该按钮匹配到了工厂路线任务。工厂路线必须走门岗登记/卸货口收货，不能在到货确认板块确认。请刷新页面后重试。'};
+    }
+    return null;
+  }
+
+  window.doArrival = function(taskId, containerId, containerNo, destination){
+    const task = findArrivalTask(taskId, containerId, containerNo, destination);
+    if(!task){ alert('找不到对应的到货任务，请刷新页面后重试。'); return; }
+    if(task.__error){ alert(task.message); return; }
+
+    const dest = norm(task.to);
+    if(!isArrivalDestination(dest)){
+      alert('该目的地不能在到货确认板块操作。工厂路线请在门岗登记/卸货口收货操作。');
+      return;
+    }
+
+    task.actualArrival = new Date().toISOString();
+    addStockSafe(task.containerId, dest);
+
+    if(dest === 'RG堆场'){
+      task.status = 'completed';
+      task.operationStatus = 'completed';
+      task.completedAt = new Date().toISOString();
+      task.unloadStartTime = '';
+      task.unloadFinishTime = '';
+      if(typeof saveAndRenderContentKeepState === 'function') saveAndRenderContentKeepState();
+      else { if(typeof saveData === 'function') saveData(); if(typeof renderContent === 'function') renderContent(); }
+      alert('已确认到达 RG堆场，港口提箱运输已完成。');
+      return;
+    }
+
+    // Rio Claro / IRA库房：到货后进入待确认掏箱，不生成还箱，等确认掏箱后再生成还箱。
+    task.status = 'arrived';
+    task.operationStatus = 'arrived';
+    if(typeof saveAndRenderContentKeepState === 'function') saveAndRenderContentKeepState();
+    else { if(typeof saveData === 'function') saveData(); if(typeof renderContent === 'function') renderContent(); }
+    alert(`已确认到达 ${dest}，请继续确认掏箱。`);
+  };
+  window.confirmArrivalOnly = window.doArrival;
+
+  window.doUnpack = function(taskId, containerId, containerNo, destination){
+    const task = findArrivalTask(taskId, containerId, containerNo, destination) ||
+      (transportTasks || []).find(t => same(t.id, taskId) && !isDone(t) && needsUnpack(t.to));
+    if(!task || task.__error){ alert('找不到对应的掏箱任务，请刷新页面后重试。'); return; }
+    const dest = norm(task.to);
+    if(!needsUnpack(dest)){ alert('该目的地无需掏箱。'); return; }
+    const existed = (returnRecords || []).find(r => same(r.containerId, task.containerId) && same(r.location, dest));
+    if(existed){ alert('已完成掏箱'); return; }
+    if(needsReturn(dest)){
+      returnRecords.push({
+        containerId: task.containerId,
+        location: dest,
+        type: 'return_needed',
+        unpackDate: (typeof fmtDate === 'function' ? fmtDate(new Date().toISOString().split('T')[0]) : new Date().toISOString().split('T')[0]),
+        isReturnConfirmed: false,
+        fromLocation: task.from
+      });
+    }
+    task.operationStatus = 'unpacked';
+    task.unpackTime = new Date().toISOString();
+    if(typeof saveAndRenderContentKeepState === 'function') saveAndRenderContentKeepState();
+    else { if(typeof saveData === 'function') saveData(); if(typeof renderContent === 'function') renderContent(); }
+    alert('已确认掏箱，已生成还箱确认任务。');
+  };
+
+  console.log('V43.1-SP10 RG Arrival Destination Fix loaded');
+})();
+</script>
+
 </body>
 </html>
