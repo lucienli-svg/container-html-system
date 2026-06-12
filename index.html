@@ -10442,5 +10442,200 @@ let main=document.getElementById('mainContent');
 })();
 </script>
 
+<script>
+/* ==================== V43.1-SP9 运输流程状态修复 ====================
+   仅修运输流程：确认提箱后保持运输中；到货确认按目的地流转；基础数据状态用宽松ID匹配。
+   不修改基础数据导入、IRA、清关、提单逻辑。
+*/
+(function(){
+  function v(vv){ return String(vv ?? '').trim(); }
+  function same(a,b){ return v(a) === v(b); }
+  function esc(s){ return String(s ?? '').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,' '); }
+  function datePart(x){ if(typeof getDatePart==='function') return getDatePart(x||''); return v(x).split('T')[0] || ''; }
+  function isFinishedTask(t){
+    return !t || t.cancelled || t.status==='cancelled' || t.status==='completed' || t.status==='done' ||
+           t.operationStatus==='unloaded' || !!t.unloadFinishTime;
+  }
+  function findContainer(containerId, containerNo){
+    return (containers||[]).find(c=>same(c.id, containerId)) || (containers||[]).find(c=>same(c.containerNo, containerNo)) || null;
+  }
+  function findPlanExact(planId, containerId, containerNo){
+    const rows=(pickupPlans||[]).filter(p=>p && p.status!=='cancelled');
+    let p=rows.find(x=>same(x.id,planId) && same(x.containerId,containerId) && same(x.containerNo,containerNo));
+    if(p) return p;
+    p=rows.find(x=>same(x.containerId,containerId) && same(x.containerNo,containerNo) && x.status!=='confirmed');
+    if(p) return p;
+    p=rows.find(x=>same(x.containerId,containerId) && x.status!=='confirmed');
+    if(p) return p;
+    p=rows.find(x=>same(x.containerNo,containerNo) && x.status!=='confirmed');
+    if(p) return p;
+    p=rows.find(x=>same(x.id,planId) && (!containerNo || same(x.containerNo,containerNo)));
+    return p || null;
+  }
+  function activeTransitTask(t){
+    if(!t || isFinishedTask(t)) return false;
+    if(v(t.status)!=='in_transit') return false;
+    if(typeof canViewCarrier==='function' && !canViewCarrier(t.carrier)) return false;
+    return true;
+  }
+  function routeNeedsArrivalConfirm(t){
+    return ['RG堆场','Rio Claro','IRA库房'].includes(v(t.to));
+  }
+  function routeNeedsReturn(t){
+    return ['Rio Claro','IRA库房','工厂'].includes(v(t.to));
+  }
+  function userCanConfirmDestination(t){
+    if(!t) return false;
+    if(typeof isAdminUser==='function' && isAdminUser()) return routeNeedsArrivalConfirm(t);
+    const loc = v(currentUser && currentUser.location);
+    if(!loc) return routeNeedsArrivalConfirm(t);
+    return same(t.to, loc);
+  }
+  function findActiveTaskByPlanOrContainer(plan){
+    const tasks=(transportTasks||[]).filter(t=>t && !isFinishedTask(t));
+    return tasks.find(t=>same(t.sourcePlanId, plan.id)) ||
+           tasks.find(t=>same(t.containerId, plan.containerId) && same(t.containerNo, plan.containerNo) && v(t.status)==='in_transit') || null;
+  }
+  function ensurePickupTransportTask(plan, cont, actualTime){
+    let task=findActiveTaskByPlanOrContainer(plan);
+    if(!task){
+      task={id: nextIds.task++, source:'pickupPlan', sourcePlanId: plan.id, createdAt:new Date().toISOString()};
+      transportTasks.push(task);
+    }
+    task.source='pickupPlan';
+    task.sourcePlanId=plan.id;
+    task.containerId=cont ? cont.id : plan.containerId;
+    task.containerNo=plan.containerNo || (cont&&cont.containerNo) || '';
+    task.containerSeq=(cont&&cont.containerSeq) || plan.containerSeq || task.containerSeq || '';
+    task.batch=plan.batch || (cont&&cont.batch) || task.batch || '';
+    task.blNo=(typeof getTaskBlText==='function' ? getTaskBlText(plan) : task.blNo) || '';
+    task.iraNo=(typeof getIraList==='function' ? getIraList(task.containerId) : task.iraNo) || '';
+    task.from='港口';
+    task.to=plan.destination || task.to || '';
+    task.carrier=plan.carrier || task.carrier || 'RG';
+    task.status='in_transit';
+    task.actualPickupTime=actualTime;
+    task.estimatedArrival=plan.arrivalDate || task.estimatedArrival || '';
+    task.unloadingDock=plan.unloadingDock || task.unloadingDock || '';
+    task.cancelled=false;
+    task.actualArrival='';
+    if(task.to==='工厂'){
+      task.operationStatus=task.operationStatus && task.operationStatus!=='cancelled' ? task.operationStatus : 'not_arrived';
+    }else{
+      task.operationStatus='in_transit';
+    }
+    task.publishedAt=task.publishedAt || new Date().toISOString();
+    task.updatedAt=new Date().toISOString();
+    task.gateArrivalTime=task.gateArrivalTime || '';
+    task.gateReleaseTime=task.gateReleaseTime || '';
+    task.waitingAreaTime=task.waitingAreaTime || '';
+    task.unloadStartTime=task.unloadStartTime || '';
+    task.unloadFinishTime=task.unloadFinishTime || '';
+    return task;
+  }
+
+  window.confirmPickupTaskExactSP8 = function(planId, containerId, containerNo, inputId){
+    const plan=findPlanExact(planId, containerId, containerNo);
+    if(!plan){ alert('找不到该集装箱对应的提箱计划，请刷新页面后重试。'); return; }
+    if(containerNo && !same(plan.containerNo, containerNo)){
+      alert(`计划匹配异常：当前点击 ${containerNo}，但系统匹配到 ${plan.containerNo || '-'}。已阻止确认。`);
+      return;
+    }
+    const input=document.getElementById(inputId);
+    const actualTime=input ? input.value : '';
+    if(!actualTime){ alert('请填写实际提箱日期'); return; }
+    const cont=findContainer(plan.containerId, plan.containerNo);
+    if(cont) cont.actualPickupTime=actualTime;
+    plan.status='confirmed';
+    plan.actualPickupTime=actualTime;
+    plan.needReconfirm=false;
+    const task=ensurePickupTransportTask(plan, cont, actualTime);
+    if(typeof saveData==='function') saveData();
+    const selected=document.querySelector('.date-tab.active')?.dataset?.date || datePart(task.estimatedArrival || actualTime);
+    if(typeof renderTransportTasksWithDate==='function' && document.getElementById('mainContent')) renderTransportTasksWithDate(document.getElementById('mainContent'), selected);
+    else if(typeof renderContent==='function') renderContent();
+    alert(`已确认提箱 ${task.containerNo}，运输任务已保留在“运输中”。`);
+  };
+
+  window.confirmPickupTask = function(planId){
+    const plan=findPlanExact(planId,'','');
+    if(!plan){ alert('找不到计划'); return; }
+    const inputId=`pickupTime_${v(plan.id)}_${v(plan.containerId)}`.replace(/[^a-zA-Z0-9_\-]/g,'_');
+    return window.confirmPickupTaskExactSP8(plan.id, plan.containerId, plan.containerNo, inputId);
+  };
+
+  // 运输公司运输中列表：只看仍在运输中的任务，确认到达后才消失。
+  window.isTransportCompanyVisibleTask = isTransportCompanyVisibleTask = function(t){ return activeTransitTask(t); };
+
+  // 到货确认板块：港口提箱到 RG / Rio Claro / IRA 的在途任务必须显示；工厂路线走门岗/卸货口，不在这里确认。
+  window.isTaskVisibleForArrivalConfirm = isTaskVisibleForArrivalConfirm = function(t){
+    if(!t || isFinishedTask(t)) return false;
+    return routeNeedsArrivalConfirm(t) && userCanConfirmDestination(t);
+  };
+
+  // 基础数据状态：用宽松ID匹配，避免 containerId 数字/字符串不一致导致“当前位置运输中、状态已到达”。
+  window.getContainerLocation = getContainerLocation = function(cid){
+    const active=(transportTasks||[]).some(t=>same(t.containerId,cid) && v(t.status)==='in_transit' && !isFinishedTask(t));
+    if(active) return '运输中';
+    const s=(locationStock||[]).find(x=>same(x.containerId,cid));
+    if(s) return s.location;
+    const c=(containers||[]).find(x=>same(x.id,cid));
+    return c && c.actualPickupTime ? '运输中' : '港口';
+  };
+  window.getContainerFullStatus = getContainerFullStatus = function(c){
+    const loc=getContainerLocation(c.id);
+    const produced=(productionRecords||[]).some(p=>p.containerIds && p.containerIds.some(id=>same(id,c.id)));
+    if(produced) return {text:'已完成', cls:'status-completed', loc:'已生产'};
+    const returnDone=(returnRecords||[]).some(r=>same(r.containerId,c.id) && r.type==='return' && r.isReturnConfirmed);
+    if(returnDone) return {text:'已完成', cls:'status-completed', loc};
+    const inTransit=(transportTasks||[]).some(t=>same(t.containerId,c.id) && v(t.status)==='in_transit' && !isFinishedTask(t));
+    if(inTransit) return {text:'运输中', cls:'status-transport', loc:'运输中'};
+    const pendingReturn=(returnRecords||[]).some(r=>same(r.containerId,c.id) && r.type==='return_needed' && !r.isReturnConfirmed);
+    if(pendingReturn) return {text:'待还箱', cls:'status-return-pending', loc};
+    if(loc==='港口') return {text:c.customsStatus || '清关中', cls:(c.customsStatus==='已清关'?'status-ready':'status-clearing'), loc};
+    return {text:'已到达', cls:'status-at-location', loc};
+  };
+
+  function completeArrival(task){
+    task.actualArrival=new Date().toISOString();
+    if(routeNeedsArrivalConfirm(task)) addStock(task.containerId, task.to);
+    if(task.to==='RG堆场'){
+      task.status='completed';
+      task.operationStatus='completed';
+      task.completedAt=new Date().toISOString();
+      return '已确认到达 RG堆场，港口提箱运输已完成。';
+    }
+    task.status='arrived';
+    task.operationStatus='arrived';
+    return `已确认到达 ${task.to}，请继续确认掏箱。`;
+  }
+  window.doArrival = function(taskId){
+    const task=(transportTasks||[]).find(t=>same(t.id,taskId));
+    if(!task){ alert('找不到运输任务'); return; }
+    const msg=completeArrival(task);
+    if(typeof saveAndRenderContentKeepState==='function') saveAndRenderContentKeepState(); else { if(typeof saveData==='function') saveData(); if(typeof renderContent==='function') renderContent(); }
+    alert(msg);
+  };
+  window.confirmArrivalOnly = window.doArrival;
+
+  window.doUnpack = function(taskId){
+    const task=(transportTasks||[]).find(t=>same(t.id,taskId));
+    if(!task){ alert('找不到运输任务'); return; }
+    if(!['Rio Claro','IRA库房','工厂'].includes(v(task.to))){ alert('该目的地无需掏箱。'); return; }
+    const existed=(returnRecords||[]).find(r=>same(r.containerId,task.containerId) && same(r.location,task.to));
+    if(existed){ alert('已完成掏箱'); return; }
+    if(routeNeedsReturn(task)){
+      returnRecords.push({containerId:task.containerId,location:task.to,type:'return_needed',unpackDate:(typeof fmtDate==='function'?fmtDate(new Date().toISOString().split('T')[0]):new Date().toISOString().split('T')[0]),isReturnConfirmed:false,fromLocation:task.from});
+      task.operationStatus = task.to==='工厂' ? 'unloaded' : 'unpacked';
+      if(task.to!=='工厂') task.status='arrived';
+      alert('已确认掏箱，已生成还箱确认任务。');
+    }
+    if(typeof saveAndRenderContentKeepState==='function') saveAndRenderContentKeepState(); else { if(typeof saveData==='function') saveData(); if(typeof renderContent==='function') renderContent(); }
+  };
+
+  console.log('V43.1-SP9 Transport Workflow Fix loaded');
+})();
+</script>
+
 </body>
 </html>
