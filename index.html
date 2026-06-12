@@ -9989,5 +9989,124 @@ let main=document.getElementById('mainContent');
 })();
 </script>
 
+
+<script>
+/* ==================== V43.1-SP6 提箱确认计划ID兼容修复 ====================
+   修复：部分历史/导入后的 pickupPlans.id 类型可能是字符串，而按钮传入的是数字，
+   导致确认提箱时 pickupPlans.find(p => p.id === planId) 找不到计划。
+   原则：只修运输任务确认提箱的ID匹配，不改业务状态流转、不改导入逻辑。
+*/
+(function(){
+  function sp6SameId(a,b){ return String(a ?? '').trim() === String(b ?? '').trim(); }
+  function sp6FindPickupPlan(planId){
+    return (pickupPlans || []).find(p => sp6SameId(p.id, planId)) || null;
+  }
+  function sp6FindInputValue(planId, plan){
+    const ids = [
+      `pickupTime_${planId}`,
+      plan ? `pickupTime_${plan.id}` : ''
+    ].filter(Boolean);
+    for(const id of ids){
+      const el = document.getElementById(id);
+      if(el) return el.value;
+    }
+    // 兜底：如果页面只有一个已填写的提箱日期，使用该值，避免历史字符串ID导致无法读取。
+    const filled = Array.from(document.querySelectorAll('input[id^="pickupTime_"]')).filter(el => el.value);
+    return filled.length === 1 ? filled[0].value : '';
+  }
+  function sp6EnsureTaskFromConfirmedPickup(plan, cont, actualTime){
+    let task = null;
+    const isFactory = typeof v4217IsFactoryDestination === 'function' && v4217IsFactoryDestination(plan.destination);
+    if(isFactory && typeof v4217EnsureFactoryReceivingTaskFromPickupPlan === 'function'){
+      task = v4217EnsureFactoryReceivingTaskFromPickupPlan(plan);
+      if(task){
+        task.status = 'in_transit';
+        task.actualPickupTime = actualTime;
+        task.sourcePlanId = task.sourcePlanId || plan.id;
+        task.containerId = plan.containerId;
+        task.containerNo = plan.containerNo || (cont && cont.containerNo) || task.containerNo || '';
+        task.containerSeq = (cont && cont.containerSeq) || plan.containerSeq || task.containerSeq || '';
+        task.batch = plan.batch || (cont && cont.batch) || task.batch || '';
+        task.blNo = typeof getTaskBlText === 'function' ? getTaskBlText(plan) : (task.blNo || '');
+        task.iraNo = typeof getIraList === 'function' ? getIraList(plan.containerId) : (task.iraNo || '');
+        task.from = '港口';
+        task.to = '工厂';
+        task.carrier = plan.carrier || task.carrier || 'RG';
+        task.estimatedArrival = plan.arrivalDate || task.estimatedArrival || '';
+        task.unloadingDock = plan.unloadingDock || task.unloadingDock || '';
+        if(!task.operationStatus) task.operationStatus = 'not_arrived';
+      }
+    }else{
+      task = (transportTasks || []).find(t =>
+        t && !t.cancelled &&
+        (sp6SameId(t.sourcePlanId, plan.id) ||
+         (sp6SameId(t.containerId, plan.containerId) && String(t.source || '') === 'pickupPlan' && String(t.status || '') === 'in_transit'))
+      );
+      if(!task){
+        task = {id:nextIds.task++, source:'pickupPlan', sourcePlanId:plan.id};
+        transportTasks.push(task);
+      }
+      task.containerId = plan.containerId;
+      task.containerNo = plan.containerNo || (cont && cont.containerNo) || '';
+      task.containerSeq = (cont && cont.containerSeq) || plan.containerSeq || '';
+      task.batch = plan.batch || (cont && cont.batch) || '';
+      task.blNo = typeof getTaskBlText === 'function' ? getTaskBlText(plan) : '';
+      task.iraNo = typeof getIraList === 'function' ? getIraList(plan.containerId) : '';
+      task.from = '港口';
+      task.to = plan.destination;
+      task.carrier = plan.carrier;
+      task.status = 'in_transit';
+      task.operationStatus = '';
+      task.estimatedArrival = plan.arrivalDate;
+      task.unloadingDock = plan.unloadingDock || '';
+      task.actualPickupTime = actualTime;
+      task.createdAt = task.createdAt || new Date().toISOString();
+      task.publishedAt = task.publishedAt || new Date().toISOString();
+      task.gateArrivalTime = task.gateArrivalTime || '';
+      task.gateReleaseTime = task.gateReleaseTime || '';
+      task.waitingAreaTime = task.waitingAreaTime || '';
+      task.unloadStartTime = task.unloadStartTime || '';
+      task.unloadFinishTime = task.unloadFinishTime || '';
+    }
+    return task;
+  }
+
+  window.confirmPickupTask = function(planId){
+    let plan = sp6FindPickupPlan(planId);
+    if(!plan){
+      console.warn('SP6找不到提箱计划', planId, (pickupPlans || []).map(p=>p.id));
+      alert('找不到计划：请刷新页面后重试。如仍出现，请检查该任务是否已被取消或已确认。');
+      return;
+    }
+    let actualTime = sp6FindInputValue(planId, plan);
+    if(!actualTime){ alert('请填写实际提箱日期'); return; }
+    let cont = (containers || []).find(c => sp6SameId(c.id, plan.containerId));
+    if(cont) cont.actualPickupTime = actualTime;
+    plan.status = 'confirmed';
+    plan.actualPickupTime = actualTime;
+    plan.needReconfirm = false;
+    sp6EnsureTaskFromConfirmedPickup(plan, cont, actualTime);
+    saveData();
+    let activeTab = document.querySelector('.date-tab.active');
+    let keepDate = activeTab?.dataset?.date || (typeof getDatePart === 'function' ? getDatePart(plan.arrivalDate) : '');
+    let main = document.getElementById('mainContent');
+    if(main && keepDate && typeof window.renderTransportTasksWithDate === 'function') window.renderTransportTasksWithDate(main, keepDate);
+    else if(typeof renderContent === 'function') renderContent();
+    alert(`已确认提箱 ${plan.containerNo || ''}`);
+  };
+
+  // 同步 nextIds，避免后续计划/运输任务继续使用旧编号。
+  setTimeout(()=>{
+    try{
+      const maxPlan = Math.max(0, ...(pickupPlans || []).map(p => Number(p.id)).filter(Number.isFinite));
+      const maxTask = Math.max(0, ...(transportTasks || []).map(t => Number(t.id)).filter(Number.isFinite));
+      nextIds.plan = Math.max(Number(nextIds.plan) || 1, maxPlan + 1);
+      nextIds.task = Math.max(Number(nextIds.task) || 1, maxTask + 1);
+    }catch(e){ console.warn('SP6 nextIds sync skipped', e); }
+  }, 1200);
+  console.log('V43.1-SP6 Pickup Plan ID Fix loaded');
+})();
+</script>
+
 </body>
 </html>
