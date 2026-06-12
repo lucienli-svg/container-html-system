@@ -10947,5 +10947,214 @@ let main=document.getElementById('mainContent');
 })();
 </script>
 
+<script>
+
+/* ==================== V43.1-SP12 Factory Gate Terminal State Fix ====================
+   修复：门岗/卸货口连续操作时，已进厂/已卸货任务被旧状态清洗逻辑重新拉回门岗。
+   原则：工厂五状态只能向前推进；unloaded/completed 是终态，任何刷新、下一票确认都不能回退。
+*/
+(function(){
+  function sp12Norm(v){ return String(v == null ? '' : v).trim(); }
+  function sp12Same(a,b){ return sp12Norm(a).toUpperCase() === sp12Norm(b).toUpperCase(); }
+  function sp12Now(){
+    if(typeof nowLocalInput === 'function') return nowLocalInput();
+    const d = new Date();
+    const p = n => String(n).padStart(2,'0');
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  function sp12FindTask(taskId){
+    return (transportTasks || []).find(t => sp12Same(t.id, taskId)) || null;
+  }
+  function sp12IsFactoryTask(t){
+    return t && (sp12Norm(t.to) === '工厂' || sp12Norm(t.to).toUpperCase() === 'FACTORY' || sp12Norm(t.to).toUpperCase() === 'GWM');
+  }
+  function sp12IsFactoryTerminal(t){
+    if(!sp12IsFactoryTask(t)) return false;
+    return t.factoryFlowCompleted === true || t.operationStatus === 'unloaded' || t.status === 'completed' || !!t.unloadFinishTime;
+  }
+  function sp12NormalizeStatus(raw){
+    const map = {
+      planned:'not_arrived', gate:'outside_parking', released:'inside_waiting', waiting:'inside_waiting',
+      not_arrived:'not_arrived', outside_parking:'outside_parking', inside_waiting:'inside_waiting',
+      unloading:'unloading', unloaded:'unloaded', completed:'unloaded', cancelled:'cancelled'
+    };
+    return map[raw] || raw || 'not_arrived';
+  }
+
+  window.sanitizeFactoryTaskState = sanitizeFactoryTaskState = function(t){
+    if(!sp12IsFactoryTask(t)) return;
+    if(sp12IsFactoryTerminal(t)){
+      t.operationStatus = 'unloaded';
+      t.factoryFlowCompleted = true;
+      if(!t.unloadFinishTime) t.unloadFinishTime = t.factoryCompletedAt || sp12Now();
+      if(!t.factoryCompletedAt) t.factoryCompletedAt = t.unloadFinishTime;
+      return;
+    }
+    const st = sp12NormalizeStatus(t.operationStatus);
+    const order = {not_arrived:0,outside_parking:1,inside_waiting:2,unloading:3,unloaded:4,cancelled:9};
+    let derived = 'not_arrived';
+    if(t.unloadStartTime) derived = 'unloading';
+    else if(t.waitingAreaTime || t.gateReleaseTime) derived = 'inside_waiting';
+    else if(t.gateArrivalTime) derived = 'outside_parking';
+    t.operationStatus = order[derived] > order[st] ? derived : st;
+    if(!['not_arrived','outside_parking','inside_waiting','unloading','unloaded','cancelled'].includes(t.operationStatus)) t.operationStatus = 'not_arrived';
+  };
+
+  window.getOpStatus = getOpStatus = function(t){
+    if(!t) return 'not_arrived';
+    if(sp12IsFactoryTerminal(t)) return 'unloaded';
+    if(sp12IsFactoryTask(t)) sanitizeFactoryTaskState(t);
+    if(t.operationStatus) return sp12NormalizeStatus(t.operationStatus);
+    if(t.unloadStartTime) return 'unloading';
+    if(t.waitingAreaTime || t.gateReleaseTime) return 'inside_waiting';
+    if(t.gateArrivalTime) return 'outside_parking';
+    return 'not_arrived';
+  };
+
+  if(typeof getFactoryReceivingStatus === 'function'){
+    window.getFactoryReceivingStatus = getFactoryReceivingStatus = function(t){ return getOpStatus(t); };
+  }
+
+  function sp12FactoryVisible(t){
+    return sp12IsFactoryTask(t) && !t.cancelled && !sp12IsFactoryTerminal(t) && t.status !== 'completed' && (typeof isOperationalVisibleTask !== 'function' || isOperationalVisibleTask(t));
+  }
+
+  window.getFactoryOperationTasks = getFactoryOperationTasks = function(date){
+    let tasks = (transportTasks || []).filter(sp12FactoryVisible);
+    if(date){
+      tasks = tasks.filter(t =>
+        (typeof getDatePart === 'function' ? getDatePart(t.estimatedArrival || t.plannedDate || '') : String(t.estimatedArrival||'').slice(0,10)) === date ||
+        (typeof getDatePart === 'function' ? getDatePart(t.gateArrivalTime || '') : String(t.gateArrivalTime||'').slice(0,10)) === date ||
+        (typeof getDatePart === 'function' ? getDatePart(t.waitingAreaTime || '') : String(t.waitingAreaTime||'').slice(0,10)) === date ||
+        (typeof getDatePart === 'function' ? getDatePart(t.unloadStartTime || '') : String(t.unloadStartTime||'').slice(0,10)) === date
+      );
+    }
+    tasks.forEach(t => { try{ if(typeof syncTaskContainerSeqFromMaster === 'function') syncTaskContainerSeqFromMaster(t); }catch(e){} sanitizeFactoryTaskState(t); });
+    return tasks.sort((a,b)=>
+      String(a.estimatedArrival||'').localeCompare(String(b.estimatedArrival||'')) ||
+      String(a.unloadingDock||'').localeCompare(String(b.unloadingDock||''),'zh-CN',{numeric:true}) ||
+      (typeof compareProductionSequence === 'function' ? compareProductionSequence(a,b) : 0)
+    );
+  };
+
+  if(typeof getFactoryReceivingTasksV41 === 'function'){
+    window.getFactoryReceivingTasksV41 = getFactoryReceivingTasksV41 = function(date){
+      let tasks = getFactoryOperationTasks(date);
+      if(typeof canViewDock === 'function') tasks = tasks.filter(t => canViewDock(t.unloadingDock || ''));
+      return tasks;
+    };
+  }
+
+  window.confirmGateArrival = function(taskId){
+    const t = sp12FindTask(taskId);
+    if(!t){ alert('找不到门岗任务，请刷新页面后重试。'); return; }
+    if(sp12IsFactoryTerminal(t)){ alert('该集装箱已完成卸货，不能回退到门岗。'); return; }
+    const current = getOpStatus(t);
+    if(!['not_arrived','outside_parking'].includes(current)){ alert('该集装箱已经进厂，不能重复确认到门口。'); return; }
+    t.truckPlate = document.getElementById(`gatePlate_${t.id}`)?.value.trim() || t.truckPlate || '';
+    t.driverName = document.getElementById(`gateDriver_${t.id}`)?.value.trim() || t.driverName || '';
+    t.driverPhone = document.getElementById(`gatePhone_${t.id}`)?.value.trim() || t.driverPhone || '';
+    t.gateArrivalTime = t.gateArrivalTime || sp12Now();
+    t.operationStatus = 'outside_parking';
+    if(typeof saveAndRenderContentKeepState === 'function') saveAndRenderContentKeepState(); else { if(typeof saveData==='function') saveData(); if(typeof renderContent==='function') renderContent(); }
+  };
+
+  window.releaseFromGate = function(taskId){
+    const t = sp12FindTask(taskId);
+    if(!t){ alert('找不到门岗任务，请刷新页面后重试。'); return; }
+    if(sp12IsFactoryTerminal(t)){ alert('该集装箱已完成卸货，不能回退到门岗。'); return; }
+    const current = getOpStatus(t);
+    if(current === 'not_arrived'){
+      alert('请先确认到门口，再放行进厂。');
+      return;
+    }
+    if(!['outside_parking','inside_waiting'].includes(current)){ alert('该集装箱当前状态不能放行进厂。'); return; }
+    t.gateReleaseTime = t.gateReleaseTime || sp12Now();
+    t.waitingAreaTime = t.waitingAreaTime || t.gateReleaseTime;
+    t.operationStatus = 'inside_waiting';
+    if(typeof saveAndRenderContentKeepState === 'function') saveAndRenderContentKeepState(); else { if(typeof saveData==='function') saveData(); if(typeof renderContent==='function') renderContent(); }
+  };
+
+  window.startUnloading = function(taskId){
+    const t = sp12FindTask(taskId);
+    if(!t){ alert('找不到卸货任务，请刷新页面后重试。'); return; }
+    if(sp12IsFactoryTerminal(t)){ alert('该集装箱已完成卸货，不能重复操作。'); return; }
+    const current = getOpStatus(t);
+    if(current !== 'inside_waiting' && current !== 'unloading'){
+      alert('该集装箱还未进入工厂内等待，不能确认到达卸货口。');
+      return;
+    }
+    t.unloadStartTime = t.unloadStartTime || sp12Now();
+    t.operationStatus = 'unloading';
+    if(typeof saveAndRenderContentKeepState === 'function') saveAndRenderContentKeepState(); else { if(typeof saveData==='function') saveData(); if(typeof renderContent==='function') renderContent(); }
+  };
+
+  function sp12EnsureFactoryReturnRecord(t){
+    try{
+      if(!Array.isArray(returnRecords) || !t || !t.containerId) return;
+      const exists = returnRecords.some(r => sp12Same(r.containerId, t.containerId) && (r.type === 'return_needed' || r.type === 'unpack') && sp12Same(r.location, '工厂'));
+      if(exists) return;
+      returnRecords.push({
+        containerId: t.containerId,
+        location: '工厂',
+        type: 'return_needed',
+        unpackDate: (typeof fmtDate === 'function' ? fmtDate(String(sp12Now()).slice(0,10)) : String(sp12Now()).slice(0,10)),
+        isReturnConfirmed: false,
+        fromLocation: t.from || '',
+        sourceTaskId: t.id,
+        createdAt: sp12Now()
+      });
+    }catch(e){ console.warn('SP12 return record skipped', e); }
+  }
+
+  window.finishUnloading = function(taskId){
+    const t = sp12FindTask(taskId);
+    if(!t){ alert('找不到卸货任务，请刷新页面后重试。'); return; }
+    if(sp12IsFactoryTerminal(t)){
+      alert('该集装箱已完成卸货。');
+      return;
+    }
+    const current = getOpStatus(t);
+    if(current !== 'unloading'){
+      alert('请先确认到达卸货口，再确认掏箱完成。');
+      return;
+    }
+    t.unloadFinishTime = t.unloadFinishTime || sp12Now();
+    t.operationStatus = 'unloaded';
+    t.factoryFlowCompleted = true;
+    t.factoryCompletedAt = t.unloadFinishTime;
+    t.status = 'completed';
+    sp12EnsureFactoryReturnRecord(t);
+    if(typeof saveAndRenderContentKeepState === 'function') saveAndRenderContentKeepState(); else { if(typeof saveData==='function') saveData(); if(typeof renderContent==='function') renderContent(); }
+    alert('掏箱完成，已生成还箱确认任务。');
+  };
+
+  // 清理仅在界面读取时执行：给历史已卸货数据补终态标记，防止后续操作把它拉回门岗。
+  window.sp12SealCompletedFactoryTasks = function(){
+    let changed = false;
+    (transportTasks || []).forEach(t => {
+      if(sp12IsFactoryTask(t) && (t.operationStatus === 'unloaded' || t.unloadFinishTime || t.factoryFlowCompleted === true)){
+        if(t.operationStatus !== 'unloaded'){ t.operationStatus = 'unloaded'; changed = true; }
+        if(t.factoryFlowCompleted !== true){ t.factoryFlowCompleted = true; changed = true; }
+        if(t.status !== 'completed'){ t.status = 'completed'; changed = true; }
+      }
+    });
+    if(changed && typeof saveData === 'function') saveData();
+    return changed;
+  };
+
+  const oldRenderFactoryReceivingSP12 = window.renderFactoryReceiving;
+  if(typeof oldRenderFactoryReceivingSP12 === 'function'){
+    window.renderFactoryReceiving = renderFactoryReceiving = function(){
+      try{ window.sp12SealCompletedFactoryTasks(); }catch(e){ console.warn('SP12 seal skipped', e); }
+      return oldRenderFactoryReceivingSP12.apply(this, arguments);
+    };
+  }
+
+  console.log('V43.1-SP12 Factory Gate Terminal State Fix loaded');
+})();
+
+</script>
+
 </body>
 </html>
