@@ -12056,5 +12056,154 @@ let main=document.getElementById('mainContent');
 })();
 </script>
 
+
+<script>
+/* ==================== V45.4 状态修复版：基础数据状态拆分 + 异常状态校准 ==================== */
+(function(){
+  const PATCH_VERSION='V45.4 Status Calibration';
+  const FACTORY='工厂';
+  const WAREHOUSES=['RG堆场','Rio Claro','IRA库房'];
+  const ALL_LOCS=['港口','RG堆场','Rio Claro','IRA库房','工厂','运输中','已生产'];
+
+  function arr(v){ return Array.isArray(v)?v:[]; }
+  function s(v){ return String(v==null?'':v).trim(); }
+  function same(a,b){ return s(a).toUpperCase()===s(b).toUpperCase(); }
+  function notCancelled(t){ return t && !t.cancelled && t.status!=='cancelled' && t.status!=='已取消'; }
+  function getCid(c){ return c && (c.id!=null?String(c.id):''); }
+  function taskMatchesContainer(t,c){
+    if(!t||!c) return false;
+    if(t.containerId!=null && c.id!=null && String(t.containerId)===String(c.id)) return true;
+    return same(t.containerNo,c.containerNo) && (!t.batch || !c.batch || same(t.batch,c.batch));
+  }
+  function taskTime(t){ return new Date(t.updatedAt||t.unloadFinishTime||t.actualArrival||t.gateArrivalTime||t.actualPickupTime||t.pickupTime||t.estimatedArrival||0).getTime()||0; }
+  function activeTasksForContainerV454(c){ return arr(transportTasks).filter(t=>notCancelled(t)&&taskMatchesContainer(t,c)).sort((a,b)=>taskTime(b)-taskTime(a)); }
+  function physicalLocationFromStockV454(c){
+    const rows=arr(locationStock).filter(x=>String(x.containerId)===String(c.id) || same(x.containerNo,c.containerNo));
+    if(!rows.length) return '';
+    rows.sort((a,b)=>new Date(b.time||b.updatedAt||b.createdAt||0)-new Date(a.time||a.updatedAt||a.createdAt||0));
+    return rows[0].location || '';
+  }
+  function getCustomsStatusV454(c){ return c.customsStatus || (c.customsClearanceTime||c.customsTime ? '已清关':'清关中'); }
+  function getFactoryTaskStatusV454(t){
+    const op=t.operationStatus || t.factoryStatus || '';
+    if(t.unloadFinishTime || op==='unloaded' || t.status==='completed') return {text:'已完成卸货', loc:'工厂', cls:'status-completed'};
+    if(t.unloadStartTime || op==='unloading') return {text:'卸货中', loc:'工厂', cls:'status-transport'};
+    if(t.waitingAreaTime || t.gateReleaseTime || op==='inside_waiting') return {text:'工厂内等待', loc:'工厂', cls:'status-at-location'};
+    if(t.gateArrivalTime || op==='outside_parking' || op==='gate_arrived') return {text:'已到门口', loc:'工厂门口', cls:'status-warning'};
+    if(t.status==='in_transit') return {text:'运输中', loc:'运输中', cls:'status-transport'};
+    return {text:'未到工厂', loc:'运输中', cls:'status-pending'};
+  }
+  function deriveContainerStatusV454(c){
+    const customs=getCustomsStatusV454(c);
+    const produced=arr(productionRecords).some(p=>arr(p.containerIds).map(String).includes(String(c.id)) || (p.containerNo && same(p.containerNo,c.containerNo)));
+    if(produced) return {customs, loc:'已生产', text:'已完成', cls:'status-completed', abnormal:false, reason:''};
+    const returnDone=arr(returnRecords).some(r=>taskMatchesContainer(r,c) && r.type==='return' && r.isReturnConfirmed);
+    if(returnDone){
+      const loc=physicalLocationFromStockV454(c)||'已还箱';
+      return {customs, loc, text:'已完成', cls:'status-completed', abnormal:false, reason:''};
+    }
+    const pendingReturn=arr(returnRecords).some(r=>taskMatchesContainer(r,c) && r.type==='return_needed' && !r.isReturnConfirmed);
+    if(pendingReturn){
+      const loc=physicalLocationFromStockV454(c)||'待还箱';
+      return {customs, loc, text:'待还箱', cls:'status-return-pending', abnormal:false, reason:''};
+    }
+    const tasks=activeTasksForContainerV454(c);
+    const moving=tasks.find(t=>t.status==='in_transit');
+    if(moving) return {customs, loc:'运输中', text:'运输中', cls:'status-transport', abnormal:false, reason:''};
+    const factoryTask=tasks.find(t=>s(t.to)===FACTORY || s(t.destination)===FACTORY);
+    if(factoryTask){
+      const fs=getFactoryTaskStatusV454(factoryTask);
+      return {customs, loc:fs.loc, text:fs.text, cls:fs.cls, abnormal:false, reason:''};
+    }
+    const arrivedTask=tasks.find(t=>(t.status==='arrived'||t.status==='completed'||t.actualArrival) && s(t.to||t.destination));
+    if(arrivedTask){
+      const dest=arrivedTask.to||arrivedTask.destination;
+      return {customs, loc:dest, text:dest==='工厂'?'已完成卸货':`已到达${dest}`, cls:'status-at-location', abnormal:false, reason:''};
+    }
+    const loc=physicalLocationFromStockV454(c);
+    if(loc && loc!=='运输中'){
+      return {customs, loc, text:loc==='港口'?customs:`已到达${loc}`, cls:loc==='港口'?(customs==='已清关'?'status-ready':'status-clearing'):'status-at-location', abnormal:false, reason:''};
+    }
+    if(loc==='运输中' || c.actualPickupTime){
+      return {customs, loc:'运输中', text:'异常状态', cls:'status-warning', abnormal:true, reason:'显示为运输中，但未找到有效运输任务/到货任务'};
+    }
+    return {customs, loc:'港口', text:customs, cls:customs==='已清关'?'status-ready':'status-clearing', abnormal:false, reason:''};
+  }
+
+  window.getContainerFullStatus = getContainerFullStatus = function(c){
+    const d=deriveContainerStatusV454(c);
+    return {text:d.text, cls:d.cls, loc:d.loc, customs:d.customs, abnormal:d.abnormal, reason:d.reason};
+  };
+
+  window.renderContainers = renderContainers = function(container){
+    container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📦 基础数据 <span class="status-badge status-ready">${PATCH_VERSION}</span></span><div><button class="btn btn-warning" onclick="calibrateContainerStatusesV454()">🛠 状态校准</button><button class="btn btn-primary" onclick="showAddContainer()">+ 新增</button><button class="btn export-btn" onclick="exportTemplate()">📥 导出模板</button><button class="btn btn-success" onclick="showImport()">📎 批量导入</button></div></div><div style="font-size:12px;color:#606266;margin-bottom:10px;line-height:1.6;">说明：基础数据已将“清关状态”和“运输状态”拆分显示。若出现“异常状态”，表示该箱显示为运输中但未找到对应运输/到货任务，请使用“状态校准”或检查运输计划。</div><div class="search-bar"><input type="text" id="searchBatch" placeholder="批次"><input type="text" id="searchContainer" placeholder="集装箱号"><select id="searchLocation" class="form-control" style="width:auto;min-width:130px;"><option value="">全部当前位置</option>${ALL_LOCS.map(x=>`<option value="${x}">${x}</option>`).join('')}</select><select id="searchStatus" class="form-control" style="width:auto;min-width:150px;"><option value="">全部运输状态</option><option value="清关中">清关中</option><option value="已清关">已清关</option><option value="运输中">运输中</option><option value="已到达RG堆场">已到达RG堆场</option><option value="已到达Rio Claro">已到达Rio Claro</option><option value="已到达IRA库房">已到达IRA库房</option><option value="已到门口">已到门口</option><option value="工厂内等待">工厂内等待</option><option value="卸货中">卸货中</option><option value="已完成卸货">已完成卸货</option><option value="待还箱">待还箱</option><option value="已完成">已完成</option><option value="异常状态">异常状态</option></select><button class="btn btn-primary" onclick="renderContainerTable()">查询</button><button class="btn" onclick="clearContainerSearch()">重置</button></div><div id="containerTable"></div></div>`;
+    renderContainerTable();
+  };
+
+  window.renderContainerTable = renderContainerTable = function(){
+    let batch=document.getElementById('searchBatch')?.value.toLowerCase()||'';
+    let cont=document.getElementById('searchContainer')?.value.toLowerCase()||'';
+    let locFilter=document.getElementById('searchLocation')?.value||'';
+    let statusFilter=document.getElementById('searchStatus')?.value||'';
+    let filtered=arr(containers).filter(c=>{
+      let st=getContainerFullStatus(c);
+      return (!batch||String(c.batch||'').toLowerCase().includes(batch)) &&
+             (!cont||String(c.containerNo||'').toLowerCase().includes(cont)) &&
+             (!locFilter||st.loc===locFilter) &&
+             (!statusFilter||st.text===statusFilter||st.customs===statusFilter);
+    });
+    renderTable('containerTable',['序号','批次','集装箱序号','集装箱号','船公司','箱型','到港时间','滞箱费最后免费日','关联提单','IRA号','清关状态','当前位置','运输状态','操作'],filtered,(c,i)=>{
+      let tr=document.createElement('tr');
+      let bls = arr(containerBlMap).filter(m=>String(m.containerId)===String(c.id)).map(m=>{
+        let bl = arr(blList).find(b => b.blNo === m.blNo || b.houseBlNo === m.blNo);
+        if(bl && bl.carrier === '长荣' && bl.masterBlNo) return `${bl.masterBlNo}|${bl.houseBlNo}`;
+        return m.blNo;
+      }).join(',');
+      let iraList=(typeof getIraList==='function')?getIraList(c.id):'';
+      let st=getContainerFullStatus(c);
+      let title=st.abnormal?` title="${st.reason||'异常状态'}"`:'';
+      tr.innerHTML=`<td>${i+1}</td><td>${c.batch||'-'}</td><td>${c.containerSeq||'-'}</td><td>${c.containerNo||'-'}</td><td>${c.vessel||'-'}</td><td>${c.containerType||'-'}</td><td>${typeof fmtDate==='function'?fmtDate(c.eta):c.eta}</td><td>${typeof getDemurrageLastFreeDay==='function'?getDemurrageLastFreeDay(c):'-'}</td><td>${bls||'-'}</td><td>${iraList||'-'}</td><td><span class="status-badge ${st.customs==='已清关'?'status-ready':'status-clearing'}">${st.customs||'-'}</span></td><td><span class="status-badge status-pending">${st.loc||'-'}</span></td><td><span class="status-badge ${st.cls}"${title}>${st.text||'-'}</span></td><td><button class="btn btn-sm btn-warning" onclick="editContainer(${c.id})">编辑</button> <button class="btn btn-sm btn-danger" onclick="deleteContainer(${c.id})">删除</button></td>`;
+      return tr;
+    });
+  };
+
+  window.clearContainerSearch = clearContainerSearch = function(){
+    ['searchBatch','searchContainer','searchLocation','searchStatus'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
+    renderContainerTable();
+  };
+
+  window.calibrateContainerStatusesV454 = async function(){
+    let changed=0, abnormal=0, repairedStock=0;
+    const setStock=(cid, loc)=>{
+      if(!cid || !loc || loc==='运输中') return;
+      let row=arr(locationStock).find(x=>String(x.containerId)===String(cid));
+      if(row){ if(row.location!==loc){ row.location=loc; row.time=new Date().toISOString(); changed++; repairedStock++; } }
+      else { locationStock.push({id:(nextIds?.stock||Date.now()), containerId:cid, location:loc, time:new Date().toISOString()}); if(nextIds) nextIds.stock=(nextIds.stock||1)+1; changed++; repairedStock++; }
+    };
+    arr(transportTasks).filter(notCancelled).forEach(t=>{
+      const c=arr(containers).find(x=>taskMatchesContainer(t,x));
+      if(!c) return;
+      const dest=t.to||t.destination;
+      if(t.status==='arrived'||t.status==='completed'||t.actualArrival||t.unloadFinishTime){
+        if(dest && dest!=='运输中') setStock(c.id, dest);
+      }
+    });
+    arr(containers).forEach(c=>{ const st=deriveContainerStatusV454(c); if(st.abnormal) abnormal++; });
+    try{ saveData(); }catch(e){ console.warn('V45.4 calibration save skipped', e); }
+    try{ if(typeof renderContainerTable==='function') renderContainerTable(); }catch(e){}
+    alert(`状态校准完成。\n同步位置记录：${repairedStock}\n仍需人工检查的异常状态：${abnormal}\n说明：异常状态通常表示“已提箱/运输中”但系统没有有效运输任务或到货任务，需要核对对应运输计划。`);
+  };
+
+  // 给异常状态增加样式
+  try{
+    const style=document.createElement('style');
+    style.textContent='.status-badge.status-warning{background:#fff3cd;color:#9a6500}.status-badge.status-at-location{background:#e6f0ff;color:#2a5298}.status-badge.status-clearing{background:#f4f4f5;color:#606266}.status-badge.status-ready{background:#e1f3d8;color:#2b7a0b}';
+    document.head.appendChild(style);
+  }catch(e){}
+
+  console.log('V45.4 status calibration patch loaded');
+})();
+</script>
+
 </body>
 </html>
