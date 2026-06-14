@@ -12209,13 +12209,13 @@ let main=document.getElementById('mainContent');
 /* ==================== V45.5 Stable Core：云端唯一数据源 + 原子分片保存 + 统一状态机 ==================== */
 (function(){
   'use strict';
-  const VERSION = 'V45.5 Stable Core';
+  const VERSION = 'V45.6 Stable Core';
   const BASE_ID = (typeof CLOUD_STATE_ID !== 'undefined' ? CLOUD_STATE_ID : 'container-monitoring-main');
   const CURRENT_MANIFEST_ID = BASE_ID + ':v455:manifest';
   const DAILY_PREFIX = BASE_ID + ':v455:daily:';
   const GEN_PREFIX = BASE_ID + ':v455:g:';
-  const CHUNK_SIZE = 50;
-  const UPSERT_BATCH = 8;
+  const CHUNK_SIZE = 250;
+  const UPSERT_BATCH = 30;
   const KEEP_DAYS = 30;
   const ARRAY_MODULES = ['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig'];
   const OBJECT_MODULES = ['nextIds','warningConfig'];
@@ -12260,6 +12260,50 @@ let main=document.getElementById('mainContent');
       updatedAt: nowIso(),
       updatedBy: userName()
     };
+  }
+
+
+  /* V45.6：并发保存保护。多个账号同时操作时，不允许较旧页面的完整快照删除云端已有记录。 */
+  function recordTimeV456(x){
+    if(!x || typeof x!=='object') return 0;
+    const v=x.updatedAt||x.updated_at||x.modifiedAt||x.confirmedAt||x.actualArrival||x.createdAt||x.created_at||'';
+    const n=Date.parse(v); return Number.isFinite(n)?n:0;
+  }
+  function recordKeyV456(module,x){
+    if(!x || typeof x!=='object') return '';
+    const n=v=>norm(v).toUpperCase();
+    if(module==='containers') return n(x.containerNo)||('ID:'+n(x.id));
+    if(module==='blList') return n(x.blNo||x.houseBlNo||x.masterBlNo)||('ID:'+n(x.id));
+    if(module==='containerBlMap') return n(x.containerId)+'|'+n(x.blNo||x.houseBlNo||x.masterBlNo);
+    if(module==='transportTasks') return n(x.sourcePlanId)||[n(x.containerNo),n(x.containerId),n(taskOrigin(x)),n(taskDest(x)),datePart(x.estimatedArrival||x.arrivalDate),n(x.source)].join('|')||('ID:'+n(x.id));
+    if(module==='locationStock') return n(x.containerId)||n(x.containerNo)||('ID:'+n(x.id));
+    if(module==='returnRecords') return [n(x.containerId),n(x.location),n(x.type),datePart(x.unpackDate||x.createdAt)].join('|');
+    if(module==='pickupPlans') return n(x.id)||[n(x.containerNo),n(x.containerId),datePart(x.arrivalDate),n(x.destination)].join('|');
+    if(module==='productionRecords') return n(x.id)||[n(x.batch),datePart(x.date),n(x.workshop||x.area)].join('|');
+    if(module==='productionPlans') return n(x.id)||[datePart(x.date),n(x.workshop||x.area),n(x.batch),n(x.order||x.planOrder)].join('|');
+    if(module==='factoryCalendar') return datePart(x.date)||n(x.id);
+    return n(x.id)||JSON.stringify(x);
+  }
+  function mergeArrayV456(module,remote,local){
+    const map=new Map();
+    arr(remote).forEach(x=>{const k=recordKeyV456(module,x);if(k)map.set(k,clone(x));});
+    arr(local).forEach(x=>{
+      const k=recordKeyV456(module,x); if(!k)return;
+      const old=map.get(k);
+      if(!old || recordTimeV456(x)>=recordTimeV456(old) || x.cancelled || x.status==='cancelled' || x.deletedAt) map.set(k,clone(x));
+    });
+    return [...map.values()];
+  }
+  function mergeStatesV456(remote,local){
+    if(isEmpty(remote)) return local;
+    if(isEmpty(local)) return remote;
+    const merged={...remote,...local};
+    ARRAY_MODULES.forEach(name=>{merged[name]=mergeArrayV456(name,remote[name],local[name]);});
+    merged.nextIds={...(remote.nextIds||{}),...(local.nextIds||{})};
+    Object.keys(merged.nextIds).forEach(k=>{merged.nextIds[k]=Math.max(Number(remote.nextIds&&remote.nextIds[k]||0),Number(local.nextIds&&local.nextIds[k]||0),1);});
+    merged.warningConfig={...(remote.warningConfig||{}),...(local.warningConfig||{})};
+    merged.version=VERSION; merged.updatedAt=nowIso(); merged.updatedBy=userName();
+    return merged;
   }
 
   function applyStateV455(st){
@@ -12393,9 +12437,24 @@ let main=document.getElementById('mainContent');
   async function persistV455(reason){
     const sb=typeof initSupabaseClient==='function'?initSupabaseClient():null;
     if(!sb || (typeof cloudUser!=='undefined' && !cloudUser)) return false;
-    const st=stateFromGlobalsV455();
-    if(isEmpty(st) && !window.__allowEmptyCloudOverwrite){ hint('已阻止空数据保存'); return false; }
     normalizeStateV455(false);
+    let st=stateFromGlobalsV455();
+    if(isEmpty(st) && !window.__allowEmptyCloudOverwrite){ hint('已阻止空数据保存'); return false; }
+    /* 保存前核对云端最新版本，避免其他账号新增的批次被旧页面整包覆盖。 */
+    try{
+      const {data:head,error:headErr}=await sb.from('app_state').select('data,updated_at').eq('id',CURRENT_MANIFEST_ID).maybeSingle();
+      if(headErr) throw headErr;
+      if(head&&head.data&&(!latestCloudUpdatedAt||head.updated_at!==latestCloudUpdatedAt)){
+        const remote=await readGenerationV455(head.data);
+        if(remote){
+          const before=arr(st.containers).length;
+          st=mergeStatesV456(remote,st);
+          applyStateV455(st);
+          const rescued=arr(st.containers).length-before;
+          if(rescued>0) hint('已合并云端新增数据，保护 '+rescued+' 个集装箱不被覆盖');
+        }
+      }
+    }catch(e){ console.warn('V45.6 保存前云端核对失败，继续使用当前状态保存',e); }
     const updatedAt=nowIso(), updatedBy=userName(), generation=makeGeneration();
     const manifest={version:VERSION,mode:'generation_split_app_state',generation,reason:reason||'save',updatedAt,updatedBy,chunkSize:CHUNK_SIZE,modules:{},score:score(st)};
     const rows=[];
@@ -12553,8 +12612,20 @@ let main=document.getElementById('mainContent');
 
   async function transactionV455(reason,mutate,successMsg){
     const snapshot=clone(stateFromGlobalsV455()); const ui=captureUi();
-    try{ const result=mutate(); if(result===false)return false; normalizeStateV455(true); const ok=await queueSaveV455(reason); if(!ok){applyStateV455(snapshot);rerender(ui);return false;} rerender(ui); if(successMsg)alert(successMsg); return true; }
-    catch(e){console.error(e);applyStateV455(snapshot);rerender(ui);alert('操作失败：'+(e.message||e));return false;}
+    try{
+      const result=mutate(); if(result===false)return false;
+      normalizeStateV455(true);
+      /* 乐观界面：先立即刷新，让按钮和列表即时变化；云端保存放入队列。 */
+      rerender(ui); hint(successMsg ? successMsg+'，正在保存…' : '操作已完成，正在保存…');
+      const ok=await queueSaveV455(reason);
+      if(!ok){
+        /* 若后面还有连续操作排队，不回滚整个页面，避免把后续已点击的结果一起清掉。 */
+        if(savePending>0){ hint('保存暂时失败，后续操作仍在排队同步…'); return false; }
+        applyStateV455(snapshot); rerender(ui); alert('云端保存失败，本次操作已自动撤销，请检查网络后重试。'); return false;
+      }
+      hint(successMsg ? successMsg+'，已保存' : '云端已保存');
+      return true;
+    }catch(e){console.error(e);applyStateV455(snapshot);rerender(ui);alert('操作失败：'+(e.message||e));return false;}
   }
 
   async function confirmPickupByKeyV455(key){
@@ -12605,8 +12676,76 @@ let main=document.getElementById('mainContent');
   window.downloadV455Backup=async function(id){const sb=initSupabaseClient();const {data,error}=await sb.from('app_state').select('data').eq('id',id).maybeSingle();if(error||!data)return alert('读取备份失败');const st=await readGenerationV455(data.data);if(!st)return alert('备份数据无效');const blob=new Blob([JSON.stringify(st,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='container_backup_'+id.replace(DAILY_PREFIX,'')+'.json';a.click();};
   window.restoreV455Backup=async function(id){if(!confirm('确认恢复该日期备份？当前数据会先保留为今天的最新版本。'))return;const sb=initSupabaseClient();const {data,error}=await sb.from('app_state').select('data').eq('id',id).maybeSingle();if(error||!data)return alert('读取备份失败');const st=await readGenerationV455(data.data);if(!st)return alert('备份数据无效');const snapshot=clone(stateFromGlobalsV455());applyStateV455(st);const ok=await queueSaveV455('restore_'+id);if(!ok){applyStateV455(snapshot);return;}rerender(captureUi());alert('备份恢复完成');};
 
-  try{document.title='Sistema Inteligente de Monitoramento de Contêineres V45.5';}catch(e){}
-  console.log('V45.5 Stable Core loaded: cloud authoritative, generation save, unified state machine');
+
+  /* V45.6：扫描云端历史恢复点，按用户确认补回当前主数据中缺失的批次/集装箱及关联记录。 */
+  async function backupStateV456(row){
+    const d=row&&row.data;
+    if(!d)return null;
+    if(Array.isArray(d.containers))return d;
+    if(d.generation&&d.modules)return await readGenerationV455(d);
+    return null;
+  }
+  function appendUniqueV456(target,source,module,idMap){
+    const existing=new Set(arr(target).map(x=>recordKeyV456(module,x)));
+    arr(source).forEach(raw=>{
+      const x=clone(raw);
+      if(idMap&&x.containerId!=null&&idMap.has(norm(x.containerId)))x.containerId=idMap.get(norm(x.containerId));
+      const k=recordKeyV456(module,x);if(k&&!existing.has(k)){target.push(x);existing.add(k);}
+    });
+  }
+  window.restoreMissingBatchesV456=async function(){
+    const sb=initSupabaseClient();if(!sb)return alert('Supabase未连接');
+    hint('正在扫描云端历史备份…');
+    try{
+      const rows=[];
+      for(const pattern of [DAILY_PREFIX+'%',BASE_ID+'-daily-%']){
+        const {data,error}=await sb.from('app_state').select('id,data,updated_at').like('id',pattern).order('updated_at',{ascending:false}).limit(40);
+        if(error)throw error;arr(data).forEach(x=>rows.push(x));
+      }
+      rows.sort((a,b)=>new Date(b.updated_at||0)-new Date(a.updated_at||0));
+      const currentKeys=new Set(arr(containers).map(c=>recordKeyV456('containers',c)));
+      const found=new Map();
+      for(const row of rows){
+        const st=await backupStateV456(row);if(!st)continue;
+        arr(st.containers).forEach(c=>{const k=recordKeyV456('containers',c);if(k&&!currentKeys.has(k)&&!found.has(k))found.set(k,{c,st,row});});
+      }
+      if(!found.size){hint('未发现缺失批次');return alert('已扫描云端历史恢复点，没有发现当前系统缺失的集装箱数据。');}
+      const list=[...found.values()];
+      const batches=[...new Set(list.map(x=>x.c.batch||'未填写批次'))];
+      const preview=batches.slice(0,20).join('、')+(batches.length>20?'…':'');
+      if(!confirm('发现 '+list.length+' 个当前主数据中不存在的历史集装箱，涉及 '+batches.length+' 个批次：\n'+preview+'\n\n是否补回这些缺失数据及其提单、提箱计划、运输任务等关联记录？\n当前数据不会被删除。')){hint('已取消恢复');return;}
+      await transactionV455('restore_missing_batches',()=>{
+        const idMap=new Map();
+        const usedIds=new Set(arr(containers).map(c=>norm(c.id)));
+        list.forEach(({c})=>{const x=clone(c);const old=norm(x.id);if(usedIds.has(old)){x.id=nextIds.container||Date.now();nextIds.container=Number(x.id)+1;}usedIds.add(norm(x.id));idMap.set(old,x.id);containers.push(x);});
+        const sources=[...new Set(list.map(x=>x.st))];
+        sources.forEach(st=>{
+          const oldIds=new Set(list.filter(x=>x.st===st).map(x=>norm(x.c.id)));
+          appendUniqueV456(containerBlMap,arr(st.containerBlMap).filter(x=>oldIds.has(norm(x.containerId))),'containerBlMap',idMap);
+          appendUniqueV456(pickupPlans,arr(st.pickupPlans).filter(x=>oldIds.has(norm(x.containerId))),'pickupPlans',idMap);
+          appendUniqueV456(transportTasks,arr(st.transportTasks).filter(x=>oldIds.has(norm(x.containerId))),'transportTasks',idMap);
+          appendUniqueV456(locationStock,arr(st.locationStock).filter(x=>oldIds.has(norm(x.containerId))),'locationStock',idMap);
+          appendUniqueV456(returnRecords,arr(st.returnRecords).filter(x=>oldIds.has(norm(x.containerId))),'returnRecords',idMap);
+          const neededBl=new Set(arr(containerBlMap).filter(x=>[...idMap.values()].map(norm).includes(norm(x.containerId))).map(x=>norm(x.blNo)));
+          appendUniqueV456(blList,arr(st.blList).filter(x=>neededBl.has(norm(x.blNo||x.houseBlNo||x.masterBlNo))),'blList');
+        });
+        return true;
+      },'已补回缺失批次');
+    }catch(e){console.error(e);hint('扫描失败');alert('扫描云端历史备份失败：'+(e.message||e));}
+  };
+  const baseRenderContainersV456=window.renderContainers;
+  if(typeof baseRenderContainersV456==='function'){
+    window.renderContainers=renderContainers=function(container){
+      baseRenderContainersV456(container);
+      const head=container&&container.querySelector('.card-header>div');
+      if(head&&!document.getElementById('btnRestoreMissingV456')){
+        const b=document.createElement('button');b.id='btnRestoreMissingV456';b.className='btn btn-secondary';b.textContent='🔎 扫描并补回缺失批次';b.onclick=window.restoreMissingBatchesV456;head.insertBefore(b,head.firstChild);
+      }
+    };
+  }
+
+  try{document.title='Sistema Inteligente de Monitoramento de Contêineres V45.6';}catch(e){}
+  console.log('V45.6 Stable Core loaded: instant UI, concurrency protection, missing-batch recovery');
 })();
 
 </script>
