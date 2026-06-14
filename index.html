@@ -13007,5 +13007,203 @@ ${preview}
 })();
 </script>
 
+<script>
+/* ==================== V45.9 门岗任务引用兼容修复 ====================
+   根因：门岗列表由 V45.3 使用 encodeURIComponent(JSON) 注册逻辑键，
+   但后续 V45.5 的点击函数按 Base64 JSON 解码，导致页面有任务、点击却查不到任务。
+   本补丁统一兼容：映射键、URI JSON、Base64 JSON、任务ID。
+*/
+(function(){
+  const VERSION = 'V45.9';
+  const arr = v => Array.isArray(v) ? v : [];
+  const norm = v => String(v ?? '').trim().toUpperCase();
+  const nowValue = () => {
+    try { return typeof nowLocalInput === 'function' ? nowLocalInput() : new Date().toISOString(); }
+    catch (_) { return new Date().toISOString(); }
+  };
+  const isFactory = v => {
+    const x = norm(v);
+    return x === '工厂' || x === 'FACTORY' || x === 'FÁBRICA' || x === 'FABRICA' || x === 'GWM';
+  };
+
+  function parseJsonSafe(text){
+    if(!text || typeof text !== 'string') return null;
+    try { return JSON.parse(text); } catch (_) { return null; }
+  }
+
+  function decodeBase64Json(text){
+    if(!text || typeof text !== 'string') return null;
+    try {
+      let s = text.replace(/-/g,'+').replace(/_/g,'/');
+      while(s.length % 4) s += '=';
+      return JSON.parse(decodeURIComponent(escape(atob(s))));
+    } catch (_) { return null; }
+  }
+
+  function decodeUriJson(text){
+    if(!text || typeof text !== 'string') return null;
+    try { return JSON.parse(decodeURIComponent(text)); }
+    catch (_) { return null; }
+  }
+
+  function decodeReference(ref){
+    if(ref && typeof ref === 'object') return ref;
+    const refText = String(ref ?? '');
+    const mapped = window.__v453TaskKeys && window.__v453TaskKeys[refText];
+    const candidates = [mapped, refText].filter(Boolean);
+    for(const value of candidates){
+      if(value && typeof value === 'object') return value;
+      const text = String(value);
+      const obj = parseJsonSafe(text) || decodeUriJson(text) || decodeBase64Json(text);
+      if(obj && typeof obj === 'object') return obj;
+    }
+    return { id: refText };
+  }
+
+  function taskDestination(t){ return t?.to ?? t?.destination ?? ''; }
+
+  function taskProgress(t){
+    const st = String((typeof getOpStatus === 'function' ? getOpStatus(t) : t?.operationStatus) || 'not_arrived');
+    return ({not_arrived:1,outside_parking:2,inside_waiting:3,unloading:4,unloaded:5})[st] || 0;
+  }
+
+  function resolveFactoryTask(ref){
+    const key = decodeReference(ref);
+    let list = arr(window.transportTasks || (typeof transportTasks !== 'undefined' ? transportTasks : []))
+      .filter(t => t && !t.cancelled && t.status !== 'cancelled' && isFactory(taskDestination(t)));
+
+    let matches = [];
+    if(key.containerNo) matches = list.filter(t => norm(t.containerNo) === norm(key.containerNo));
+    if(!matches.length && key.containerId !== undefined && key.containerId !== null && key.containerId !== ''){
+      matches = list.filter(t => norm(t.containerId) === norm(key.containerId));
+    }
+    if(!matches.length && key.id !== undefined && key.id !== null && key.id !== ''){
+      matches = list.filter(t => norm(t.id) === norm(key.id));
+    }
+    if(!matches.length) return null;
+
+    if(matches.length > 1 && key.batch){
+      const x = matches.filter(t => norm(t.batch) === norm(key.batch));
+      if(x.length) matches = x;
+    }
+    if(matches.length > 1 && (key.to || key.destination)){
+      const dest = key.to || key.destination;
+      const x = matches.filter(t => norm(taskDestination(t)) === norm(dest));
+      if(x.length) matches = x;
+    }
+    if(matches.length > 1 && (key.eta || key.estimatedArrival || key.arrivalDate)){
+      const eta = key.eta || key.estimatedArrival || key.arrivalDate;
+      const x = matches.filter(t => norm(t.estimatedArrival || t.arrivalDate) === norm(eta));
+      if(x.length) matches = x;
+    }
+
+    matches.sort((a,b) => taskProgress(b) - taskProgress(a) ||
+      String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
+    return matches[0] || null;
+  }
+
+  function cloneBusinessState(){
+    try {
+      if(typeof getCloudStatePayload === 'function') return JSON.parse(JSON.stringify(getCloudStatePayload()));
+    } catch (_) {}
+    return null;
+  }
+
+  function applySnapshot(snapshot){
+    try { if(snapshot && typeof applyCloudState === 'function') applyCloudState(snapshot); }
+    catch (e) { console.error('V45.9 rollback failed', e); }
+  }
+
+  function rerenderImmediately(){
+    const y = window.scrollY;
+    try { if(typeof renderContent === 'function') renderContent(); }
+    catch (e) { console.error('V45.9 render failed', e); }
+    setTimeout(() => window.scrollTo(0,y), 0);
+  }
+
+  function setHint(text){
+    try { if(typeof showRealtimeSyncHint === 'function') showRealtimeSyncHint(text); }
+    catch (_) {}
+  }
+
+  async function saveMutation(reason, snapshot){
+    try {
+      const saver = window.queueSaveV455 || window.saveCloudStateV45 || window.saveCloudState;
+      if(typeof saver !== 'function') throw new Error('未找到云端保存函数');
+      const ok = await saver(reason);
+      if(ok === false) throw new Error('云端保存未成功');
+      setHint('已保存到云端');
+      return true;
+    } catch (e) {
+      console.error('V45.9 save failed', e);
+      applySnapshot(snapshot);
+      rerenderImmediately();
+      alert('云端保存失败，本次操作已撤销：' + (e.message || e));
+      return false;
+    }
+  }
+
+  async function mutateFactory(ref, kind){
+    const task = resolveFactoryTask(ref);
+    if(!task){
+      const decoded = decodeReference(ref);
+      const detail = decoded?.containerNo ? `\n集装箱：${decoded.containerNo}` : '';
+      alert('未找到当前工厂到货任务。' + detail + '\n请检查该箱是否仍有一条目的地为工厂的有效运输任务。');
+      return false;
+    }
+
+    const snapshot = cloneBusinessState();
+    const ts = nowValue();
+    const refId = String(ref ?? '');
+
+    if(kind === 'gate'){
+      task.truckPlate = document.getElementById('gatePlate_' + refId)?.value.trim() || task.truckPlate || '';
+      task.driverName = document.getElementById('gateDriver_' + refId)?.value.trim() || task.driverName || '';
+      task.driverPhone = document.getElementById('gatePhone_' + refId)?.value.trim() || task.driverPhone || '';
+      task.gateArrivalTime = task.gateArrivalTime || ts;
+      task.operationStatus = 'outside_parking';
+    } else if(kind === 'release'){
+      task.gateReleaseTime = task.gateReleaseTime || ts;
+      task.waitingAreaTime = task.waitingAreaTime || ts;
+      task.operationStatus = 'inside_waiting';
+    } else if(kind === 'start'){
+      task.unloadStartTime = task.unloadStartTime || ts;
+      task.operationStatus = 'unloading';
+    } else if(kind === 'finish'){
+      task.unloadFinishTime = task.unloadFinishTime || ts;
+      task.unpackConfirmedAt = task.unpackConfirmedAt || ts;
+      task.operationStatus = 'unloaded';
+      const from = norm(task.from);
+      task.status = (from === '港口' || from === 'RG堆场') ? 'return_pending' : 'completed';
+      try { if(typeof setLocationStock === 'function') setLocationStock(task.containerId,'工厂',ts); } catch (_) {}
+    }
+
+    task.updatedAt = new Date().toISOString();
+    rerenderImmediately();
+    setHint('操作已完成，正在保存…');
+
+    const labels = {gate:'已确认到达门口',release:'已放行进厂',start:'已开始卸货',finish:'已确认掏箱完成'};
+    const ok = await saveMutation('v459_factory_' + kind + '_' + (task.containerNo || task.id), snapshot);
+    if(ok) setHint(labels[kind] + '，已保存');
+    return ok;
+  }
+
+  // 门岗和卸货口当前页面实际调用的是 ByKeyV453，所以必须覆盖这些函数。
+  window.confirmGateArrivalByKeyV453 = ref => mutateFactory(ref,'gate');
+  window.releaseFromGateByKeyV453 = ref => mutateFactory(ref,'release');
+  window.startUnloadingByKeyV453 = ref => mutateFactory(ref,'start');
+  window.finishUnloadingByKeyV453 = ref => mutateFactory(ref,'finish');
+
+  // 兼容仍然按任务ID调用的旧页面。
+  window.confirmGateArrival = ref => mutateFactory(ref,'gate');
+  window.releaseFromGate = ref => mutateFactory(ref,'release');
+  window.startUnloading = ref => mutateFactory(ref,'start');
+  window.finishUnloading = ref => mutateFactory(ref,'finish');
+
+  try { document.title = 'Sistema Inteligente de Monitoramento de Contêineres V45.9'; } catch (_) {}
+  console.log('V45.9 loaded: unified gate/dock task reference decoder');
+})();
+</script>
+
 </body>
 </html>
