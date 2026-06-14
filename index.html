@@ -13205,5 +13205,311 @@ ${preview}
 })();
 </script>
 
+<script>
+/* ==================== V45.10 运输路线一致性修复 ====================
+   修复：同一集装箱确认港口提箱后，错误复用历史 Rio Claro / IRA / 工厂任务，
+   导致当前 RG 任务消失并直接进入“待确认掏箱”。
+   原则：运输任务必须按 集装箱 + 当前路线 + 当前提箱计划 唯一识别；
+   历史不同目的地任务保留字段但从运营流程中撤回，不再参与当前列表和状态计算。
+*/
+(function(){
+  const VERSION = 'V45.10';
+  const A = v => Array.isArray(v) ? v : [];
+  const N = v => String(v ?? '').trim().toUpperCase();
+  const nowIsoV4510 = () => new Date().toISOString();
+
+  function canonicalDestinationV4510(v){
+    const x = N(v).replace(/\s+/g,' ');
+    if(['RG堆场','PÁTIO RG','PATIO RG','RG YARD','RG'].includes(x)) return 'RG堆场';
+    if(['RIO CLARO','RIO CLARO库房','ARMAZÉM RIO CLARO','ARMAZEM RIO CLARO'].includes(x)) return 'Rio Claro';
+    if(['IRA','IRA库房','ARMAZÉM IRA','ARMAZEM IRA'].includes(x)) return 'IRA库房';
+    if(['工厂','FACTORY','FÁBRICA','FABRICA','GWM'].includes(x)) return '工厂';
+    if(['港口','PORTO','PORT'].includes(x)) return '港口';
+    return String(v ?? '').trim();
+  }
+
+  function containerIdentityV4510(x){
+    return N(x && x.containerNo) || ('ID:' + N(x && x.containerId));
+  }
+  function sameContainerV4510(a,b){
+    if(!a || !b) return false;
+    if(a.containerNo && b.containerNo && N(a.containerNo) === N(b.containerNo)) return true;
+    return a.containerId != null && b.containerId != null && N(a.containerId) === N(b.containerId);
+  }
+  function taskDestV4510(t){ return canonicalDestinationV4510(t && (t.to ?? t.destination)); }
+  function planDestV4510(p){ return canonicalDestinationV4510(p && p.destination); }
+  function taskActiveV4510(t){ return !!(t && !t.cancelled && t.status !== 'cancelled' && !t.operationalHidden); }
+  function taskTerminalV4510(t){
+    return !!(t && (t.unloadFinishTime || t.unpackConfirmedAt || t.operationStatus === 'unloaded' || ['return_pending','completed'].includes(t.status)));
+  }
+  function taskStartedV4510(t){
+    return !!(t && (t.actualArrival || t.arrivalConfirmedAt || t.gateArrivalTime || t.gateReleaseTime || t.waitingAreaTime || t.unloadStartTime || t.unloadFinishTime || ['arrived','return_pending','completed'].includes(t.status)));
+  }
+  function currentPlanLinkV4510(p){
+    return [N(p && p.id), containerIdentityV4510(p), N(planDestV4510(p)), String(p && p.arrivalDate || '').slice(0,16)].join('::');
+  }
+  function uniqueSourcePlanIdV4510(p){
+    return 'PLAN::' + currentPlanLinkV4510(p);
+  }
+
+  function decodeKeyV4510(key){
+    if(key && typeof key === 'object') return key;
+    const raw = String(key ?? '');
+    const tries = [raw, window.__v453TaskKeys && window.__v453TaskKeys[raw]].filter(Boolean);
+    for(const text0 of tries){
+      if(text0 && typeof text0 === 'object') return text0;
+      const text = String(text0);
+      try { return JSON.parse(text); } catch(_) {}
+      try { return JSON.parse(decodeURIComponent(text)); } catch(_) {}
+      try {
+        let s=text.replace(/-/g,'+').replace(/_/g,'/'); while(s.length%4)s+='=';
+        return JSON.parse(decodeURIComponent(escape(atob(s))));
+      } catch(_) {}
+    }
+    return {id:raw};
+  }
+
+  function findPlanV4510(key){
+    const k = decodeKeyV4510(key);
+    let list = A(window.pickupPlans || (typeof pickupPlans !== 'undefined' ? pickupPlans : []))
+      .filter(p=>p && p.status !== 'cancelled');
+    let matches=[];
+    if(k.containerNo) matches=list.filter(p=>N(p.containerNo)===N(k.containerNo));
+    if(!matches.length && k.containerId != null) matches=list.filter(p=>N(p.containerId)===N(k.containerId));
+    if(!matches.length && k.id != null) matches=list.filter(p=>N(p.id)===N(k.id));
+    if(matches.length>1 && k.batch){ const z=matches.filter(p=>N(p.batch)===N(k.batch)); if(z.length) matches=z; }
+    if(matches.length>1 && (k.seq || k.containerSeq)){ const z=matches.filter(p=>N(p.containerSeq||p.seq)===N(k.seq||k.containerSeq)); if(z.length) matches=z; }
+    return matches.find(p=>p.status!=='confirmed') || matches[0] || null;
+  }
+
+  function findContainerV4510(p){
+    return A(window.containers || (typeof containers !== 'undefined' ? containers : []))
+      .find(c=>N(c.id)===N(p.containerId) || (p.containerNo && N(c.containerNo)===N(p.containerNo)));
+  }
+
+  function allocateTaskIdV4510(){
+    const tasks=A(window.transportTasks || (typeof transportTasks !== 'undefined' ? transportTasks : []));
+    let max=tasks.reduce((m,t)=>Math.max(m,Number(t&&t.id)||0),0);
+    if(typeof nextIds !== 'undefined' && nextIds){
+      nextIds.task=Math.max(Number(nextIds.task||1),max+1);
+      return nextIds.task++;
+    }
+    return max+1 || Date.now();
+  }
+
+  function archiveRouteConflictV4510(t,p,reason){
+    if(!t || t.cancelled || t.status==='cancelled') return false;
+    t.historicalStatus = t.historicalStatus || t.status || '';
+    t.historicalDestination = t.historicalDestination || taskDestV4510(t);
+    t.historicalActualArrival = t.historicalActualArrival || t.actualArrival || '';
+    t.cancelled = true;
+    t.status = 'cancelled';
+    t.operationStatus = 'cancelled';
+    t.operationalHidden = true;
+    t.routeConflictArchived = true;
+    t.cancelReason = reason || ('V45.10：与当前提箱计划目的地 '+planDestV4510(p)+' 冲突，已从运营流程撤回');
+    t.cancelTime = nowIsoV4510();
+    t.updatedAt = nowIsoV4510();
+    return true;
+  }
+
+  function clearExecutionFieldsV4510(t){
+    ['actualArrival','arrivalConfirmedAt','arrivalConfirmedBy','gateArrivalTime','gateReleaseTime','waitingAreaTime','unloadStartTime','unloadFinishTime','unpackConfirmedAt','unpackConfirmedBy','returnConfirmedAt'].forEach(k=>{t[k]='';});
+    t.operationStatus = planDestV4510({destination:t.to||t.destination}) === '工厂' ? 'not_arrived' : '';
+  }
+
+  function ensureCurrentRouteTaskV4510(p,c,opts){
+    opts=opts||{};
+    const tasks=A(window.transportTasks || (typeof transportTasks !== 'undefined' ? transportTasks : []));
+    const dest=planDestV4510(p);
+    const sameContainer=tasks.filter(t=>sameContainerV4510(t,p));
+    const active=sameContainer.filter(taskActiveV4510);
+    const exact=active.filter(t=>taskDestV4510(t)===dest);
+    const reusable=exact.find(t=>t.status==='in_transit' && !taskTerminalV4510(t)) ||
+      exact.find(t=>!taskStartedV4510(t) && !taskTerminalV4510(t));
+
+    // 同一箱、同一提箱计划却指向其他地点的任务，是当前异常的直接来源。
+    let archived=0;
+    active.forEach(t=>{
+      if(taskDestV4510(t)===dest) return;
+      const linkedByPlan = N(t.sourcePlanId)===N(p.id) || N(t.planId)===N(p.id) || N(t.sourcePlanKey)===N(currentPlanLinkV4510(p));
+      const duplicatePlanId = A(window.pickupPlans || pickupPlans).some(x=>x!==p && x.status!=='cancelled' && N(x.id)===N(p.id));
+      if(linkedByPlan || duplicatePlanId || opts.forceConflictCleanup){
+        if(archiveRouteConflictV4510(t,p)) archived++;
+      }
+    });
+
+    let task=reusable;
+    // 已到达/已掏箱的历史任务不可作为本次新提箱任务继续使用。
+    if(!task){
+      task={id:allocateTaskIdV4510(),source:'pickupPlan',createdAt:nowIsoV4510(),publishedAt:nowIsoV4510()};
+      tasks.push(task);
+    }
+    clearExecutionFieldsV4510(task);
+    Object.assign(task,{
+      source:'pickupPlan',
+      sourcePlanId:uniqueSourcePlanIdV4510(p),
+      sourcePlanOriginalId:p.id,
+      sourcePlanKey:currentPlanLinkV4510(p),
+      containerId:p.containerId,
+      containerNo:p.containerNo||(c&&c.containerNo)||task.containerNo||'',
+      containerSeq:(c&&c.containerSeq)||p.containerSeq||p.seq||task.containerSeq||'',
+      batch:p.batch||(c&&c.batch)||task.batch||'',
+      from:'港口',
+      to:dest,
+      destination:dest,
+      carrier:p.carrier||task.carrier||'RG',
+      status:'in_transit',
+      estimatedArrival:p.arrivalDate||'',
+      arrivalDate:p.arrivalDate||'',
+      unloadingDock:p.unloadingDock||'',
+      actualPickupTime:p.actualPickupTime||'',
+      cancelled:false,
+      operationalHidden:false,
+      routeConflictArchived:false,
+      cancelReason:'',
+      updatedAt:nowIsoV4510()
+    });
+
+    // 同一路线的重复未执行任务只保留一条；历史已执行任务保留为历史，不参与当前运营。
+    exact.forEach(x=>{
+      if(x===task) return;
+      if(!taskStartedV4510(x)) archiveRouteConflictV4510(x,p,'V45.10：同一集装箱同一路线重复任务，已撤回');
+    });
+    return {task,archived};
+  }
+
+  function cloneStateV4510(){
+    try{return JSON.parse(JSON.stringify(typeof getCloudStatePayload==='function'?getCloudStatePayload():{}));}catch(_){return null;}
+  }
+  function applyStateV4510(st){try{if(st&&typeof applyCloudState==='function')applyCloudState(st);}catch(e){console.error(e);}}
+  function rerenderV4510(){
+    const y=window.scrollY;
+    try{if(typeof renderSidebar==='function')renderSidebar();if(typeof renderContent==='function')renderContent();if(typeof applyLanguage==='function')applyLanguage();}catch(e){console.error(e);}
+    setTimeout(()=>window.scrollTo(0,y),0);
+  }
+  function hintV4510(msg){try{if(typeof showRealtimeSyncHint==='function')showRealtimeSyncHint(msg);}catch(_) {}}
+  async function saveV4510(reason,snapshot){
+    try{
+      const saver=window.queueSaveV455||window.saveCloudState;
+      if(typeof saver!=='function')throw new Error('未找到云端保存函数');
+      const ok=await saver(reason);
+      if(ok===false)throw new Error('云端保存未成功');
+      hintV4510('已保存到云端');
+      return true;
+    }catch(e){
+      console.error('V45.10 save failed',e);
+      applyStateV4510(snapshot);rerenderV4510();
+      alert('云端保存失败，本次操作已撤销：'+(e.message||e));
+      return false;
+    }
+  }
+
+  async function confirmPickupV4510(key){
+    const p=findPlanV4510(key);
+    if(!p){alert('找不到当前行对应的提箱计划，请刷新页面后重试。');return false;}
+    const actual=document.getElementById('pickupTimeKey_'+key)?.value || document.getElementById('pickupTime_'+p.id)?.value || p.actualPickupTime || '';
+    if(!actual){alert('请填写实际提箱日期');return false;}
+    const snapshot=cloneStateV4510();
+    const c=findContainerV4510(p);
+    p.destination=planDestV4510(p);
+    p.status='confirmed';p.actualPickupTime=actual;p.needReconfirm=false;p.updatedAt=nowIsoV4510();
+    if(c)c.actualPickupTime=actual;
+    const result=ensureCurrentRouteTaskV4510(p,c,{forceConflictCleanup:true});
+    rerenderV4510();
+    hintV4510('已确认提箱，正在保存…');
+    const ok=await saveV4510('v4510_confirm_pickup_'+(p.containerNo||''),snapshot);
+    if(ok)hintV4510('已确认提箱 '+(p.containerNo||'')+'，已保存');
+    return ok;
+  }
+
+  window.confirmPickupTaskByKeyV455=confirmPickupV4510;
+  window.confirmPickupTaskByKeyV451=confirmPickupV4510;
+  window.confirmPickupTaskByKeyV45=confirmPickupV4510;
+  window.confirmPickupTaskByKey=confirmPickupV4510;
+  window.confirmPickupTask=function(planId){
+    const p=A(window.pickupPlans||pickupPlans).find(x=>N(x.id)===N(planId)&&x.status!=='cancelled');
+    if(!p)return alert('找不到计划，请刷新后重试。');
+    const key=btoa(unescape(encodeURIComponent(JSON.stringify({id:p.id,containerId:p.containerId,containerNo:p.containerNo||'',batch:p.batch||'',seq:p.containerSeq||p.seq||''})))).replace(/=+$/,'');
+    return confirmPickupV4510(key);
+  };
+
+  function findRouteConflictsV4510(){
+    const plans=A(window.pickupPlans||pickupPlans).filter(p=>p&&p.status==='confirmed'&&p.destination);
+    const tasks=A(window.transportTasks||transportTasks);
+    const out=[];
+    plans.forEach(p=>{
+      const dest=planDestV4510(p);
+      const active=tasks.filter(t=>taskActiveV4510(t)&&sameContainerV4510(t,p));
+      const current=active.filter(t=>taskDestV4510(t)===dest);
+      const wrong=active.filter(t=>taskDestV4510(t)!==dest && (N(t.sourcePlanId)===N(p.id)||N(t.planId)===N(p.id)||!current.length));
+      if(wrong.length || !current.length) out.push({plan:p,current,wrong});
+    });
+    return out;
+  }
+
+  window.repairTransportRouteConflictsV4510=async function(showConfirm=true){
+    const conflicts=findRouteConflictsV4510();
+    if(!conflicts.length){alert('未发现运输路线冲突。');return true;}
+    const batches=[...new Set(conflicts.map(x=>x.plan.batch||'-'))];
+    if(showConfirm&&!confirm(`发现 ${conflicts.length} 个已确认提箱计划存在路线冲突或缺少当前运输任务。\n涉及批次：${batches.slice(0,15).join('、')}${batches.length>15?'…':''}\n\n系统将：\n1. 撤回同箱错误目的地的旧运营任务；\n2. 保留历史字段供追溯；\n3. 按当前提箱计划重新生成运输中任务。\n\n是否继续？`))return false;
+    const snapshot=cloneStateV4510();
+    let created=0,archived=0;
+    conflicts.forEach(({plan,current})=>{
+      const before=A(window.transportTasks||transportTasks).length;
+      const r=ensureCurrentRouteTaskV4510(plan,findContainerV4510(plan),{forceConflictCleanup:true});
+      created += A(window.transportTasks||transportTasks).length>before ? 1 : 0;
+      archived += r.archived||0;
+    });
+    rerenderV4510();hintV4510('路线冲突已修复，正在保存…');
+    const ok=await saveV4510('v4510_repair_route_conflicts',snapshot);
+    if(ok)alert(`运输路线修复完成：\n重新生成运输中任务：${created}\n撤回错误目的地任务：${archived}\n\n请刷新后检查运输任务和到货确认。`);
+    return ok;
+  };
+
+  // 历史补回功能暂停导入运输过程记录，避免再次把旧 Rio Claro / IRA / 工厂状态带入当前流程。
+  if(typeof window.restoreMissingBatchesV456==='function'){
+    window.restoreMissingBatchesV456=function(){
+      alert('V45.10 已暂停旧版“补回缺失批次”功能。\n旧版会同时导入历史运输任务、位置和掏箱记录，可能造成当前路线冲突。\n如需恢复缺失批次，请先下载备份，再使用“数据恢复中心”完整恢复或联系管理员进行主数据补回。');
+    };
+  }
+
+  const oldOperationalVisibleV4510=window.isOperationalVisibleTask;
+  window.isOperationalVisibleTask=function(t){
+    if(t&&(t.cancelled||t.status==='cancelled'||t.operationalHidden||t.routeConflictArchived))return false;
+    return typeof oldOperationalVisibleV4510==='function'?oldOperationalVisibleV4510(t):true;
+  };
+  const oldCarrierVisibleV4510=window.isTransportCompanyVisibleTask;
+  window.isTransportCompanyVisibleTask=function(t){
+    if(t&&(t.cancelled||t.status==='cancelled'||t.operationalHidden||t.routeConflictArchived))return false;
+    return typeof oldCarrierVisibleV4510==='function'?oldCarrierVisibleV4510(t):true;
+  };
+
+  function addRepairButtonV4510(container){
+    const head=container&&container.querySelector('.card-header');
+    if(!head||document.getElementById('btnRepairRouteV4510'))return;
+    const btn=document.createElement('button');btn.id='btnRepairRouteV4510';btn.className='btn btn-warning';btn.textContent='🔧 修复运输路线冲突';btn.onclick=()=>window.repairTransportRouteConflictsV4510(true);head.appendChild(btn);
+    const count=findRouteConflictsV4510().length;
+    if(count){const badge=document.createElement('span');badge.style='margin-left:8px;color:#d97706;font-weight:700;';badge.textContent=`发现 ${count} 条异常`;head.appendChild(badge);}
+  }
+  const oldRenderTransportV4510=window.renderTransportTasks;
+  if(typeof oldRenderTransportV4510==='function')window.renderTransportTasks=function(container){const r=oldRenderTransportV4510.apply(this,arguments);setTimeout(()=>addRepairButtonV4510(container),0);return r;};
+  const oldRenderTransportDateV4510=window.renderTransportTasksWithDate;
+  if(typeof oldRenderTransportDateV4510==='function')window.renderTransportTasksWithDate=function(container){const r=oldRenderTransportDateV4510.apply(this,arguments);setTimeout(()=>addRepairButtonV4510(container),0);return r;};
+  const oldRenderArrivalV4510=window.renderLocationConfirm;
+  if(typeof oldRenderArrivalV4510==='function')window.renderLocationConfirm=function(container){const r=oldRenderArrivalV4510.apply(this,arguments);setTimeout(()=>addRepairButtonV4510(container),0);return r;};
+
+  setTimeout(()=>{
+    try{
+      const n=findRouteConflictsV4510().length;
+      if(n)hintV4510(`检测到 ${n} 条运输路线冲突，请进入运输任务点击“修复运输路线冲突”`);
+    }catch(e){console.warn(e);}
+  },1800);
+
+  try{document.title='Sistema Inteligente de Monitoramento de Contêineres V45.10';}catch(_){}
+  console.log('V45.10 loaded: route-specific pickup task identity and conflict repair');
+})();
+</script>
+
 </body>
 </html>
