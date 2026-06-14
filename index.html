@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-  <title>集装箱智能监控管理系统 V42.24 Dashboard Workday Sync</title>
+  <title>Sistema Inteligente de Monitoramento de Contêineres V45.5</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
 
     /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
@@ -12205,5 +12205,410 @@ let main=document.getElementById('mainContent');
 })();
 </script>
 
+<script>
+/* ==================== V45.5 Stable Core：云端唯一数据源 + 原子分片保存 + 统一状态机 ==================== */
+(function(){
+  'use strict';
+  const VERSION = 'V45.5 Stable Core';
+  const BASE_ID = (typeof CLOUD_STATE_ID !== 'undefined' ? CLOUD_STATE_ID : 'container-monitoring-main');
+  const CURRENT_MANIFEST_ID = BASE_ID + ':v455:manifest';
+  const DAILY_PREFIX = BASE_ID + ':v455:daily:';
+  const GEN_PREFIX = BASE_ID + ':v455:g:';
+  const CHUNK_SIZE = 50;
+  const UPSERT_BATCH = 8;
+  const KEEP_DAYS = 30;
+  const ARRAY_MODULES = ['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig'];
+  const OBJECT_MODULES = ['nextIds','warningConfig'];
+  const BUSINESS_LOCAL_KEYS = ['cc_containers','cc_blList','cc_containerBlMap','cc_transportTasks','cc_locationStock','cc_returnRecords','cc_pickupPlans','cc_productionRecords','cc_productionPlans','cc_factoryCalendar','cc_storageConfig','cc_demurrageConfig','cc_nextIds','cc_warningConfig','cc_dirty','cc_dirtyAt','cc_dirtyError','cc_localUpdatedAt','cc_version'];
+  let saveChain = Promise.resolve(true);
+  let savePending = 0;
+  let latestCloudUpdatedAt = '';
+
+  const arr = v => Array.isArray(v) ? v : [];
+  const norm = v => String(v == null ? '' : v).trim();
+  const nowIso = () => new Date().toISOString();
+  const clone = v => JSON.parse(JSON.stringify(v));
+  const datePart = v => String(v || '').slice(0,10);
+  const score = st => arr(st && st.containers).length + arr(st && st.blList).length + arr(st && st.containerBlMap).length + arr(st && st.transportTasks).length + arr(st && st.locationStock).length + arr(st && st.returnRecords).length + arr(st && st.pickupPlans).length + arr(st && st.productionRecords).length + arr(st && st.productionPlans).length;
+  const isEmpty = st => !st || typeof st !== 'object' || score(st) === 0;
+
+  function hint(text){ try{ if(typeof showRealtimeSyncHint === 'function') showRealtimeSyncHint(text); }catch(e){} }
+  function userName(){ return (typeof cloudUser !== 'undefined' && cloudUser && cloudUser.email) || (typeof currentUser !== 'undefined' && currentUser && (currentUser.email || currentUser.name)) || ''; }
+  function taskDest(t){ return t && (t.to || t.destination) || ''; }
+  function taskOrigin(t){ return t && (t.from || t.origin) || ''; }
+  function isFactory(dest){ const d=norm(dest).toLowerCase(); return d === '工厂' || d === 'factory' || d === 'gwm'; }
+  function taskStarted(t){ return !!(t && (t.actualArrival || t.gateArrivalTime || t.gateReleaseTime || t.waitingAreaTime || t.unloadStartTime || t.unloadFinishTime || ['arrived','return_pending','completed'].includes(t.status))); }
+
+  function stateFromGlobalsV455(){
+    try{ if(typeof compactLargeStorageFields === 'function') compactLargeStorageFields(); }catch(e){}
+    return {
+      containers: arr(typeof containers !== 'undefined' ? containers : []),
+      blList: arr(typeof blList !== 'undefined' ? blList : []),
+      containerBlMap: arr(typeof containerBlMap !== 'undefined' ? containerBlMap : []),
+      transportTasks: arr(typeof transportTasks !== 'undefined' ? transportTasks : []),
+      locationStock: arr(typeof locationStock !== 'undefined' ? locationStock : []),
+      returnRecords: arr(typeof returnRecords !== 'undefined' ? returnRecords : []),
+      pickupPlans: arr(typeof pickupPlans !== 'undefined' ? pickupPlans : []),
+      productionRecords: arr(typeof productionRecords !== 'undefined' ? productionRecords : []),
+      productionPlans: arr(typeof productionPlans !== 'undefined' ? productionPlans : []),
+      factoryCalendar: arr(typeof factoryCalendar !== 'undefined' ? factoryCalendar : []),
+      storageConfig: arr(typeof storageConfig !== 'undefined' ? storageConfig : []),
+      demurrageConfig: arr(typeof demurrageConfig !== 'undefined' ? demurrageConfig : []),
+      nextIds: (typeof nextIds !== 'undefined' && nextIds) ? nextIds : {container:1,task:1,plan:1,production:1,stock:1},
+      warningConfig: (typeof warningConfig !== 'undefined' && warningConfig) ? warningConfig : {storageWarningDays:5,demurrageWarningDays:7},
+      version: VERSION,
+      updatedAt: nowIso(),
+      updatedBy: userName()
+    };
+  }
+
+  function applyStateV455(st){
+    if(isEmpty(st)) return false;
+    containers = arr(st.containers);
+    blList = arr(st.blList);
+    containerBlMap = arr(st.containerBlMap);
+    transportTasks = arr(st.transportTasks);
+    locationStock = arr(st.locationStock);
+    returnRecords = arr(st.returnRecords);
+    pickupPlans = arr(st.pickupPlans);
+    productionRecords = arr(st.productionRecords);
+    productionPlans = arr(st.productionPlans);
+    factoryCalendar = arr(st.factoryCalendar);
+    storageConfig = arr(st.storageConfig);
+    demurrageConfig = arr(st.demurrageConfig);
+    nextIds = st.nextIds || {container:1,task:1,plan:1,production:1,stock:1};
+    warningConfig = st.warningConfig || {storageWarningDays:5,demurrageWarningDays:7};
+    normalizeStateV455(false);
+    try{ if(typeof updateContainerStatus === 'function') updateContainerStatus(); }catch(e){}
+    try{ if(typeof updateDailyFees === 'function') updateDailyFees(); }catch(e){}
+    return true;
+  }
+
+  function clearBusinessLocalV455(){
+    try{ BUSINESS_LOCAL_KEYS.forEach(k => localStorage.removeItem(k)); localStorage.setItem('cc_business_source','supabase_app_state_v455'); }catch(e){}
+  }
+
+  function splitChunks(list){
+    const out=[]; const data=arr(list);
+    for(let i=0;i<data.length;i+=CHUNK_SIZE) out.push(data.slice(i,i+CHUNK_SIZE));
+    if(!out.length) out.push([]);
+    return out;
+  }
+
+  function makeGeneration(){ return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,8); }
+
+  async function readGenerationV455(manifest){
+    if(!manifest || !manifest.generation || !manifest.modules) return null;
+    const sb = typeof initSupabaseClient === 'function' ? initSupabaseClient() : null;
+    if(!sb) return null;
+    const prefix = GEN_PREFIX + manifest.generation + ':chunk:';
+    const {data: rows, error} = await sb.from('app_state').select('id,data').like('id', prefix + '%');
+    if(error) throw error;
+    const grouped={};
+    arr(rows).forEach(r=>{ const d=r.data||{}; if(d.module) (grouped[d.module]||(grouped[d.module]=[])).push(d); });
+    const st={version:manifest.version||VERSION,updatedAt:manifest.updatedAt||'',updatedBy:manifest.updatedBy||''};
+    for(const name of ARRAY_MODULES){
+      const expected=Math.max(0, Number(manifest.modules[name] && manifest.modules[name].chunks || 0));
+      st[name]=arr(grouped[name]).filter(x=>Number(x.index)<expected).sort((a,b)=>Number(a.index)-Number(b.index)).flatMap(x=>arr(x.items));
+    }
+    for(const name of OBJECT_MODULES){ st[name]=arr(grouped[name]).sort((a,b)=>Number(a.index)-Number(b.index))[0]?.value || {}; }
+    return isEmpty(st) ? null : st;
+  }
+
+  async function loadCurrentV455(){
+    const sb = typeof initSupabaseClient === 'function' ? initSupabaseClient() : null;
+    if(!sb) return null;
+    const {data, error}=await sb.from('app_state').select('data,updated_at,updated_by').eq('id',CURRENT_MANIFEST_ID).maybeSingle();
+    if(error) throw error;
+    if(!data || !data.data) return null;
+    const st=await readGenerationV455(data.data);
+    if(st){ latestCloudUpdatedAt=data.updated_at||st.updatedAt||''; }
+    return st;
+  }
+
+  async function loadLegacySplit(prefix){
+    const sb=typeof initSupabaseClient==='function'?initSupabaseClient():null; if(!sb) return null;
+    const manifestId=prefix+'manifest';
+    const {data:mf,error:me}=await sb.from('app_state').select('data,updated_at,updated_by').eq('id',manifestId).maybeSingle();
+    if(me) throw me;
+    if(!mf||!mf.data||!mf.data.modules) return null;
+    const {data:rows,error}=await sb.from('app_state').select('id,data').like('id',prefix+'chunk:%');
+    if(error) throw error;
+    const grouped={}; arr(rows).forEach(r=>{const d=r.data||{};if(d.module)(grouped[d.module]||(grouped[d.module]=[])).push(d);});
+    const st={version:mf.data.version||'legacy',updatedAt:mf.data.updatedAt||mf.updated_at,updatedBy:mf.data.updatedBy||mf.updated_by};
+    for(const name of ARRAY_MODULES){
+      const expected=Math.max(0,Number(mf.data.modules[name]&&mf.data.modules[name].chunks||0));
+      let parts=arr(grouped[name]).sort((a,b)=>Number(a.index)-Number(b.index));
+      if(expected) parts=parts.filter(x=>Number(x.index)<expected);
+      st[name]=parts.flatMap(x=>arr(x.items));
+    }
+    for(const name of OBJECT_MODULES){ st[name]=arr(grouped[name]).sort((a,b)=>Number(a.index)-Number(b.index))[0]?.value||{}; }
+    return isEmpty(st)?null:st;
+  }
+
+  async function loadLegacyBig(){
+    const sb=typeof initSupabaseClient==='function'?initSupabaseClient():null; if(!sb) return null;
+    const {data,error}=await sb.from('app_state').select('data,updated_at,updated_by').eq('id',BASE_ID).maybeSingle();
+    if(error) throw error;
+    const d=data&&data.data;
+    if(!d || d.storageMode || isEmpty(d)) return null;
+    d.updatedAt=d.updatedAt||data.updated_at||''; d.updatedBy=d.updatedBy||data.updated_by||'';
+    return d;
+  }
+
+  async function loadCloudAuthoritativeV455(){
+    let st=null, source='v455';
+    try{ st=await loadCurrentV455(); }catch(e){ console.warn('V45.5 current load failed',e); }
+    if(!st){ source='v45'; try{ st=await loadLegacySplit(BASE_ID+':v45:'); }catch(e){ console.warn(e); } }
+    if(!st){ source='v442'; try{ st=await loadLegacySplit(BASE_ID+':v442:'); }catch(e){ console.warn(e); } }
+    if(!st){ source='v44'; try{ st=await loadLegacySplit(BASE_ID+':v44:'); }catch(e){ console.warn(e); } }
+    if(!st){ source='legacy'; try{ st=await loadLegacyBig(); }catch(e){ console.warn(e); } }
+    if(!st) return null;
+    applyStateV455(st);
+    clearBusinessLocalV455();
+    if(source!=='v455') setTimeout(()=>queueSaveV455('migrate_'+source),300);
+    return st;
+  }
+
+  async function writeRowsBatched(sb, rows){
+    for(let i=0;i<rows.length;i+=UPSERT_BATCH){ const {error}=await sb.from('app_state').upsert(rows.slice(i,i+UPSERT_BATCH)); if(error) throw error; }
+  }
+
+  async function cleanupGenerationsV455(){
+    const sb=typeof initSupabaseClient==='function'?initSupabaseClient():null; if(!sb) return;
+    try{
+      const {data:daily}=await sb.from('app_state').select('id,data,updated_at').like('id',DAILY_PREFIX+'%').order('id',{ascending:false});
+      const keepDaily=arr(daily).slice(0,KEEP_DAYS);
+      const keepGen=new Set(keepDaily.map(x=>x.data&&x.data.generation).filter(Boolean));
+      const {data:cur}=await sb.from('app_state').select('data').eq('id',CURRENT_MANIFEST_ID).maybeSingle();
+      if(cur&&cur.data&&cur.data.generation) keepGen.add(cur.data.generation);
+      const oldDaily=arr(daily).slice(KEEP_DAYS);
+      for(const row of oldDaily){ try{ await sb.from('app_state').delete().eq('id',row.id); }catch(e){} }
+      const {data:chunkRows}=await sb.from('app_state').select('id').like('id',GEN_PREFIX+'%');
+      const gens=new Set(arr(chunkRows).map(r=>{const x=String(r.id).slice(GEN_PREFIX.length);return x.split(':chunk:')[0];}).filter(Boolean));
+      for(const g of gens){ if(!keepGen.has(g)){ try{ await sb.from('app_state').delete().like('id',GEN_PREFIX+g+':chunk:%'); }catch(e){} } }
+    }catch(e){ console.warn('V45.5 cleanup skipped',e); }
+  }
+
+  async function persistV455(reason){
+    const sb=typeof initSupabaseClient==='function'?initSupabaseClient():null;
+    if(!sb || (typeof cloudUser!=='undefined' && !cloudUser)) return false;
+    const st=stateFromGlobalsV455();
+    if(isEmpty(st) && !window.__allowEmptyCloudOverwrite){ hint('已阻止空数据保存'); return false; }
+    normalizeStateV455(false);
+    const updatedAt=nowIso(), updatedBy=userName(), generation=makeGeneration();
+    const manifest={version:VERSION,mode:'generation_split_app_state',generation,reason:reason||'save',updatedAt,updatedBy,chunkSize:CHUNK_SIZE,modules:{},score:score(st)};
+    const rows=[];
+    for(const name of ARRAY_MODULES){
+      const parts=splitChunks(st[name]); manifest.modules[name]={type:'array',length:arr(st[name]).length,chunks:parts.length};
+      parts.forEach((items,index)=>rows.push({id:GEN_PREFIX+generation+':chunk:'+name+':'+index,data:{module:name,index,items},updated_by:updatedBy,updated_at:updatedAt}));
+    }
+    for(const name of OBJECT_MODULES){ manifest.modules[name]={type:'object',chunks:1}; rows.push({id:GEN_PREFIX+generation+':chunk:'+name+':0',data:{module:name,index:0,value:st[name]||{}},updated_by:updatedBy,updated_at:updatedAt}); }
+    hint('保存中...');
+    try{
+      if(typeof lastSelfSaveAt!=='undefined') lastSelfSaveAt=Date.now();
+      await writeRowsBatched(sb,rows);
+      const {error:hm}=await sb.from('app_state').upsert({id:CURRENT_MANIFEST_ID,data:manifest,updated_by:updatedBy,updated_at:updatedAt}); if(hm) throw hm;
+      const day=datePart(updatedAt);
+      const {error:dm}=await sb.from('app_state').upsert({id:DAILY_PREFIX+day,data:manifest,updated_by:updatedBy,updated_at:updatedAt}); if(dm) throw dm;
+      const {error:bm}=await sb.from('app_state').upsert({id:BASE_ID,data:{version:VERSION,storageMode:'v455_generation',manifestId:CURRENT_MANIFEST_ID,generation,updatedAt,score:score(st)},updated_by:updatedBy,updated_at:updatedAt}); if(bm) throw bm;
+      latestCloudUpdatedAt=updatedAt;
+      if(typeof lastCloudUpdatedAt!=='undefined') lastCloudUpdatedAt=updatedAt;
+      clearBusinessLocalV455();
+      hint('云端已保存');
+      setTimeout(()=>cleanupGenerationsV455(),1000);
+      return true;
+    }catch(e){ console.error('V45.5 save failed',e); hint('保存失败'); alert('云端保存失败：'+(e.message||e)+'\n本次操作未确认成功，请检查网络后重试。'); return false; }
+  }
+
+  function queueSaveV455(reason){
+    savePending++;
+    saveChain=saveChain.catch(()=>false).then(()=>persistV455(reason)).finally(()=>{savePending=Math.max(0,savePending-1);});
+    return saveChain;
+  }
+  window.queueSaveV455=queueSaveV455;
+  window.saveCloudState=saveCloudState=function(){return queueSaveV455('saveCloudState');};
+  window.saveCloudStateV45=window.saveCloudStateV44=window.saveCloudStateV442=window.saveCloudState;
+  window.queueCloudPersistV435=function(reason){return queueSaveV455(reason||'legacy_queue');};
+  window.saveData=saveData=function(){return queueSaveV455('saveData');};
+
+  function captureUi(){ try{return typeof captureCurrentUiState==='function'?captureCurrentUiState():{scrollY:window.scrollY};}catch(e){return{scrollY:window.scrollY};} }
+  function rerender(ui){
+    try{ if(typeof renderSidebar==='function') renderSidebar(); if(typeof renderContent==='function') renderContent(); if(typeof applyLanguage==='function') applyLanguage(); if(typeof restoreCurrentUiState==='function') restoreCurrentUiState(ui); else setTimeout(()=>window.scrollTo(0,ui.scrollY||0),0); }catch(e){console.warn(e);}
+  }
+  window.saveAndRenderContentKeepState=saveAndRenderContentKeepState=function(){ const ui=captureUi(); return queueSaveV455('save_and_render').then(ok=>{if(ok)rerender(ui);return ok;}); };
+
+  window.loadCloudState=loadCloudState=async function(){ const st=await loadCloudAuthoritativeV455(); return !!st; };
+
+  window.ensureCloudSession=ensureCloudSession=async function(){
+    const sb=typeof initSupabaseClient==='function'?initSupabaseClient():null; if(!sb)return false;
+    const {data,error:sessionError}=await sb.auth.getSession();
+    if(sessionError){alert('读取登录会话失败：'+sessionError.message);return false;}
+    const session=data&&data.session; if(!session||!session.user)return false;
+    cloudUser=session.user;
+    const {data:profile,error}=await sb.from('user_profiles').select('*').ilike('email',cloudUser.email).maybeSingle();
+    if(error){alert('读取用户权限失败：'+error.message);return false;}
+    if(!profile||profile.is_active===false){
+      document.getElementById('loginPage').style.display='none';document.getElementById('mainApp').style.display='block';document.getElementById('sidebar').innerHTML='';
+      document.getElementById('mainContent').innerHTML='<div class="card"><div class="card-header"><span class="card-title">⏳ 等待管理员授权</span></div><p>当前账号：<b>'+cloudUser.email+'</b></p><button class="btn btn-primary" onclick="logoutCloud()">退出</button></div>';
+      return false;
+    }
+    cloudProfile=profile; currentUser=mapProfileToCurrentUser(profile,cloudUser);
+    currentMenu=(currentUser.role==='订购科'||isAdminUser())?'dashboard':(allMenus.find(m=>canAccessMenu(m))?.id||'containers');
+    const ok=await loadCloudState();
+    if(!ok){
+      document.getElementById('loginPage').style.display='none';document.getElementById('mainApp').style.display='block';
+      document.getElementById('mainContent').innerHTML='<div class="card"><div class="card-header"><span class="card-title">🛡️ 数据恢复中心</span></div><p>云端 app_state 中未找到有效业务数据。系统已阻止使用浏览器空缓存覆盖云端。</p><p>请使用顶部“备份”文件恢复，或联系管理员检查 Supabase。</p></div>';
+      return false;
+    }
+    document.getElementById('loginPage').style.display='none';document.getElementById('mainApp').style.display='block';
+    document.getElementById('currentRole').innerText=currentUser.role;document.getElementById('currentUser').innerText=currentUser.name;
+    renderSidebar();renderContent();applyLanguage();startRealtimeSync();
+    try{ if(typeof ensureDailyAutoBackupV434==='function') setTimeout(()=>ensureDailyAutoBackupV434('v455_login_check'),1200); }catch(e){}
+    return true;
+  };
+
+  window.pullCloudStateAndRefresh=pullCloudStateAndRefresh=async function(reason){
+    if(savePending>0) return;
+    try{
+      const sb=initSupabaseClient(); if(!sb)return;
+      const {data,error}=await sb.from('app_state').select('data,updated_at').eq('id',CURRENT_MANIFEST_ID).maybeSingle(); if(error)throw error;
+      if(!data||!data.data)return;
+      if(data.updated_at&&latestCloudUpdatedAt&&data.updated_at===latestCloudUpdatedAt)return;
+      const st=await readGenerationV455(data.data); if(!st)return;
+      const ui=captureUi(); applyStateV455(st); latestCloudUpdatedAt=data.updated_at||st.updatedAt||''; if(typeof lastCloudUpdatedAt!=='undefined')lastCloudUpdatedAt=latestCloudUpdatedAt;
+      if(typeof isCurrentPageRefreshLocked==='function'&&(isCurrentPageRefreshLocked()||(typeof isModalOpen==='function'&&isModalOpen())||(typeof isUserActivelyEditing==='function'&&isUserActivelyEditing()))){ renderSidebar(); hint('已同步云端数据（当前页面未刷新）'); }
+      else{ rerender(ui); hint('已同步最新数据'); }
+    }catch(e){console.error('V45.5 sync failed',e);hint('同步失败');}
+  };
+
+  window.startRealtimeSync=startRealtimeSync=function(){
+    const sb=initSupabaseClient(); if(!sb)return;
+    try{ if(typeof realtimeChannel!=='undefined'&&realtimeChannel){sb.removeChannel(realtimeChannel);realtimeChannel=null;} }catch(e){}
+    realtimeChannel=sb.channel('app_state_v455_sync').on('postgres_changes',{event:'*',schema:'public',table:'app_state',filter:'id=eq.'+BASE_ID},()=>{
+      if(typeof lastSelfSaveAt!=='undefined'&&Date.now()-lastSelfSaveAt<1800)return;
+      if(typeof realtimePullTimer!=='undefined'&&realtimePullTimer)clearTimeout(realtimePullTimer);
+      realtimePullTimer=setTimeout(()=>pullCloudStateAndRefresh('postgres_changes'),700);
+    }).subscribe(status=>{if(status==='SUBSCRIBED')hint('实时同步已开启');else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT')hint('实时同步异常');});
+    if(window.__cloudFallbackPoller)clearInterval(window.__cloudFallbackPoller);
+    window.__cloudFallbackPoller=setInterval(()=>{if(cloudUser&&document.visibilityState==='visible'&&savePending===0)pullCloudStateAndRefresh('fallback_polling');},60000);
+  };
+
+  window.migrateLocalToCloud=function(){alert('V45.5 已禁用“本地→云端”业务数据覆盖。业务数据只允许从 Supabase app_state 读取。');};
+
+  function setLocationStock(containerId,location,time){
+    if(containerId==null||!location||location==='运输中')return;
+    let row=arr(locationStock).find(x=>norm(x.containerId)===norm(containerId));
+    if(row){row.location=location;row.time=time||nowIso();row.updatedAt=nowIso();}
+    else{locationStock.push({id:(nextIds.stock||Date.now()),containerId,location,time:time||nowIso(),updatedAt:nowIso()});nextIds.stock=(nextIds.stock||1)+1;}
+  }
+
+  function normalizeStateV455(fixLocations){
+    const active=arr(transportTasks).filter(t=>t&&!t.cancelled&&t.status!=='cancelled');
+    active.forEach(t=>{
+      const dest=taskDest(t),origin=taskOrigin(t);
+      if(t.unloadFinishTime||t.operationStatus==='unloaded'){
+        t.operationStatus='unloaded';
+        t.status=(isFactory(dest)&&(origin==='港口'||origin==='RG堆场'))?'return_pending':'completed';
+        t.actualArrival=t.actualArrival||t.unloadFinishTime||nowIso();
+      }else if(t.unloadStartTime||t.operationStatus==='unloading'){
+        t.operationStatus='unloading'; if(!t.status||t.status==='planned')t.status='in_transit';
+      }else if(t.waitingAreaTime||t.gateReleaseTime||t.operationStatus==='inside_waiting'){
+        t.operationStatus='inside_waiting'; if(!t.status||t.status==='planned')t.status='in_transit';
+      }else if(t.gateArrivalTime||t.operationStatus==='outside_parking'||t.operationStatus==='gate_arrived'){
+        t.operationStatus='outside_parking'; if(!t.status||t.status==='planned')t.status='in_transit';
+      }else if(t.status==='arrived'){
+        t.actualArrival=t.actualArrival||t.arrivalConfirmedAt||nowIso();
+      }
+      if(fixLocations){
+        if(t.status==='arrived'||t.status==='completed'||t.status==='return_pending'||t.actualArrival||t.unloadFinishTime){ if(dest)setLocationStock(t.containerId,dest,t.actualArrival||t.unloadFinishTime); }
+      }
+    });
+  }
+  window.normalizeStateV455=normalizeStateV455;
+
+  function decodeKey(key){try{let s=String(key||'');while(s.length%4)s+='=';return JSON.parse(decodeURIComponent(escape(atob(s))));}catch(e){return{containerNo:String(key||'')}}}
+  function findPlan(keyOrId){
+    const k=typeof keyOrId==='object'?keyOrId:decodeKey(keyOrId);
+    let list=arr(pickupPlans).filter(p=>p&&p.status!=='cancelled');
+    let m=[];
+    if(k.containerNo)m=list.filter(p=>norm(p.containerNo)===norm(k.containerNo));
+    if(!m.length&&k.containerId!=null)m=list.filter(p=>norm(p.containerId)===norm(k.containerId));
+    if(!m.length&&k.id!=null)m=list.filter(p=>norm(p.id)===norm(k.id));
+    if(m.length>1&&k.batch){const x=m.filter(p=>norm(p.batch)===norm(k.batch));if(x.length)m=x;}
+    if(m.length>1&&k.seq){const x=m.filter(p=>norm(p.containerSeq||p.seq)===norm(k.seq));if(x.length)m=x;}
+    return m.find(p=>p.status!=='confirmed')||m[0]||null;
+  }
+  function findContainerForPlan(p){return arr(containers).find(c=>norm(c.id)===norm(p.containerId)||norm(c.containerNo)===norm(p.containerNo));}
+  function ensureTransitTask(p,c){
+    let candidates=arr(transportTasks).filter(t=>t&&!t.cancelled&&t.status!=='cancelled'&&(norm(t.sourcePlanId)===norm(p.id)||(norm(t.containerId)===norm(p.containerId)&&norm(t.source)==='pickupPlan')||(p.containerNo&&norm(t.containerNo)===norm(p.containerNo)&&norm(t.source||'pickupPlan')==='pickupPlan')));
+    let t=candidates.find(x=>x.status==='in_transit')||candidates.find(x=>!taskStarted(x))||candidates[0];
+    if(t&&taskStarted(t)&&isFactory(taskDest(t))&&!isFactory(p.destination)){alert('该集装箱已进入门岗/卸货口流程，不能把目的地从工厂改为其他地点。');return null;}
+    if(!t){t={id:(nextIds.task||Date.now()),source:'pickupPlan',createdAt:nowIso(),publishedAt:nowIso()};nextIds.task=(nextIds.task||1)+1;transportTasks.push(t);}
+    Object.assign(t,{source:'pickupPlan',sourcePlanId:p.id,containerId:p.containerId,containerNo:p.containerNo||(c&&c.containerNo)||t.containerNo||'',containerSeq:(c&&c.containerSeq)||p.containerSeq||t.containerSeq||'',batch:p.batch||(c&&c.batch)||t.batch||'',from:'港口',to:p.destination,destination:p.destination,carrier:p.carrier||t.carrier||'RG',status:'in_transit',estimatedArrival:p.arrivalDate||t.estimatedArrival||'',arrivalDate:p.arrivalDate||t.arrivalDate||'',unloadingDock:p.unloadingDock||t.unloadingDock||'',actualPickupTime:p.actualPickupTime||t.actualPickupTime||'',cancelled:false,cancelReason:'',updatedAt:nowIso()});
+    t.operationStatus=isFactory(p.destination)?(t.operationStatus||'not_arrived'):'';
+    candidates.forEach(x=>{if(x!==t&&!taskStarted(x)){x.cancelled=true;x.status='cancelled';x.cancelReason='V45.5自动清理重复运输任务';x.cancelTime=nowIso();}});
+    return t;
+  }
+
+  async function transactionV455(reason,mutate,successMsg){
+    const snapshot=clone(stateFromGlobalsV455()); const ui=captureUi();
+    try{ const result=mutate(); if(result===false)return false; normalizeStateV455(true); const ok=await queueSaveV455(reason); if(!ok){applyStateV455(snapshot);rerender(ui);return false;} rerender(ui); if(successMsg)alert(successMsg); return true; }
+    catch(e){console.error(e);applyStateV455(snapshot);rerender(ui);alert('操作失败：'+(e.message||e));return false;}
+  }
+
+  async function confirmPickupByKeyV455(key){
+    const p=findPlan(key); if(!p){alert('找不到当前行对应的提箱计划，请刷新后重试。');return;}
+    const actual=document.getElementById('pickupTimeKey_'+key)?.value||document.getElementById('pickupTime_'+p.id)?.value||p.actualPickupTime||'';
+    if(!actual){alert('请填写实际提箱日期');return;}
+    await transactionV455('confirm_pickup_'+(p.containerNo||''),()=>{const c=findContainerForPlan(p);p.status='confirmed';p.actualPickupTime=actual;p.needReconfirm=false;p.updatedAt=nowIso();if(c)c.actualPickupTime=actual;return !!ensureTransitTask(p,c);},'已确认提箱 '+(p.containerNo||''));
+  }
+  window.confirmPickupTaskByKeyV455=confirmPickupByKeyV455;
+  window.confirmPickupTaskByKeyV451=window.confirmPickupTaskByKeyV45=window.confirmPickupTaskByKey=confirmPickupByKeyV455;
+  window.confirmPickupTask=function(planId){const p=arr(pickupPlans).find(x=>norm(x.id)===norm(planId)&&x.status!=='cancelled');if(!p){alert('找不到计划，请刷新后重试。');return;}const key=btoa(unescape(encodeURIComponent(JSON.stringify({id:p.id,containerId:p.containerId,containerNo:p.containerNo||'',batch:p.batch||'',seq:p.containerSeq||p.seq||''})))).replace(/=+$/,'');return confirmPickupByKeyV455(key);};
+  window.v45ActionCell=function(item){if(item.type==='pending'){const key=btoa(unescape(encodeURIComponent(JSON.stringify({id:item.id,containerId:item.containerId,containerNo:item.containerNo||'',batch:item.batch||'',seq:item.containerSeq||item.seq||''})))).replace(/=+$/,'');return '<input type="date" id="pickupTimeKey_'+key+'" class="form-control" style="width:125px;margin-bottom:4px;"><br><button class="btn btn-sm btn-success" onclick="confirmPickupTaskByKeyV455(\''+key+'\')">确认提箱</button>';}return '<button class="btn btn-sm btn-warning" onclick="editDynamicTask('+item.id+')">编辑</button>';};
+  window.v4215ActionCell=window.v45ActionCell; try{v4215ActionCell=window.v45ActionCell;}catch(e){}
+
+  function decodeTaskKey(k){return decodeKey(k);}
+  function findTaskByKey(k,preferred){
+    const x=typeof k==='object'?k:decodeTaskKey(k); let list=arr(transportTasks).filter(t=>t&&!t.cancelled&&t.status!=='cancelled');
+    let m=[]; if(x.containerNo)m=list.filter(t=>norm(t.containerNo)===norm(x.containerNo)); if(!m.length&&x.containerId!=null)m=list.filter(t=>norm(t.containerId)===norm(x.containerId)); if(!m.length&&x.id!=null)m=list.filter(t=>norm(t.id)===norm(x.id));
+    if(m.length>1&&x.batch){const z=m.filter(t=>norm(t.batch)===norm(x.batch));if(z.length)m=z;} if(m.length>1&&x.to){const z=m.filter(t=>norm(taskDest(t))===norm(x.to));if(z.length)m=z;} if(preferred){const z=m.filter(t=>t.status===preferred);if(z.length)m=z;}
+    m.sort((a,b)=>new Date(b.updatedAt||b.createdAt||0)-new Date(a.updatedAt||a.createdAt||0)); return m[0]||null;
+  }
+  function taskFromMapId(id){const raw=window.__v453TaskKeys&&window.__v453TaskKeys[id];return findTaskByKey(raw||{id});}
+  async function arrivalByKeyV455(key){const t=findTaskByKey(key,'in_transit')||findTaskByKey(key);if(!t){alert('未找到当前运输任务，请刷新后重试。');return;}await transactionV455('confirm_arrival_'+(t.containerNo||''),()=>{const ts=nowIso();t.status='arrived';t.actualArrival=t.actualArrival||ts;t.arrivalConfirmedAt=ts;t.arrivalConfirmedBy=userName();t.updatedAt=ts;setLocationStock(t.containerId,taskDest(t),ts);return true;},'已确认到达 '+taskDest(t));}
+  window.doArrivalByKeyV455=arrivalByKeyV455;window.doArrivalByKeyV452=arrivalByKeyV455;
+  window.doArrival=function(id){const t=findTaskByKey({id},'in_transit')||findTaskByKey({id});if(!t){alert('未找到当前运输任务，请刷新后重试。');return;}return arrivalByKeyV455(btoa(unescape(encodeURIComponent(JSON.stringify({id:t.id,containerId:t.containerId,containerNo:t.containerNo||'',batch:t.batch||'',to:taskDest(t)})))).replace(/=+$/,''));};window.confirmArrivalOnly=window.doArrival;
+
+  async function unpackByKeyV455(key){const t=findTaskByKey(key,'arrived')||findTaskByKey(key);if(!t){alert('未找到当前到达任务，请刷新后重试。');return;}await transactionV455('confirm_unpack_'+(t.containerNo||''),()=>{const loc=taskDest(t);if(arr(returnRecords).some(r=>norm(r.containerId)===norm(t.containerId)&&norm(r.location)===norm(loc))){alert('该集装箱已完成掏箱');return false;}const need=(typeof needsReturn==='function')?needsReturn(t.containerId,loc,taskOrigin(t)):(isFactory(loc)&&(taskOrigin(t)==='港口'||taskOrigin(t)==='RG堆场'));returnRecords.push({containerId:t.containerId,location:loc,type:need?'return_needed':'unpack',unpackDate:datePart(nowIso()),isReturnConfirmed:!need,fromLocation:taskOrigin(t),createdAt:nowIso()});t.status=need?'return_pending':'completed';t.unpackConfirmedAt=nowIso();t.updatedAt=nowIso();setLocationStock(t.containerId,loc,nowIso());return true;},'已确认掏箱 '+(t.containerNo||''));}
+  window.doUnpackByKeyV455=unpackByKeyV455;window.doUnpackByKeyV452=unpackByKeyV455;window.doUnpack=function(id){const t=findTaskByKey({id},'arrived')||findTaskByKey({id});if(!t){alert('未找到当前到达任务，请刷新后重试。');return;}return unpackByKeyV455(btoa(unescape(encodeURIComponent(JSON.stringify({id:t.id,containerId:t.containerId,containerNo:t.containerNo||'',batch:t.batch||'',to:taskDest(t)})))).replace(/=+$/,''));};
+
+  async function gateMutationV455(mapId,kind){const t=taskFromMapId(mapId);if(!t){alert('未找到当前工厂到货任务，请刷新后重试。');return;}const labels={gate:'已确认到达门口',release:'已放行进厂',start:'已开始卸货',finish:'已确认掏箱完成'};await transactionV455(kind+'_'+(t.containerNo||''),()=>{const ts=(typeof nowLocalInput==='function'?nowLocalInput():nowIso());if(kind==='gate'){t.truckPlate=document.getElementById('gatePlate_'+mapId)?.value.trim()||t.truckPlate||'';t.driverName=document.getElementById('gateDriver_'+mapId)?.value.trim()||t.driverName||'';t.driverPhone=document.getElementById('gatePhone_'+mapId)?.value.trim()||t.driverPhone||'';t.gateArrivalTime=t.gateArrivalTime||ts;t.operationStatus='outside_parking';}if(kind==='release'){t.gateReleaseTime=t.gateReleaseTime||ts;t.waitingAreaTime=t.waitingAreaTime||ts;t.operationStatus='inside_waiting';}if(kind==='start'){t.unloadStartTime=t.unloadStartTime||ts;t.operationStatus='unloading';}if(kind==='finish'){t.unloadFinishTime=t.unloadFinishTime||ts;t.operationStatus='unloaded';t.status=(taskOrigin(t)==='港口'||taskOrigin(t)==='RG堆场')?'return_pending':'completed';setLocationStock(t.containerId,'工厂',ts);}t.updatedAt=nowIso();return true;},labels[kind]);}
+  window.confirmGateArrivalByKeyV453=id=>gateMutationV455(id,'gate');window.releaseFromGateByKeyV453=id=>gateMutationV455(id,'release');window.startUnloadingByKeyV453=id=>gateMutationV455(id,'start');window.finishUnloadingByKeyV453=id=>gateMutationV455(id,'finish');
+  window.confirmGateArrival=function(id){const t=findTaskByKey({id});if(!t){alert('未找到当前工厂到货任务，请刷新后重试。');return;}const map='v455_'+Math.random().toString(36).slice(2);window.__v453TaskKeys=window.__v453TaskKeys||{};window.__v453TaskKeys[map]=btoa(unescape(encodeURIComponent(JSON.stringify({id:t.id,containerId:t.containerId,containerNo:t.containerNo||'',batch:t.batch||'',to:taskDest(t)})))).replace(/=+$/,'');return gateMutationV455(map,'gate');};
+  window.releaseFromGate=function(id){const t=findTaskByKey({id});if(!t)return alert('未找到当前工厂到货任务，请刷新后重试。');const map='v455_'+Math.random().toString(36).slice(2);window.__v453TaskKeys=window.__v453TaskKeys||{};window.__v453TaskKeys[map]=btoa(unescape(encodeURIComponent(JSON.stringify({id:t.id,containerId:t.containerId,containerNo:t.containerNo||'',batch:t.batch||'',to:taskDest(t)})))).replace(/=+$/,'');return gateMutationV455(map,'release');};
+  window.startUnloading=function(id){const t=findTaskByKey({id});if(!t)return alert('未找到当前工厂到货任务，请刷新后重试。');const map='v455_'+Math.random().toString(36).slice(2);window.__v453TaskKeys=window.__v453TaskKeys||{};window.__v453TaskKeys[map]=btoa(unescape(encodeURIComponent(JSON.stringify({id:t.id,containerId:t.containerId,containerNo:t.containerNo||'',batch:t.batch||'',to:taskDest(t)})))).replace(/=+$/,'');return gateMutationV455(map,'start');};
+  window.finishUnloading=function(id){const t=findTaskByKey({id});if(!t)return alert('未找到当前工厂到货任务，请刷新后重试。');const map='v455_'+Math.random().toString(36).slice(2);window.__v453TaskKeys=window.__v453TaskKeys||{};window.__v453TaskKeys[map]=btoa(unescape(encodeURIComponent(JSON.stringify({id:t.id,containerId:t.containerId,containerNo:t.containerNo||'',batch:t.batch||'',to:taskDest(t)})))).replace(/=+$/,'');return gateMutationV455(map,'finish');};
+
+  window.calibrateContainerStatusesV455=async function(){await transactionV455('manual_status_calibration',()=>{normalizeStateV455(true);return true;},'状态校准完成');};
+  window.calibrateContainerStatusesV454=window.calibrateContainerStatusesV455;
+
+  window.renderAutoBackupCenterV434=async function(container){
+    const sb=initSupabaseClient();
+    container.innerHTML='<div class="card"><div class="card-header"><span class="card-title">🛡️ 自动备份中心 V45.5</span><span class="status-badge status-success">云端版本化备份已开启</span></div><div style="line-height:1.8;color:#606266">每次成功保存都会生成一个完整、原子的云端版本；每天保留当天最新版本，最近保留 '+KEEP_DAYS+' 天。恢复不会读取浏览器业务缓存。</div><div id="v455BackupList" style="margin-top:14px">正在读取...</div></div>';
+    const {data,error}=await sb.from('app_state').select('id,data,updated_at,updated_by').like('id',DAILY_PREFIX+'%').order('id',{ascending:false});
+    const box=document.getElementById('v455BackupList');if(!box)return;if(error){box.innerHTML='读取备份失败：'+error.message;return;}
+    const list=arr(data).slice(0,KEEP_DAYS);if(!list.length){box.innerHTML='<div class="empty-state">暂无V45.5每日备份。下一次成功保存后会自动创建。</div>';return;}
+    box.innerHTML='<table class="data-table"><thead><tr><th>日期</th><th>版本</th><th>数据量</th><th>创建时间</th><th>操作</th></tr></thead><tbody>'+list.map(r=>'<tr><td><b>'+r.id.replace(DAILY_PREFIX,'')+'</b></td><td>'+((r.data&&r.data.version)||'-')+'</td><td>'+((r.data&&r.data.score)||0)+'</td><td>'+((typeof formatDateTime==='function'?formatDateTime(r.updated_at):r.updated_at)||'-')+'</td><td><button class="btn btn-secondary" onclick="downloadV455Backup(\''+r.id+'\')">下载</button> <button class="btn btn-danger" onclick="restoreV455Backup(\''+r.id+'\')">恢复</button></td></tr>').join('')+'</tbody></table>';
+  };
+  window.downloadV455Backup=async function(id){const sb=initSupabaseClient();const {data,error}=await sb.from('app_state').select('data').eq('id',id).maybeSingle();if(error||!data)return alert('读取备份失败');const st=await readGenerationV455(data.data);if(!st)return alert('备份数据无效');const blob=new Blob([JSON.stringify(st,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='container_backup_'+id.replace(DAILY_PREFIX,'')+'.json';a.click();};
+  window.restoreV455Backup=async function(id){if(!confirm('确认恢复该日期备份？当前数据会先保留为今天的最新版本。'))return;const sb=initSupabaseClient();const {data,error}=await sb.from('app_state').select('data').eq('id',id).maybeSingle();if(error||!data)return alert('读取备份失败');const st=await readGenerationV455(data.data);if(!st)return alert('备份数据无效');const snapshot=clone(stateFromGlobalsV455());applyStateV455(st);const ok=await queueSaveV455('restore_'+id);if(!ok){applyStateV455(snapshot);return;}rerender(captureUi());alert('备份恢复完成');};
+
+  try{document.title='Sistema Inteligente de Monitoramento de Contêineres V45.5';}catch(e){}
+  console.log('V45.5 Stable Core loaded: cloud authoritative, generation save, unified state machine');
+})();
+
+</script>
 </body>
 </html>
