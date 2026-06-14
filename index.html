@@ -9710,7 +9710,35 @@ let main=document.getElementById('mainContent');
     if(!newIsFactory){
       for(const t of related){
         if(isFactoryDest432(t.to) && factoryStarted432(t)){
-          alert('该集装箱已经进入门岗/卸货口执行流程，不能把目的地从工厂改为其他地点。');
+          const cont = (containers || []).find(c => String(c.id) === String(plan.containerId)) || {};
+          const conflict = {
+            containerNo: plan.containerNo || t.containerNo || cont.containerNo || '',
+            batch: plan.batch || t.batch || cont.batch || '',
+            containerSeq: plan.containerSeq || t.containerSeq || cont.containerSeq || '',
+            planId: plan.id || '',
+            taskId: t.id || '',
+            planDestination: plan.destination || '',
+            taskDestination: t.to || '',
+            operationStatus: t.operationStatus || '',
+            gateArrivalTime: t.gateArrivalTime || '',
+            gateReleaseTime: t.gateReleaseTime || '',
+            unloadStartTime: t.unloadStartTime || '',
+            unloadFinishTime: t.unloadFinishTime || ''
+          };
+          window.__v457PickupDestinationConflicts = window.__v457PickupDestinationConflicts || [];
+          if(!window.__v457PickupDestinationConflicts.some(x => String(x.planId) === String(conflict.planId) && String(x.taskId) === String(conflict.taskId))){
+            window.__v457PickupDestinationConflicts.push(conflict);
+          }
+          if(!options.silent){
+            alert(`该集装箱已经进入门岗/卸货口执行流程，不能把目的地从工厂改为其他地点。
+
+集装箱：${conflict.containerNo || '-'}
+批次：${conflict.batch || '-'}
+序号：${conflict.containerSeq || '-'}
+提箱计划目的地：${conflict.planDestination || '-'}
+运输任务目的地：${conflict.taskDestination || '-'}
+工厂状态：${conflict.operationStatus || '-'}`);
+          }
           return null;
         }
       }
@@ -9846,14 +9874,82 @@ let main=document.getElementById('mainContent');
     return ret;
   };
 
+  window.findPickupDestinationConflictsV457 = function(showMessage){
+    const list = [];
+    (pickupPlans || []).forEach(plan => {
+      if(!plan || plan.status === 'cancelled' || isFactoryDest432(plan.destination)) return;
+      const cont = (containers || []).find(c => String(c.id) === String(plan.containerId)) || {};
+      allRelatedPickupTasks432(plan).forEach(t => {
+        if(!isFactoryDest432(t.to) || !factoryStarted432(t)) return;
+        list.push({
+          containerNo: plan.containerNo || t.containerNo || cont.containerNo || '',
+          batch: plan.batch || t.batch || cont.batch || '',
+          containerSeq: plan.containerSeq || t.containerSeq || cont.containerSeq || '',
+          planId: plan.id || '',
+          taskId: t.id || '',
+          planDestination: plan.destination || '',
+          taskDestination: t.to || '',
+          operationStatus: t.operationStatus || '',
+          gateArrivalTime: t.gateArrivalTime || '',
+          gateReleaseTime: t.gateReleaseTime || '',
+          unloadStartTime: t.unloadStartTime || '',
+          unloadFinishTime: t.unloadFinishTime || ''
+        });
+      });
+    });
+    window.__v457PickupDestinationConflicts = list;
+    try{ console.table(list); }catch(e){}
+    if(showMessage !== false){
+      if(!list.length){
+        alert('未发现“非工厂提箱计划 + 已进入工厂流程运输任务”的冲突数据。');
+      }else{
+        const text = list.slice(0,30).map((x,i)=>`${i+1}. ${x.containerNo || '-'}｜批次 ${x.batch || '-'}｜序号 ${x.containerSeq || '-'}｜计划目的地 ${x.planDestination || '-'}｜任务目的地 ${x.taskDestination || '-'}｜工厂状态 ${x.operationStatus || '-'}`).join('\n');
+        alert(`发现 ${list.length} 条目的地冲突：\n\n${text}${list.length>30?'\n\n更多明细已输出到浏览器 Console。':''}`);
+      }
+    }
+    return list;
+  };
+
+  window.resolvePickupDestinationConflictV457 = async function(planId, mode){
+    const plan = (pickupPlans || []).find(p => String(p.id) === String(planId));
+    if(!plan){ alert('找不到对应提箱计划。'); return false; }
+    const tasks = allRelatedPickupTasks432(plan).filter(t => isFactoryDest432(t.to) && factoryStarted432(t));
+    if(!tasks.length){ alert('该计划当前已不存在工厂流程冲突。'); return false; }
+    if(mode === 'factory'){
+      if(!confirm(`确认以工厂执行记录为准，将 ${plan.containerNo || ''} 的提箱计划目的地修正为“工厂”？`)) return false;
+      const task = tasks[0];
+      plan.destination = '工厂';
+      plan.unloadingDock = plan.unloadingDock || task.unloadingDock || '';
+      plan.arrivalDate = plan.arrivalDate || task.estimatedArrival || '';
+      plan.updatedAt = new Date().toISOString();
+      plan.updatedBy = (currentUser && (currentUser.email || currentUser.name)) || '';
+    }else if(mode === 'plan'){
+      if(!confirm(`确认以提箱计划目的地“${plan.destination || '-'}”为准？\n这会清除 ${plan.containerNo || ''} 对应运输任务中的门岗/卸货口执行时间。请仅在这些工厂记录确认为历史残留或误操作时使用。`)) return false;
+      tasks.forEach(t => { hydrate432(t, plan); clearFactoryFields432(t); t.updatedAt = new Date().toISOString(); });
+    }else{
+      alert('无效的修复方式。'); return false;
+    }
+    try{
+      if(typeof saveData === 'function') await saveData();
+      else if(typeof saveCloudState === 'function') await saveCloudState();
+      window.findPickupDestinationConflictsV457(false);
+      if(typeof renderContent === 'function') renderContent();
+      alert('冲突数据已修复并提交保存。');
+      return true;
+    }catch(e){
+      console.error(e); alert('修复保存失败：' + (e.message || e)); return false;
+    }
+  };
+
+  // 登录/刷新时只做只读冲突扫描，不再自动改写计划、不弹窗、不保存。
   setTimeout(()=>{
     try{
-      // 打开系统时同步一次所有已发布提箱计划，修复历史重复到货确认残留。
-      (pickupPlans || []).forEach(p => {
-        if(p && p.status !== 'cancelled') syncPickupPlanTransportLink432(p, {createIfMissing: !!p.actualPickupTime});
-      });
-      saveData();
-    }catch(e){ console.warn('V43.2 initial pickup sync skipped', e); }
+      const conflicts = window.findPickupDestinationConflictsV457(false);
+      if(conflicts.length){
+        console.warn('V45.7 检测到提箱计划/工厂执行目的地冲突', conflicts);
+        try{ if(typeof showRealtimeSyncHint === 'function') showRealtimeSyncHint(`检测到 ${conflicts.length} 条计划目的地冲突，请在基础数据点击“检查计划冲突”`); }catch(e){}
+      }
+    }catch(e){ console.warn('V45.7 startup conflict scan skipped', e); }
   }, 900);
 })();
 
@@ -12209,7 +12305,7 @@ let main=document.getElementById('mainContent');
 /* ==================== V45.5 Stable Core：云端唯一数据源 + 原子分片保存 + 统一状态机 ==================== */
 (function(){
   'use strict';
-  const VERSION = 'V45.6 Stable Core';
+  const VERSION = 'V45.7 Stable Core';
   const BASE_ID = (typeof CLOUD_STATE_ID !== 'undefined' ? CLOUD_STATE_ID : 'container-monitoring-main');
   const CURRENT_MANIFEST_ID = BASE_ID + ':v455:manifest';
   const DAILY_PREFIX = BASE_ID + ':v455:daily:';
@@ -12437,9 +12533,9 @@ let main=document.getElementById('mainContent');
   async function persistV455(reason){
     const sb=typeof initSupabaseClient==='function'?initSupabaseClient():null;
     if(!sb || (typeof cloudUser!=='undefined' && !cloudUser)) return false;
-    normalizeStateV455(false);
     let st=stateFromGlobalsV455();
     if(isEmpty(st) && !window.__allowEmptyCloudOverwrite){ hint('已阻止空数据保存'); return false; }
+    normalizeStateV455(false);
     /* 保存前核对云端最新版本，避免其他账号新增的批次被旧页面整包覆盖。 */
     try{
       const {data:head,error:headErr}=await sb.from('app_state').select('data,updated_at').eq('id',CURRENT_MANIFEST_ID).maybeSingle();
@@ -12600,13 +12696,50 @@ let main=document.getElementById('mainContent');
   }
   function findContainerForPlan(p){return arr(containers).find(c=>norm(c.id)===norm(p.containerId)||norm(c.containerNo)===norm(p.containerNo));}
   function ensureTransitTask(p,c){
-    let candidates=arr(transportTasks).filter(t=>t&&!t.cancelled&&t.status!=='cancelled'&&(norm(t.sourcePlanId)===norm(p.id)||(norm(t.containerId)===norm(p.containerId)&&norm(t.source)==='pickupPlan')||(p.containerNo&&norm(t.containerNo)===norm(p.containerNo)&&norm(t.source||'pickupPlan')==='pickupPlan')));
-    let t=candidates.find(x=>x.status==='in_transit')||candidates.find(x=>!taskStarted(x))||candidates[0];
-    if(t&&taskStarted(t)&&isFactory(taskDest(t))&&!isFactory(p.destination)){alert('该集装箱已进入门岗/卸货口流程，不能把目的地从工厂改为其他地点。');return null;}
-    if(!t){t={id:(nextIds.task||Date.now()),source:'pickupPlan',createdAt:nowIso(),publishedAt:nowIso()};nextIds.task=(nextIds.task||1)+1;transportTasks.push(t);}
-    Object.assign(t,{source:'pickupPlan',sourcePlanId:p.id,containerId:p.containerId,containerNo:p.containerNo||(c&&c.containerNo)||t.containerNo||'',containerSeq:(c&&c.containerSeq)||p.containerSeq||t.containerSeq||'',batch:p.batch||(c&&c.batch)||t.batch||'',from:'港口',to:p.destination,destination:p.destination,carrier:p.carrier||t.carrier||'RG',status:'in_transit',estimatedArrival:p.arrivalDate||t.estimatedArrival||'',arrivalDate:p.arrivalDate||t.arrivalDate||'',unloadingDock:p.unloadingDock||t.unloadingDock||'',actualPickupTime:p.actualPickupTime||t.actualPickupTime||'',cancelled:false,cancelReason:'',updatedAt:nowIso()});
-    t.operationStatus=isFactory(p.destination)?(t.operationStatus||'not_arrived'):'';
-    candidates.forEach(x=>{if(x!==t&&!taskStarted(x)){x.cancelled=true;x.status='cancelled';x.cancelReason='V45.5自动清理重复运输任务';x.cancelTime=nowIso();}});
+    const samePlan = arr(transportTasks).filter(t=>t && !t.cancelled && t.status!=='cancelled' && norm(t.sourcePlanId)===norm(p.id));
+    const sameContainer = arr(transportTasks).filter(t=>t && !t.cancelled && t.status!=='cancelled' && (
+      norm(t.containerId)===norm(p.containerId) || (p.containerNo && norm(t.containerNo)===norm(p.containerNo))
+    ));
+    const finished = t => !!(t && (t.unloadFinishTime || t.unpackConfirmedAt || ['return_pending','completed'].includes(t.status) || t.operationStatus==='unloaded'));
+    const inExecution = t => !!(t && !finished(t) && taskStarted(t));
+    let t = samePlan.find(x=>x.status==='in_transit' && !finished(x)) || samePlan.find(x=>!taskStarted(x) && !finished(x));
+
+    /* 已经进入真实门岗/卸货流程的同一计划，只更新计划元数据，不清除执行记录。 */
+    if(!t){
+      const executing = samePlan.find(inExecution);
+      if(executing){
+        Object.assign(executing,{
+          containerId:p.containerId,containerNo:p.containerNo||(c&&c.containerNo)||executing.containerNo||'',
+          containerSeq:(c&&c.containerSeq)||p.containerSeq||executing.containerSeq||'',batch:p.batch||(c&&c.batch)||executing.batch||'',
+          carrier:p.carrier||executing.carrier||'RG',estimatedArrival:p.arrivalDate||executing.estimatedArrival||'',
+          arrivalDate:p.arrivalDate||executing.arrivalDate||'',unloadingDock:p.unloadingDock||executing.unloadingDock||'',updatedAt:nowIso()
+        });
+        return executing;
+      }
+    }
+
+    /* 不复用已经到达、掏箱或待还箱的历史任务，避免新计划自动继承“已掏箱”。 */
+    if(!t){
+      const ids=arr(transportTasks).map(x=>Number(x&&x.id)).filter(Number.isFinite);
+      nextIds.task=Math.max(Number(nextIds.task||1),ids.length?Math.max(...ids)+1:1);
+      t={id:nextIds.task++,source:'pickupPlan',createdAt:nowIso(),publishedAt:nowIso()};
+      transportTasks.push(t);
+    }
+
+    ['actualArrival','arrivalConfirmedAt','arrivalConfirmedBy','gateArrivalTime','gateReleaseTime','waitingAreaTime','unloadStartTime','unloadFinishTime','unpackConfirmedAt','unpackConfirmedBy','returnConfirmedAt'].forEach(k=>{ t[k]=''; });
+    Object.assign(t,{
+      source:'pickupPlan',sourcePlanId:p.id,containerId:p.containerId,
+      containerNo:p.containerNo||(c&&c.containerNo)||t.containerNo||'',containerSeq:(c&&c.containerSeq)||p.containerSeq||t.containerSeq||'',
+      batch:p.batch||(c&&c.batch)||t.batch||'',from:'港口',to:p.destination,destination:p.destination,
+      carrier:p.carrier||t.carrier||'RG',status:'in_transit',estimatedArrival:p.arrivalDate||'',arrivalDate:p.arrivalDate||'',
+      unloadingDock:p.unloadingDock||'',actualPickupTime:p.actualPickupTime||'',cancelled:false,cancelReason:'',updatedAt:nowIso(),
+      operationStatus:isFactory(p.destination)?'not_arrived':''
+    });
+
+    sameContainer.forEach(x=>{
+      if(x===t || taskStarted(x) || finished(x)) return;
+      x.cancelled=true;x.status='cancelled';x.cancelReason='V45.8自动清理同箱未执行重复运输任务';x.cancelTime=nowIso();
+    });
     return t;
   }
 
@@ -12618,11 +12751,7 @@ let main=document.getElementById('mainContent');
       /* 乐观界面：先立即刷新，让按钮和列表即时变化；云端保存放入队列。 */
       rerender(ui); hint(successMsg ? successMsg+'，正在保存…' : '操作已完成，正在保存…');
       const ok=await queueSaveV455(reason);
-      if(!ok){
-        /* 若后面还有连续操作排队，不回滚整个页面，避免把后续已点击的结果一起清掉。 */
-        if(savePending>0){ hint('保存暂时失败，后续操作仍在排队同步…'); return false; }
-        applyStateV455(snapshot); rerender(ui); alert('云端保存失败，本次操作已自动撤销，请检查网络后重试。'); return false;
-      }
+      if(!ok){ applyStateV455(snapshot); rerender(ui); alert('云端保存失败，本次操作已自动撤销，请检查网络后重试。'); return false; }
       hint(successMsg ? successMsg+'，已保存' : '云端已保存');
       return true;
     }catch(e){console.error(e);applyStateV455(snapshot);rerender(ui);alert('操作失败：'+(e.message||e));return false;}
@@ -12713,7 +12842,11 @@ let main=document.getElementById('mainContent');
       const list=[...found.values()];
       const batches=[...new Set(list.map(x=>x.c.batch||'未填写批次'))];
       const preview=batches.slice(0,20).join('、')+(batches.length>20?'…':'');
-      if(!confirm('发现 '+list.length+' 个当前主数据中不存在的历史集装箱，涉及 '+batches.length+' 个批次：\n'+preview+'\n\n是否补回这些缺失数据及其提单、提箱计划、运输任务等关联记录？\n当前数据不会被删除。')){hint('已取消恢复');return;}
+      if(!confirm(`发现 ${list.length} 个当前主数据中不存在的历史集装箱，涉及 ${batches.length} 个批次：
+${preview}
+
+是否补回这些缺失数据及其提单、提箱计划、运输任务等关联记录？
+当前数据不会被删除。`)){hint('已取消恢复');return;}
       await transactionV455('restore_missing_batches',()=>{
         const idMap=new Map();
         const usedIds=new Set(arr(containers).map(c=>norm(c.id)));
@@ -12740,14 +12873,139 @@ let main=document.getElementById('mainContent');
       const head=container&&container.querySelector('.card-header>div');
       if(head&&!document.getElementById('btnRestoreMissingV456')){
         const b=document.createElement('button');b.id='btnRestoreMissingV456';b.className='btn btn-secondary';b.textContent='🔎 扫描并补回缺失批次';b.onclick=window.restoreMissingBatchesV456;head.insertBefore(b,head.firstChild);
+        if(!document.getElementById('btnCheckPickupConflictV457')){
+          const c=document.createElement('button');c.id='btnCheckPickupConflictV457';c.className='btn btn-warning';c.textContent='⚠ 检查计划冲突';c.onclick=()=>window.findPickupDestinationConflictsV457(true);head.insertBefore(c,head.firstChild);
+        }
       }
     };
   }
 
-  try{document.title='Sistema Inteligente de Monitoramento de Contêineres V45.6';}catch(e){}
-  console.log('V45.6 Stable Core loaded: instant UI, concurrency protection, missing-batch recovery');
+  try{document.title='Sistema Inteligente de Monitoramento de Contêineres V45.7';}catch(e){}
+  console.log('V45.7 Stable Core loaded: silent startup conflict scan, conflict locator, stable save');
 })();
 
 </script>
+
+<script>
+/* ==================== V45.8 数据导入持久化 + 工厂流程修复 ==================== */
+(function(){
+  const VERSION='V45.8';
+  const A=v=>Array.isArray(v)?v:[];
+  const N=v=>String(v??'').trim().toUpperCase();
+  const now=()=>new Date().toISOString();
+  const hint=msg=>{try{if(typeof showRealtimeSyncHint==='function')showRealtimeSyncHint(msg);}catch(e){}};
+  const businessKeys=['cc_containers','cc_blList','cc_containerBlMap','cc_transportTasks','cc_locationStock','cc_returnRecords','cc_pickupPlans','cc_productionRecords','cc_productionPlans','cc_factoryCalendar','cc_nextIds','cc_storageConfig','cc_demurrageConfig','cc_warningConfig'];
+
+  function clearLocalBusiness(){try{businessKeys.forEach(k=>localStorage.removeItem(k));localStorage.setItem('cc_business_source','supabase_app_state_v458');}catch(e){}}
+  function cloneState(){try{return JSON.parse(JSON.stringify(typeof getCloudStatePayload==='function'?getCloudStatePayload():{}));}catch(e){return null;}}
+  function activeFactoryTasks(){return A(window.transportTasks||transportTasks).filter(t=>t&&N(t.to||t.destination)==='工厂'&&!t.cancelled&&t.status!=='cancelled');}
+  function uniqueTaskIds(){
+    const seen=new Set();let changed=0;let max=A(transportTasks).reduce((m,t)=>Math.max(m,Number(t&&t.id)||0),0);
+    A(transportTasks).forEach(t=>{if(!t)return;const k=String(t.id);if(!k||seen.has(k)){t.id=++max;changed++;}seen.add(String(t.id));});
+    nextIds.task=Math.max(Number(nextIds.task||1),max+1);return changed;
+  }
+  function linkedPlan(t){return A(pickupPlans).find(p=>N(p.id)===N(t.sourcePlanId))||A(pickupPlans).find(p=>N(p.containerId)===N(t.containerId)&&N(p.destination)==='工厂'&&p.status!=='cancelled');}
+  function resetStaleFactoryExecution(){
+    let changed=0;
+    activeFactoryTasks().forEach(t=>{
+      const p=linkedPlan(t);if(!p)return;
+      const pickup=Date.parse(p.actualPickupTime||t.actualPickupTime||'');
+      const finish=Date.parse(t.unloadFinishTime||t.unpackConfirmedAt||'');
+      const staleBeforePickup=Number.isFinite(pickup)&&Number.isFinite(finish)&&finish<pickup;
+      const plannedButCompleted=p.status!=='confirmed' && !!(t.unloadFinishTime||t.operationStatus==='unloaded'||['return_pending','completed'].includes(t.status));
+      if(!(staleBeforePickup||plannedButCompleted))return;
+      ['actualArrival','arrivalConfirmedAt','arrivalConfirmedBy','gateArrivalTime','gateReleaseTime','waitingAreaTime','unloadStartTime','unloadFinishTime','unpackConfirmedAt','unpackConfirmedBy'].forEach(k=>{t[k]='';});
+      t.operationStatus='not_arrived';t.status=p.status==='confirmed'?'in_transit':'planned';t.updatedAt=now();changed++;
+      for(let i=returnRecords.length-1;i>=0;i--){const r=returnRecords[i];if(N(r.containerId)===N(t.containerId)&&N(r.location)==='工厂'&&!r.isReturnConfirmed)returnRecords.splice(i,1);}
+    });
+    return changed;
+  }
+
+  async function saveVerified(reason){
+    hint('正在保存到云端…');
+    const ok=typeof queueSaveV455==='function'?await queueSaveV455(reason):await Promise.resolve(saveCloudState());
+    if(ok===false){hint('保存失败');return false;}
+    clearLocalBusiness();hint('已保存到云端');return true;
+  }
+
+  /* JSON恢复：必须等云端保存成功后才提示完成，刷新不会丢失。 */
+  window.confirmRestoreJsonV433=async function(){
+    const json=window.__pendingRestoreJsonV433;if(!json)return alert('请先选择并预览备份JSON。');
+    const counts=typeof getStateCountsV433==='function'?getStateCountsV433(json):{containers:A(json.containers).length,pickupPlans:A(json.pickupPlans).length,transportTasks:A(json.transportTasks).length,productionPlans:A(json.productionPlans).length};
+    if(typeof isStateEmptyV433==='function'&&isStateEmptyV433(json))return alert('备份文件为空，禁止恢复。');
+    if(!confirm(`确认恢复该备份到云端？\n基础数据：${counts.containers||0}\n提箱计划：${counts.pickupPlans||0}\n运输任务：${counts.transportTasks||0}\n生产计划：${counts.productionPlans||0}\n\n恢复期间请不要刷新页面。`))return;
+    const snapshot=cloneState();window.__v458ImportSaving=true;
+    try{
+      if(typeof createRecoveryPointV433==='function')await createRecoveryPointV433('before_restore_json_v458',snapshot);
+      applyCloudState(json);uniqueTaskIds();resetStaleFactoryExecution();
+      const ok=await saveVerified('restore_json_v458');
+      if(!ok){if(snapshot)applyCloudState(snapshot);return alert('恢复数据未能写入云端，已恢复到操作前状态。');}
+      const reloaded=await loadCloudState();if(!reloaded)throw new Error('保存后重新读取云端失败');
+      currentMenu='dashboard';renderSidebar();renderContent();applyLanguage&&applyLanguage();
+      alert('数据已成功恢复并写入云端。现在刷新页面数据也不会丢失。');
+    }catch(e){console.error(e);if(snapshot)applyCloudState(snapshot);alert('恢复失败：'+(e.message||e));}
+    finally{window.__v458ImportSaving=false;}
+  };
+
+  /* Excel基础数据导入：等待云端保存成功后再关闭窗口。 */
+  window.importExcel=function(){
+    const file=document.getElementById('importFile')?.files?.[0];if(!file)return alert('请选择文件');
+    const reader=new FileReader();window.__v458ImportSaving=true;hint('正在读取导入文件…');
+    reader.onload=async function(e){
+      const snapshot=cloneState();
+      try{
+        const data=new Uint8Array(e.target.result),workbook=XLSX.read(data,{type:'array',cellDates:true}),sheet=workbook.Sheets[workbook.SheetNames[0]],rows=XLSX.utils.sheet_to_json(sheet,{header:1,defval:'',raw:false});
+        let success=0,dup=0,placeholder=0;
+        for(let i=1;i<rows.length;i++){
+          const row=rows[i],batch=normalizeText(row[0]),seq=normalizeText(row[1]),no=normalizeText(row[2]),vessel=normalizeText(row[3]),type=normalizeText(row[4])||'普柜',etaRaw=normalizeText(row[5]),blsRaw=normalizeText(row[6]);
+          if(!batch&&!seq&&!no)continue;if(!no)continue;if(A(containers).some(c=>normalizeText(c.containerNo)===no)){dup++;continue;}
+          const ids=A(containers).map(c=>Number(c.id)).filter(Number.isFinite);nextIds.container=Math.max(Number(nextIds.container||1),ids.length?Math.max(...ids)+1:1);
+          const newId=nextIds.container++;containers.push({id:newId,batch,containerSeq:seq,containerNo:no,vessel,containerType:type,eta:fmtDate(etaRaw),actualPickupTime:null});
+          const blItems=blsRaw?blsRaw.split(',').map(s=>s.trim()).filter(Boolean):[''];if(!blsRaw)placeholder++;blItems.forEach(bl=>createBlForContainer(newId,vessel,bl,no));success++;
+        }
+        updateContainerStatus();uniqueTaskIds();
+        const ok=await saveVerified('excel_import_v458');if(!ok)throw new Error('云端保存失败');
+        closeModal();renderContainerTable();alert(`成功导入 ${success} 条并保存到云端，跳过重复 ${dup} 条${placeholder?`，其中 ${placeholder} 条未填写提单号`:''}`);
+      }catch(err){console.error(err);if(snapshot)applyCloudState(snapshot);alert('导入失败，数据未生效：'+(err.message||err));}
+      finally{window.__v458ImportSaving=false;}
+    };
+    reader.onerror=()=>{window.__v458ImportSaving=false;alert('读取文件失败');};reader.readAsArrayBuffer(file);
+  };
+
+  function findFactoryTask(ref){
+    let list=activeFactoryTasks();let exact=list.filter(t=>String(t.id)===String(ref));
+    if(exact.length)return exact.sort((a,b)=>String(b.updatedAt||b.createdAt||'').localeCompare(String(a.updatedAt||a.createdAt||'')))[0];
+    const map=window.__v453TaskKeys&&window.__v453TaskKeys[ref];
+    if(map){try{let s=map;while(s.length%4)s+='=';const k=JSON.parse(decodeURIComponent(escape(atob(s))));return list.find(t=>N(t.containerNo)===N(k.containerNo)&&N(t.batch)===N(k.batch)&&N(t.to||t.destination)===N(k.to));}catch(e){}}
+    return null;
+  }
+  async function factoryAction(ref,kind){
+    const t=findFactoryTask(ref);if(!t)return alert(`未找到当前工厂到货任务（任务引用：${ref}）。请在基础数据搜索该集装箱并检查是否存在重复/已完成运输任务。`);
+    const snapshot=cloneState(),ts=typeof nowLocalInput==='function'?nowLocalInput():now();
+    if(kind==='gate'){t.truckPlate=document.getElementById('gatePlate_'+ref)?.value.trim()||t.truckPlate||'';t.driverName=document.getElementById('gateDriver_'+ref)?.value.trim()||t.driverName||'';t.driverPhone=document.getElementById('gatePhone_'+ref)?.value.trim()||t.driverPhone||'';t.gateArrivalTime=t.gateArrivalTime||ts;t.operationStatus='outside_parking';}
+    if(kind==='release'){t.gateReleaseTime=t.gateReleaseTime||ts;t.waitingAreaTime=t.waitingAreaTime||ts;t.operationStatus='inside_waiting';}
+    if(kind==='start'){t.unloadStartTime=t.unloadStartTime||ts;t.operationStatus='unloading';}
+    if(kind==='finish'){t.unloadFinishTime=t.unloadFinishTime||ts;t.operationStatus='unloaded';t.status=(N(t.from)==='港口'||N(t.from)==='RG堆场')?'return_pending':'completed';}
+    t.updatedAt=now();renderContent();
+    const ok=await saveVerified('factory_'+kind+'_'+(t.containerNo||t.id));if(!ok){if(snapshot)applyCloudState(snapshot);renderContent();return alert('云端保存失败，本次工厂操作已撤销。');}
+  }
+  window.confirmGateArrival=id=>factoryAction(id,'gate');window.releaseFromGate=id=>factoryAction(id,'release');window.startUnloading=id=>factoryAction(id,'start');window.finishUnloading=id=>factoryAction(id,'finish');
+
+  window.auditAndRepairFactoryFlowV458=async function(show=true){
+    const ids=uniqueTaskIds(),stale=resetStaleFactoryExecution(),changed=ids+stale;
+    if(changed){const ok=await saveVerified('factory_audit_v458');if(!ok)return false;renderContent();}
+    if(show)alert(`工厂流程检查完成：\n修复重复/空任务ID：${ids}\n重置错误继承的门岗/卸货状态：${stale}`);return true;
+  };
+
+  const oldRenderContainers=window.renderContainers;
+  if(typeof oldRenderContainers==='function')window.renderContainers=renderContainers=function(container){oldRenderContainers(container);const head=container?.querySelector('.card-header>div');if(head&&!document.getElementById('btnAuditFactoryV458')){const b=document.createElement('button');b.id='btnAuditFactoryV458';b.className='btn btn-warning';b.textContent='🧭 检查工厂流程异常';b.onclick=()=>auditAndRepairFactoryFlowV458(true);head.insertBefore(b,head.firstChild);}};
+
+  window.addEventListener('beforeunload',e=>{if(window.__v458ImportSaving){e.preventDefault();e.returnValue='数据仍在保存到云端，请稍候。';}});
+  setTimeout(()=>{try{uniqueTaskIds();}catch(e){}},1000);
+  try{document.title='Sistema Inteligente de Monitoramento de Contêineres V45.8';}catch(e){}
+  console.log('V45.8 loaded: syntax repaired, import persistence, clean factory task lifecycle, robust gate actions');
+})();
+</script>
+
 </body>
 </html>
