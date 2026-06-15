@@ -13435,5 +13435,251 @@ ${preview}
 
 </script>
 
+<script>
+/* ==================== V45.14 Experience Edition ====================
+   Full pt-BR UI, factory operating window, friendly diagnostics,
+   richer reports, faster rendering, and deletion tombstones.
+*/
+(function(){
+  'use strict';
+  const VERSION = 'V45.14 Experience Edition';
+  const DAY_MS = 86400000;
+  const tombstoneKey = 'v4514DeletedContainers';
+  const maxTombstones = 5000;
+  const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const norm = v => String(v == null ? '' : v).trim();
+  const upper = v => norm(v).toUpperCase();
+  const arr = v => Array.isArray(v) ? v : [];
+  const nowIso = () => new Date().toISOString();
+  const lang = () => (typeof currentLang !== 'undefined' ? currentLang : localStorage.getItem('cc_lang')) || 'pt-BR';
+  const isPt = () => lang() === 'pt-BR';
+
+  /* ---------- compact notifications and friendly errors ---------- */
+  function ensureToastHost(){
+    let host=document.getElementById('v4514ToastHost');
+    if(host) return host;
+    host=document.createElement('div'); host.id='v4514ToastHost';
+    host.style.cssText='position:fixed;right:18px;top:76px;z-index:99999;display:flex;flex-direction:column;gap:8px;max-width:min(440px,calc(100vw - 36px));pointer-events:none';
+    document.body.appendChild(host); return host;
+  }
+  function toast(message,type='info',timeout=3200){
+    const host=ensureToastHost(); const el=document.createElement('div');
+    const bg={success:'#ecf9f0',error:'#fff0f0',warning:'#fff8e8',info:'#eef6ff'}[type]||'#eef6ff';
+    const border={success:'#67c23a',error:'#f56c6c',warning:'#e6a23c',info:'#409eff'}[type]||'#409eff';
+    el.style.cssText=`pointer-events:auto;background:${bg};border-left:4px solid ${border};box-shadow:0 8px 26px rgba(0,0,0,.16);padding:11px 14px;border-radius:8px;color:#303133;font-size:13px;line-height:1.5;white-space:pre-wrap`;
+    el.textContent=message; host.appendChild(el); setTimeout(()=>{el.style.opacity='0';el.style.transition='opacity .2s';setTimeout(()=>el.remove(),220);},timeout);
+  }
+  function friendlyError(err,context){
+    const raw=norm(err && (err.message||err.details||err.hint||err) || '');
+    let msg=raw || (isPt()?'Erro desconhecido.':'未知错误');
+    if(/statement timeout|canceling statement/i.test(raw)) msg=isPt()?'O salvamento excedeu o tempo limite. Aguarde alguns segundos e tente novamente.':'云端保存超时，请稍候后重试。';
+    else if(/failed to fetch|network|fetch/i.test(raw)) msg=isPt()?'Falha de conexão com a nuvem. Verifique a rede e tente novamente.':'云端连接失败，请检查网络后重试。';
+    else if(/jwt|session|auth/i.test(raw)) msg=isPt()?'A sessão expirou. Entre novamente no sistema.':'登录会话已失效，请重新登录。';
+    else if(/duplicate|unique/i.test(raw)) msg=isPt()?'Foi detectado um registro duplicado. Abra o Centro de Diagnóstico de Dados.':'检测到重复记录，请打开数据体检中心处理。';
+    return (context?context+'：':'')+msg;
+  }
+  window.v4514Toast=toast;
+  window.v4514FriendlyError=friendlyError;
+  window.addEventListener('unhandledrejection',e=>{console.error('V45.14 unhandled rejection',e.reason);toast(friendlyError(e.reason,isPt()?'Falha na operação':'操作失败'),'error',6000);});
+  window.addEventListener('error',e=>{if(!e.error)return;console.error('V45.14 runtime error',e.error);toast(friendlyError(e.error,isPt()?'Erro do sistema':'系统错误'),'error',6000);});
+
+  /* ---------- full Brazilian Portuguese dictionary ---------- */
+  const PT={
+    '数据体检中心':'Centro de Diagnóstico de Dados','发现':'Detectado','项数据异常':' inconsistências de dados','重新扫描':'Escanear novamente','执行安全修复':'Executar correção segura','下载诊断报告':'Baixar relatório de diagnóstico','下载部署前备份':'Baixar backup pré-implantação','异常类型':'Tipo de inconsistência','说明':'Descrição','未发现异常':'Nenhuma inconsistência encontrada','数据一致':'Dados consistentes','基础数据':'Dados básicos','有效运输任务':'Tarefas de transporte ativas','异常项目':'Inconsistências','重复运输任务':'Tarefa de transporte duplicada','路线冲突':'Conflito de rota','孤立计划':'Plano sem tarefa vinculada','孤立任务':'Tarefa sem contêiner vinculado','工厂状态冲突':'Conflito de status da fábrica','位置冲突':'Conflito de localização','还箱流程断链':'Fluxo de devolução interrompido','历史状态污染':'Status histórico inconsistente','删除记录保护':'Proteção de registros excluídos','已删除记录':'Registros excluídos','解除删除标记':'Remover marca de exclusão','删除时间':'Data da exclusão','删除账号':'Usuário que excluiu',
+    '工厂作业时间':'Horário de operação da fábrica','开始时间':'Horário inicial','结束时间':'Horário final','超出作业时间处理':'Tratamento fora do horário','仅提示，允许继续':'Somente alertar e permitir','禁止发布':'Bloquear publicação','不检查':'Não verificar','保存作业时间':'Salvar horário de operação','当前作业窗口':'Janela operacional atual','计划时间超出工厂作业窗口':'O horário planejado está fora da janela de operação da fábrica','是否仍然继续发布？':'Deseja continuar a publicação?','工厂时间配置已保存':'Configuração de horário da fábrica salva',
+    '费用报表':'Relatório de custos','报表生成时间':'Gerado em','参与统计集装箱':'Contêineres no relatório','未完成清关':'Desembaraço pendente','已清关未提箱':'Desembaraçado aguardando retirada','待还箱':'Aguardando devolução','平均到港至清关':'Média porto → desembaraço','平均清关至提箱':'Média desembaraço → retirada','天':'dias','仅显示异常费用':'Mostrar somente custos anormais','搜索批次/箱号':'Pesquisar lote / contêiner','清除筛选':'Limpar filtros','正常堆存费':'Armazenagem normal','堆存费合计':'Total de armazenagem','费用计算截止日期':'Data limite do cálculo','说明':'Observação','到港日期':'Data de chegada ao porto','提箱日期':'Data de retirada','堆存天数':'Dias de armazenagem','滞箱费(美元)':'Demurrage (USD)','正常堆存费(雷亚尔)':'Armazenagem normal (BRL)','异常堆存费(雷亚尔)':'Armazenagem anormal (BRL)','堆存费合计(雷亚尔)':'Total de armazenagem (BRL)','到港→清关用时(天)':'Porto → desembaraço (dias)','清关完成→提箱间隔(天)':'Desembaraço → retirada (dias)',
+    '确定删除？':'Confirmar exclusão?','删除中…':'Excluindo…','删除成功':'Exclusão concluída','删除失败':'Falha ao excluir','该集装箱及其关联计划、运输任务、库存和还箱记录将被删除。':'O contêiner e seus planos, tarefas de transporte, estoque e registros de devolução vinculados serão excluídos.','记录已从页面移除，正在同步到云端…':'O registro foi removido da tela e está sendo sincronizado com a nuvem…','云端验证成功':'Validação na nuvem concluída','请勿重复点击':'Não clique novamente','当前记录不存在或已被删除':'O registro não existe ou já foi excluído',
+    '保存中…':'Salvando…','已保存到云端':'Salvo na nuvem','保存失败':'Falha ao salvar','操作失败':'Falha na operação','系统错误':'Erro do sistema','请刷新后重试':'Atualize a página e tente novamente','未找到当前运输任务':'A tarefa de transporte atual não foi encontrada','未找到当前工厂到货任务':'A tarefa atual de chegada à fábrica não foi encontrada','请先确认到门口，再放行进厂。':'Confirme primeiro a chegada à portaria antes de liberar a entrada.','车辆尚未进入工厂内等待，不能开始卸货。':'O veículo ainda não está aguardando dentro da fábrica; a descarga não pode ser iniciada.','车辆尚未进入卸货流程，不能确认掏箱完成。':'O veículo ainda não entrou no fluxo de descarga; não é possível confirmar a desova.',
+    '工厂日历':'Calendário da fábrica','返回生产计划':'Voltar ao plano de produção','使用方法':'Como usar','上一段':'Período anterior','起始日期':'Data inicial','回到今天':'Voltar para hoje','下一段':'Próximo período','批量维护':'Manutenção em lote','当前显示':'Período exibido','工作':'Dia útil','休息':'Folga','假日':'Feriado','加班':'Trabalho extra','备注':'Observação','设置加班后排产':'Definir trabalho extra e planejar produção','不需要维护计划':'Não é necessário cadastrar plano','必填计划未维护':'Plano obrigatório ainda não cadastrado','可选未维护':'Plano opcional não cadastrado',
+    '基础数据导入':'Importação de dados básicos','添加成功':'Adicionado com sucesso','保存成功':'Salvo com sucesso','编辑集装箱':'Editar contêiner','添加集装箱':'Adicionar contêiner','批量导入基础数据':'Importar dados básicos em lote','导入完成':'Importação concluída','数据恢复中心':'Centro de Recuperação de Dados','备份文件为空，禁止恢复。':'O arquivo de backup está vazio; a restauração foi bloqueada.','数据已成功恢复并写入云端。':'Dados restaurados e gravados na nuvem com sucesso.',
+    '确认到门口':'Confirmar chegada à portaria','放行进厂':'Liberar entrada na fábrica','开始卸货':'Iniciar descarga','确认掏箱完成':'Confirmar desova concluída','确认提箱':'Confirmar retirada','确认到达':'Confirmar chegada','确认掏箱':'Confirmar desova','确认还箱':'Confirmar devolução','实际提箱日期':'Data real de retirada','预计到达时间':'Horário previsto de chegada','计划到达时间':'Horário planejado de chegada','工厂外停车区':'Estacionamento externo da fábrica','工厂内等待':'Aguardando dentro da fábrica','卸货完成':'Descarga concluída','已完成卸货':'Descarga concluída',
+    '提箱计划':'Plano de retirada','运输任务':'Tarefas de transporte','动态运输计划':'Plano dinâmico de transporte','港口提箱任务':'Tarefas de retirada no porto','其他运输任务':'Outras tarefas de transporte','已发布的提箱计划':'Planos de retirada publicados','已发布的运输计划':'Planos de transporte publicados','待发布集装箱':'Contêineres aguardando publicação','暂无符合条件的待发布集装箱':'Nenhum contêiner pendente correspondente','暂无符合条件的已发布提箱计划':'Nenhum plano de retirada publicado correspondente','已有待确认计划':'Já existe um plano aguardando confirmação','计划已发布':'Plano publicado','计划已修改，需运输公司重新确认':'Plano alterado; a transportadora deve confirmar novamente','目的地为工厂时，卸货口必填':'A doca é obrigatória quando o destino é a fábrica','非工厂可不填':'Opcional para destinos que não sejam a fábrica','到工厂必填':'Obrigatório para a fábrica',
+    '生产计划维护':'Manutenção do plano de produção','生产计划确认':'Confirmação do plano de produção','预排产':'Pré-planejamento de produção','实际完成数量':'Quantidade real concluída','计划数量':'Quantidade planejada','生产日':'Dia de produção','第1生产日':'1º dia de produção','第2生产日':'2º dia de produção','第3生产日':'3º dia de produção','必填':'Obrigatório','可选':'Opcional','计划未维护':'Plano não cadastrado','全部历史未确认计划':'Todos os planos históricos não confirmados',
+    '清关维护':'Manutenção do desembaraço','清关完成':'Desembaraço concluído','清关通道已保存':'Canal de desembaraço salvo','请选择清关完成时间':'Selecione a data/hora de conclusão do desembaraço','已撤销':'Revertido','待维护IRA':'IRA pendente de manutenção','提单/IRA管理':'Gestão de BL / IRA','费率配置':'Configuração de tarifas','所有配置已保存，费用将重新计算':'Todas as configurações foram salvas; os custos serão recalculados',
+    '账号权限管理':'Gestão de contas e permissões','附件中心':'Centro de anexos','系统信息':'Informações do sistema','自动备份中心':'Centro de backup automático','工作台':'Painel','物流运营工作台':'Painel operacional logístico','生产保供看板':'Painel de abastecimento da produção','库存看板':'Painel de estoque','生产完成确认':'Confirmação de produção','还箱确认':'Confirmação de devolução','到货确认':'Confirmação de chegada','门岗登记':'Registro na portaria','卸货口收货':'Recebimento na doca',
+    '批次':'Lote','批次号':'Lote','集装箱号':'Nº do contêiner','集装箱序号':'Seq. do contêiner','序号':'Seq.','船公司':'Armador','箱型':'Tipo de contêiner','到港时间':'Chegada ao porto','提单号':'BL','主提单号':'Master BL','分提单号':'House BL','IRA号':'IRA','当前位置':'Local atual','清关状态':'Status do desembaraço','运输状态':'Status do transporte','操作':'Ação','查询':'Pesquisar','重置':'Limpar','新增':'Adicionar','编辑':'Editar','删除':'Excluir','保存':'Salvar','取消':'Cancelar','关闭':'Fechar','导入':'Importar','导出':'Exportar','下载':'Baixar','刷新':'Atualizar','确认':'Confirmar','发布':'Publicar','复制':'Copiar','展开查看':'Expandir','收起':'Recolher','全部地点':'Todos os locais','运输公司':'Transportadora','目的地':'Destino','来源地':'Origem','出发地':'Origem','卸货口':'Doca','车型':'Tipo de veículo','状态':'Status','日期':'Data','数量':'Quantidade','合计':'Total','总计':'Total'
+  };
+
+  function addPtDictionary(){
+    try{ if(typeof i18nMap!=='undefined') i18nMap['pt-BR']=Object.assign(i18nMap['pt-BR']||{},PT); }catch(e){}
+  }
+  function translateDynamic(s){
+    if(!isPt() || s==null) return s;
+    let out=String(s);
+    out=out.replace(/发现\s*(\d+)\s*项数据异常/g,'Detectadas $1 inconsistências de dados');
+    out=out.replace(/发现\s*(\d+)\s*项/g,'Detectados $1 itens');
+    out=out.replace(/成功发布\s*(\d+)\s*个计划/g,'$1 planos publicados com sucesso');
+    out=out.replace(/成功发布\s*(\d+)\s*个RG动态运输计划/g,'$1 planos dinâmicos RG publicados com sucesso');
+    out=out.replace(/第\s*(\d+)\s*个?生产日/g,'$1º dia de produção');
+    out=out.replace(/(\d+)\s*天内将产生滞箱费/g,'Demurrage prevista em $1 dias');
+    Object.keys(PT).sort((a,b)=>b.length-a.length).forEach(k=>{if(k&&out.includes(k))out=out.split(k).join(PT[k]);});
+    return out;
+  }
+  addPtDictionary();
+  window.v4514Translate=translateDynamic;
+  window.t=function(text){
+    if(lang()==='zh-CN')return text;
+    if(lang()==='pt-BR')return translateDynamic(text);
+    try{return (typeof i18nMap!=='undefined'&&i18nMap[lang()]&&i18nMap[lang()][text])||text;}catch(e){return text;}
+  };
+
+  const translatedCache=new WeakMap();
+  function translateRoot(root){
+    if(!root||!isPt())return;
+    const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode(node){const p=node.parentElement;if(!node.nodeValue||!node.nodeValue.trim()||!p||['SCRIPT','STYLE','TEXTAREA','CODE','PRE'].includes(p.tagName))return NodeFilter.FILTER_REJECT;return NodeFilter.FILTER_ACCEPT;}});
+    const nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);
+    nodes.forEach(node=>{const old=node.nodeValue;if(translatedCache.get(node)===old)return;const next=translateDynamic(old);if(next!==old)node.nodeValue=next;translatedCache.set(node,node.nodeValue);});
+    root.querySelectorAll&&root.querySelectorAll('[placeholder],[title],[aria-label],input[type="button"],input[type="submit"],option').forEach(el=>{
+      ['placeholder','title','aria-label'].forEach(a=>{const v=el.getAttribute&&el.getAttribute(a);if(v){const n=translateDynamic(v);if(n!==v)el.setAttribute(a,n);}});
+      if(el.tagName==='INPUT'&&['button','submit'].includes(el.type)){const n=translateDynamic(el.value);if(n!==el.value)el.value=n;}
+      if(el.tagName==='OPTION'){const n=translateDynamic(el.textContent);if(n!==el.textContent)el.textContent=n;}
+    });
+  }
+  let languageRaf=0;
+  window.applyLanguage=applyLanguage=function(root){
+    addPtDictionary();const sel=document.getElementById('languageSelect');if(sel)sel.value=lang();document.documentElement.lang=lang();
+    if(languageRaf)cancelAnimationFrame(languageRaf);
+    languageRaf=requestAnimationFrame(()=>{languageRaf=0;translateRoot(root||document.getElementById('mainApp')||document.body);});
+  };
+  window.setLanguage=function(newLang){currentLang=newLang||'pt-BR';localStorage.setItem('cc_lang',currentLang);document.documentElement.lang=currentLang;try{renderSidebar();renderContent();}catch(e){}setTimeout(()=>window.applyLanguage(document.body),0);};
+  const languageObserver=new MutationObserver(list=>{if(!isPt())return;const roots=[];list.forEach(m=>m.addedNodes.forEach(n=>{if(n.nodeType===1)roots.push(n);else if(n.nodeType===3&&n.parentElement)roots.push(n.parentElement);}));if(roots.length)requestAnimationFrame(()=>roots.slice(0,80).forEach(translateRoot));});
+  setTimeout(()=>{try{languageObserver.observe(document.body,{childList:true,subtree:true});window.applyLanguage(document.body);}catch(e){}},300);
+
+  /* ---------- factory operating time configuration ---------- */
+  function factoryCfg(){
+    if(typeof warningConfig==='undefined'||!warningConfig)warningConfig={storageWarningDays:5,demurrageWarningDays:7};
+    if(!warningConfig.factoryTimeConfig)warningConfig.factoryTimeConfig={enabled:true,start:'06:00',end:'01:00',mode:'warn'};
+    return warningConfig.factoryTimeConfig;
+  }
+  function minutesOf(value){const m=norm(value).match(/(\d{1,2}):(\d{2})/);return m?Number(m[1])*60+Number(m[2]):null;}
+  function withinFactoryWindow(dateTime){
+    const cfg=factoryCfg();if(!cfg.enabled||cfg.mode==='off'||!dateTime)return true;
+    const t=minutesOf(String(dateTime).slice(11,16));if(t==null)return true;
+    const start=minutesOf(cfg.start),end=minutesOf(cfg.end);if(start==null||end==null)return true;
+    return start<=end ? (t>=start&&t<=end) : (t>=start||t<=end);
+  }
+  function allowFactoryTime(dest,dateTime){
+    if(!['工厂','Fábrica','Factory','GWM'].includes(norm(dest))||withinFactoryWindow(dateTime))return true;
+    const cfg=factoryCfg();const msg=(isPt()?`O horário planejado ${String(dateTime).replace('T',' ')} está fora da janela operacional ${cfg.start}–${cfg.end}.`:`计划时间 ${String(dateTime).replace('T',' ')} 超出工厂作业窗口 ${cfg.start}–${cfg.end}。`);
+    if(cfg.mode==='block'){toast(msg,'error',5500);return false;}
+    return confirm(msg+'\n'+(isPt()?'Deseja continuar a publicação?':'是否仍然继续发布？'));
+  }
+  window.isWithinFactoryWindowV4514=withinFactoryWindow;
+  window.saveFactoryTimeConfigV4514=async function(){
+    const start=document.getElementById('v4514FactoryStart')?.value||'06:00',end=document.getElementById('v4514FactoryEnd')?.value||'01:00',mode=document.getElementById('v4514FactoryMode')?.value||'warn';
+    warningConfig.factoryTimeConfig={enabled:mode!=='off',start,end,mode,updatedAt:nowIso(),updatedBy:(typeof cloudUser!=='undefined'&&cloudUser?.email)||(typeof currentUser!=='undefined'&&(currentUser?.email||currentUser?.name))||''};
+    const fn=window.queueSystemSaveV4513||window.queueSaveV455||window.saveCloudState;const ok=typeof fn==='function'?await fn('factory_time_config'):false;
+    toast(ok===false?(isPt()?'Falha ao salvar a configuração.':'配置保存失败'):(isPt()?'Configuração de horário da fábrica salva.':'工厂时间配置已保存'),ok===false?'error':'success');
+  };
+  function injectFactoryConfig(){
+    const main=document.getElementById('mainContent');if(!main||document.getElementById('v4514FactoryTimeCard'))return;
+    const card=main.querySelector('.card');if(!card)return;const cfg=factoryCfg();const box=document.createElement('div');box.id='v4514FactoryTimeCard';box.className='factory-calendar-alert';box.style.cssText='background:#eef6ff;border:1px solid #b3d8ff;margin:12px 0;padding:14px;border-radius:8px';
+    box.innerHTML=`<div style="font-weight:700;margin-bottom:9px">⏰ ${isPt()?'Horário de operação da fábrica':'工厂作业时间'}</div><div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap"><label>${isPt()?'Horário inicial':'开始时间'}<input id="v4514FactoryStart" type="time" class="form-control" value="${esc(cfg.start)}" style="width:130px"></label><label>${isPt()?'Horário final':'结束时间'}<input id="v4514FactoryEnd" type="time" class="form-control" value="${esc(cfg.end)}" style="width:130px"></label><label>${isPt()?'Tratamento fora do horário':'超出作业时间处理'}<select id="v4514FactoryMode" class="form-control" style="min-width:220px"><option value="warn" ${cfg.mode==='warn'?'selected':''}>${isPt()?'Somente alertar e permitir':'仅提示，允许继续'}</option><option value="block" ${cfg.mode==='block'?'selected':''}>${isPt()?'Bloquear publicação':'禁止发布'}</option><option value="off" ${cfg.mode==='off'?'selected':''}>${isPt()?'Não verificar':'不检查'}</option></select></label><button class="btn btn-primary" onclick="saveFactoryTimeConfigV4514()">${isPt()?'Salvar horário de operação':'保存作业时间'}</button></div><div style="font-size:12px;color:#606266;margin-top:8px">${isPt()?'A janela pode atravessar a meia-noite. Configuração padrão: 06:00–01:00.':'作业窗口允许跨越午夜，默认06:00–01:00。'}</div>`;
+    const header=card.querySelector('.card-header');if(header)header.insertAdjacentElement('afterend',box);else card.prepend(box);
+  }
+  const oldFactoryCalendar=window.renderFactoryCalendar;
+  if(typeof oldFactoryCalendar==='function')window.renderFactoryCalendar=renderFactoryCalendar=function(){const r=oldFactoryCalendar.apply(this,arguments);injectFactoryConfig();window.applyLanguage(document.getElementById('mainContent'));return r;};
+
+  function wrapFactoryPublish(name,checker){
+    const old=window[name];if(typeof old!=='function'||old.__v4514Factory)return;
+    const fn=function(){try{if(checker&&!checker.apply(this,arguments))return;}catch(e){toast(friendlyError(e,isPt()?'Falha ao validar horário':'时间校验失败'),'error');return;}return old.apply(this,arguments);};fn.__v4514Factory=true;window[name]=fn;try{eval(name+'=window[name]');}catch(e){}
+  }
+  wrapFactoryPublish('publishSingle',id=>allowFactoryTime(document.getElementById(`dest_${id}`)?.value,document.getElementById(`arrival_${id}`)?.value));
+  wrapFactoryPublish('batchPublish',()=>{for(const cb of document.querySelectorAll('.pickup-checkbox:checked')){const id=cb.dataset.id;if(!allowFactoryTime(document.getElementById(`dest_${id}`)?.value,document.getElementById(`arrival_${id}`)?.value))return false;}return true;});
+  wrapFactoryPublish('publishDynamicSingle',id=>allowFactoryTime(document.getElementById(`dynDest_${id}`)?.value,document.getElementById(`dynEta_${id}`)?.value));
+  wrapFactoryPublish('batchPublishDynamic',()=>{for(const cb of document.querySelectorAll('.dynamic-checkbox:checked')){const id=cb.dataset.id;if(!allowFactoryTime(document.getElementById(`dynDest_${id}`)?.value,document.getElementById(`dynEta_${id}`)?.value))return false;}return true;});
+
+  /* ---------- deletion tombstones ---------- */
+  function tombstones(){
+    if(typeof warningConfig==='undefined'||!warningConfig)warningConfig={storageWarningDays:5,demurrageWarningDays:7};
+    if(!Array.isArray(warningConfig[tombstoneKey]))warningConfig[tombstoneKey]=[];
+    return warningConfig[tombstoneKey];
+  }
+  function tombMatches(t,c){return !!(t&&c&&((t.containerNo&&upper(t.containerNo)===upper(c.containerNo))||(t.containerId!==undefined&&norm(t.containerId)===norm(c.id))));}
+  function removeCascade(c){
+    if(!c)return 0;const id=c.id,no=upper(c.containerNo);let count=0;
+    const filter=(list,pred)=>{const before=arr(list).length;const out=arr(list).filter(x=>!pred(x));count+=before-out.length;return out;};
+    containers=filter(containers,x=>norm(x.id)===norm(id)||upper(x.containerNo)===no);
+    containerBlMap=filter(containerBlMap,x=>norm(x.containerId)===norm(id));
+    transportTasks=filter(transportTasks,x=>norm(x.containerId)===norm(id)||upper(x.containerNo)===no);
+    locationStock=filter(locationStock,x=>norm(x.containerId)===norm(id)||upper(x.containerNo)===no);
+    returnRecords=filter(returnRecords,x=>norm(x.containerId)===norm(id)||upper(x.containerNo)===no);
+    pickupPlans=filter(pickupPlans,x=>norm(x.containerId)===norm(id)||upper(x.containerNo)===no);
+    const used=new Set(arr(containerBlMap).map(x=>x.blNo));
+    blList=arr(blList).filter(bl=>(bl.blNo&&used.has(bl.blNo))||(bl.houseBlNo&&used.has(bl.houseBlNo))||(bl.masterBlNo&&used.has(bl.masterBlNo)));
+    return count;
+  }
+  function applyTombstones(){
+    const list=tombstones();if(!list.length)return 0;let removed=0;
+    arr(containers).slice().forEach(c=>{if(list.some(t=>tombMatches(t,c)))removed+=removeCascade(c);});
+    return removed;
+  }
+  window.applyContainerTombstonesV4514=applyTombstones;
+  function addTombstone(c){
+    const list=tombstones();const old=list.find(t=>tombMatches(t,c));
+    if(old){old.deletedAt=nowIso();old.deletedBy=(typeof cloudUser!=='undefined'&&cloudUser?.email)||(typeof currentUser!=='undefined'&&(currentUser?.email||currentUser?.name))||'';return old;}
+    const row={containerId:c.id,containerNo:c.containerNo,batch:c.batch||'',deletedAt:nowIso(),deletedBy:(typeof cloudUser!=='undefined'&&cloudUser?.email)||(typeof currentUser!=='undefined'&&(currentUser?.email||currentUser?.name))||''};list.push(row);
+    warningConfig[tombstoneKey]=list.sort((a,b)=>String(b.deletedAt).localeCompare(String(a.deletedAt))).slice(0,maxTombstones);return row;
+  }
+  let deleting=false;
+  window.deleteContainer=async function(id){
+    if(deleting){toast(isPt()?'Uma exclusão já está sendo processada. Não clique novamente.':'已有删除操作正在处理，请勿重复点击。','warning');return;}
+    const c=arr(containers).find(x=>norm(x.id)===norm(id));if(!c){toast(isPt()?'O registro não existe ou já foi excluído.':'当前记录不存在或已被删除','warning');return;}
+    const message=(isPt()?`Confirmar exclusão de ${c.containerNo || '-'} (${c.batch || '-'})?\nO contêiner e seus planos, tarefas de transporte, estoque e registros de devolução vinculados serão excluídos.`:`确认删除 ${c.containerNo||'-'}（${c.batch||'-'}）？\n该集装箱及其关联计划、运输任务、库存和还箱记录将被删除。`);
+    if(!confirm(message))return;
+    deleting=true;const snapshot=typeof getCloudStatePayload==='function'?JSON.parse(JSON.stringify(getCloudStatePayload())):null;
+    try{
+      addTombstone(c);removeCascade(c);try{renderContainerTable();}catch(e){try{renderContent();}catch(_){}}toast(isPt()?'O registro foi removido da tela e está sendo sincronizado com a nuvem…':'记录已从页面移除，正在同步到云端…','info',5000);
+      const save=window.queueSystemSaveV4513||window.queueSaveV455||window.saveCloudState;if(typeof save!=='function')throw new Error('Save queue unavailable');
+      let ok=await save('delete_container_tombstone_1');if(ok===false)throw new Error('Cloud save failed');
+      applyTombstones();ok=await save('delete_container_tombstone_2');if(ok===false)throw new Error('Cloud verification save failed');
+      applyTombstones();toast((isPt()?'Exclusão concluída: ':'删除成功：')+(c.containerNo||''),'success');
+    }catch(e){console.error(e);if(snapshot&&typeof applyCloudState==='function')applyCloudState(snapshot);try{renderContainerTable();}catch(_){try{renderContent();}catch(__){}}toast(friendlyError(e,isPt()?'Falha ao excluir':'删除失败'),'error',7000);
+    }finally{deleting=false;}
+  };
+  const oldLoad=window.loadCloudState;
+  if(typeof oldLoad==='function')window.loadCloudState=loadCloudState=async function(){const ok=await oldLoad.apply(this,arguments);const n=applyTombstones();if(n){const save=window.queueSystemSaveV4513||window.queueSaveV455;if(typeof save==='function')setTimeout(()=>save('apply_delete_tombstones'),50);}return ok;};
+  const oldRenderContainer=window.renderContainerTable;
+  if(typeof oldRenderContainer==='function')window.renderContainerTable=renderContainerTable=function(){applyTombstones();const r=oldRenderContainer.apply(this,arguments);window.applyLanguage(document.getElementById('mainContent'));return r;};
+
+  /* show tombstones in data clinic and allow intentional re-import */
+  window.removeDeleteMarkerV4514=async function(containerNo){
+    if(!confirm(isPt()?`Remover a marca de exclusão de ${containerNo}? Isso permite importar o contêiner novamente.`:`解除 ${containerNo} 的删除标记？解除后可重新导入该集装箱。`))return;
+    warningConfig[tombstoneKey]=tombstones().filter(t=>upper(t.containerNo)!==upper(containerNo));const save=window.queueSystemSaveV4513||window.queueSaveV455||window.saveCloudState;const ok=await save('remove_delete_marker');toast(ok===false?(isPt()?'Falha ao salvar.':'保存失败'):(isPt()?'Marca de exclusão removida.':'删除标记已解除'),ok===false?'error':'success');try{renderDataClinicV4513(document.getElementById('mainContent'));}catch(e){}
+  };
+  const oldClinic=window.renderDataClinicV4513;
+  if(typeof oldClinic==='function')window.renderDataClinicV4513=function(container){applyTombstones();const r=oldClinic.apply(this,arguments);const list=tombstones();if(list.length){const card=document.createElement('div');card.className='card';card.innerHTML=`<div class="card-header"><span class="card-title">🗑️ ${isPt()?'Proteção de registros excluídos':'删除记录保护'}</span><span class="status-badge status-warning">${list.length}</span></div><div style="font-size:13px;color:#606266;margin-bottom:10px">${isPt()?'Essas marcas impedem que versões antigas da nuvem recriem contêineres excluídos.':'这些删除标记可防止云端旧版本把已删除集装箱重新补回。'}</div><div class="table-wrapper"><table class="data-table"><thead><tr><th>${isPt()?'Contêiner':'集装箱号'}</th><th>${isPt()?'Lote':'批次'}</th><th>${isPt()?'Data da exclusão':'删除时间'}</th><th>${isPt()?'Usuário':'删除账号'}</th><th>${isPt()?'Ação':'操作'}</th></tr></thead><tbody>${list.slice(0,200).map(t=>`<tr><td>${esc(t.containerNo||'-')}</td><td>${esc(t.batch||'-')}</td><td>${esc(t.deletedAt||'-')}</td><td>${esc(t.deletedBy||'-')}</td><td><button class="btn btn-sm btn-warning" onclick="removeDeleteMarkerV4514('${esc(t.containerNo)}')">${isPt()?'Remover marca':'解除删除标记'}</button></td></tr>`).join('')}</tbody></table></div>`;container.appendChild(card);}window.applyLanguage(container);return r;};
+
+  /* ---------- richer cost report ---------- */
+  function avg(values){const a=values.map(Number).filter(Number.isFinite);return a.length?(a.reduce((x,y)=>x+y,0)/a.length):0;}
+  function enhanceFeeReport(){
+    if(typeof currentMenu!=='undefined'&&currentMenu!=='feeReport')return;const main=document.getElementById('mainContent');if(!main||document.getElementById('v4514FeeEnhance'))return;
+    const table=main.querySelector('#feeTable table');const card=main.querySelector('.card');if(!card)return;
+    const pendingCustoms=arr(containers).filter(c=>typeof getContainerClearanceCompleteDate==='function'&&!getContainerClearanceCompleteDate(c)).length;
+    const clearedPending=arr(containers).filter(c=>typeof getContainerClearanceCompleteDate==='function'&&getContainerClearanceCompleteDate(c)&&!c.actualPickupTime).length;
+    const pendingReturn=arr(returnRecords).filter(r=>r.type==='return_needed'&&!r.isReturnConfirmed).length;
+    const a2c=[],c2p=[];arr(containers).forEach(c=>{try{const clr=getContainerClearanceCompleteDate(c);const x=getArrivalToClearanceDays(c.eta,clr),y=getClearanceToPickupDays(clr,c.actualPickupTime);if(Number.isFinite(Number(x)))a2c.push(Number(x));if(Number.isFinite(Number(y)))c2p.push(Number(y));}catch(e){}});
+    const box=document.createElement('div');box.id='v4514FeeEnhance';box.innerHTML=`<div class="fee-card" style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><b>📊 ${isPt()?'Detalhes do relatório':'报表细节'}</b><span style="color:#909399;font-size:12px">${isPt()?'Gerado em':'报表生成时间'}: ${new Date().toLocaleString(isPt()?'pt-BR':'zh-CN')}</span></div><div class="stats-grid" style="margin-top:10px"><div class="stat-card"><div class="stat-number">${arr(containers).length}</div><div class="stat-label">${isPt()?'Contêineres no relatório':'参与统计集装箱'}</div></div><div class="stat-card"><div class="stat-number">${pendingCustoms}</div><div class="stat-label">${isPt()?'Desembaraço pendente':'未完成清关'}</div></div><div class="stat-card"><div class="stat-number">${clearedPending}</div><div class="stat-label">${isPt()?'Desembaraçado aguardando retirada':'已清关未提箱'}</div></div><div class="stat-card"><div class="stat-number">${pendingReturn}</div><div class="stat-label">${isPt()?'Aguardando devolução':'待还箱'}</div></div><div class="stat-card"><div class="stat-number">${avg(a2c).toFixed(1)} ${isPt()?'dias':'天'}</div><div class="stat-label">${isPt()?'Média porto → desembaraço':'平均到港至清关'}</div></div><div class="stat-card"><div class="stat-number">${avg(c2p).toFixed(1)} ${isPt()?'dias':'天'}</div><div class="stat-label">${isPt()?'Média desembaraço → retirada':'平均清关至提箱'}</div></div></div><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px"><input id="v4514FeeSearch" class="form-control" style="max-width:280px" placeholder="${isPt()?'Pesquisar lote / contêiner':'搜索批次/箱号'}" oninput="filterFeeRowsV4514()"><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="v4514OnlyAbnormal" onchange="filterFeeRowsV4514()"> ${isPt()?'Mostrar somente custos anormais':'仅显示异常费用'}</label><button class="btn" onclick="document.getElementById('v4514FeeSearch').value='';document.getElementById('v4514OnlyAbnormal').checked=false;filterFeeRowsV4514()">${isPt()?'Limpar filtros':'清除筛选'}</button></div></div>`;
+    const stats=card.querySelector('.stats-grid');if(stats)stats.insertAdjacentElement('afterend',box);else card.prepend(box);if(table)table.dataset.v4514='1';window.applyLanguage(box);
+  }
+  window.filterFeeRowsV4514=function(){const q=upper(document.getElementById('v4514FeeSearch')?.value),only=!!document.getElementById('v4514OnlyAbnormal')?.checked;const rows=document.querySelectorAll('#feeTable tbody tr');rows.forEach(r=>{const txt=upper(r.textContent);let abnormal=false;try{const cells=r.querySelectorAll('td');const abnormalText=cells[12]?.textContent||'';const demText=cells[14]?.textContent||'';abnormal=(parseFloat(abnormalText.replace(/[^0-9,.-]/g,'').replace(',','.'))||0)>0||(parseFloat(demText.replace(/[^0-9,.-]/g,'').replace(',','.'))||0)>0;}catch(e){}r.style.display=(!q||txt.includes(q))&&(!only||abnormal)?'':'none';});};
+  const oldFee=window.renderFeeReport;
+  if(typeof oldFee==='function')window.renderFeeReport=renderFeeReport=function(){const r=oldFee.apply(this,arguments);requestAnimationFrame(()=>{enhanceFeeReport();window.applyLanguage(document.getElementById('mainContent'));});return r;};
+
+  /* ---------- safe memoization for fee calculations ---------- */
+  try{
+    const baseCalc=window.calculateFeesForContainer;if(typeof baseCalc==='function'){
+      const cache=new Map();window.calculateFeesForContainer=calculateFeesForContainer=function(c,date){const rr=arr(returnRecords).find(r=>norm(r.containerId)===norm(c?.id)&&r.isReturnConfirmed);const key=[c?.id,date,c?.eta,c?.actualPickupTime,c?.updatedAt,rr?.returnDate,JSON.stringify(storageConfig),JSON.stringify(demurrageConfig)].join('|');if(cache.has(key))return cache.get(key);const val=baseCalc.apply(this,arguments);cache.set(key,val);if(cache.size>6000)cache.clear();return val;};
+    }
+  }catch(e){}
+
+  /* ---------- render wrappers and startup ---------- */
+  const previousRender=window.renderContent;
+  if(typeof previousRender==='function')window.renderContent=renderContent=function(){applyTombstones();const r=previousRender.apply(this,arguments);requestAnimationFrame(()=>{if(typeof currentMenu!=='undefined'&&currentMenu==='factoryCalendar')injectFactoryConfig();if(typeof currentMenu!=='undefined'&&currentMenu==='feeReport')enhanceFeeReport();window.applyLanguage(document.getElementById('mainContent')||document.body);});return r;};
+  setTimeout(()=>{try{applyTombstones();factoryCfg();document.title='Sistema Inteligente de Monitoramento de Contêineres V45.14';window.applyLanguage(document.body);toast(isPt()?'V45.14 carregado: experiência, idioma, desempenho e exclusão protegida.':'V45.14已加载：体验、语言、性能与删除保护。','success',4200);}catch(e){console.warn('V45.14 startup',e);}},900);
+  console.log('V45.14 Experience Edition loaded');
+})();
+</script>
+
 </body>
 </html>
