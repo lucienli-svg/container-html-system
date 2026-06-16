@@ -13681,5 +13681,362 @@ ${preview}
 })();
 </script>
 
+
+<script>
+/* ==================== V45.15 门岗/卸货口全量待处理 + 受控撤回 ==================== */
+(function(){
+  'use strict';
+  const VERSION='V45.15 Gate & Dock Controlled Workflow';
+  const LOG_KEY='factoryActionLogsV4515';
+  const MAX_LOGS=3000;
+
+  const A=v=>Array.isArray(v)?v:[];
+  const S=v=>String(v??'').trim();
+  const U=v=>S(v).toUpperCase();
+  const nowIso=()=>new Date().toISOString();
+  const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
+  const datePart=v=>{if(!v)return '';const s=S(v);if(/^\d{4}-\d{2}-\d{2}/.test(s))return s.slice(0,10);const d=new Date(s);if(Number.isNaN(d.getTime()))return '';return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
+  const parseTime=v=>{if(!v)return 0;const d=new Date(v);return Number.isNaN(d.getTime())?0:d.getTime();};
+  const esc=v=>S(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const isPt=()=>typeof currentLanguage!=='undefined'&&currentLanguage==='pt';
+  const isEn=()=>typeof currentLanguage!=='undefined'&&currentLanguage==='en';
+  const tr=(zh,pt,en)=>isPt()?pt:(isEn()?en:zh);
+  const role=()=>S(window.currentUser?.role||window.currentUser?.cloudRole);
+  const isAdmin=()=>typeof window.isAdminUser==='function'?window.isAdminUser():role()==='Admin';
+  const isManager=()=>isAdmin()||['订购科','工厂管理员'].includes(role());
+  const canGateRollback=()=>isAdmin()||['订购科','工厂管理员','门卫'].includes(role());
+  const canDockRollback=()=>isAdmin()||['订购科','工厂管理员','卸货员'].includes(role());
+  const canEditTimes=()=>isAdmin()||['订购科','工厂管理员'].includes(role());
+
+  function taskDest(t){return S(t?.to||t?.destination);}
+  function taskOrigin(t){return S(t?.from||t?.origin);}
+  function isFactory(t){const d=U(taskDest(t));return d==='工厂'||d==='FACTORY'||d==='GWM';}
+  function active(t){return t&&!t.cancelled&&S(t.status)!=='cancelled';}
+  function taskRank(t){
+    if(t?.unloadFinishTime||t?.unpackConfirmedAt||S(t?.operationStatus)==='unloaded')return 4;
+    if(t?.unloadStartTime||S(t?.operationStatus)==='unloading')return 3;
+    if(t?.gateReleaseTime||t?.waitingAreaTime||S(t?.operationStatus)==='inside_waiting')return 2;
+    if(t?.gateArrivalTime||S(t?.operationStatus)==='outside_parking')return 1;
+    return 0;
+  }
+  function statusCode(rank){return ['not_arrived','outside_parking','inside_waiting','unloading','unloaded'][Math.max(0,Math.min(4,rank))];}
+  function statusText(rank){return [tr('未到门口','Não chegou à portaria','Not at gate'),tr('已到门口，待放行','Na portaria, aguardando liberação','At gate, awaiting release'),tr('已放行，厂内等待','Liberado, aguardando internamente','Released, waiting inside'),tr('卸货中','Em descarga','Unloading'),tr('已完成掏箱','Descarga concluída','Unloading completed')][Math.max(0,Math.min(4,rank))];}
+  function fmt(v){if(!v)return '-';try{return typeof window.fmtDateTime==='function'?(window.fmtDateTime(v)||'-'):new Date(v).toLocaleString(isPt()?'pt-BR':(isEn()?'en-US':'zh-CN'));}catch(_){return S(v)||'-';}}
+  function seq(t){const n=parseInt(S(t?.containerSeq||t?.seq).replace(/\D/g,''),10);return Number.isFinite(n)?n:999999;}
+  function eta(t){return t?.estimatedArrival||t?.arrivalDate||'';}
+  function taskRef(t){return S(t?.taskUid||t?.id||t?.routeLegKey);}
+  function resolve(ref){const key=S(ref);let list=A(window.transportTasks||transportTasks).filter(t=>active(t)&&isFactory(t));let m=list.find(t=>S(t.taskUid)===key)||list.find(t=>S(t.id)===key)||list.find(t=>S(t.routeLegKey)===key);if(!m&&window.__v4515TaskRefs?.[key]){const k=window.__v4515TaskRefs[key];m=list.find(t=>S(t.taskUid)===S(k.taskUid))||list.find(t=>S(t.id)===S(k.id));}return m||null;}
+  function register(t){const key='v4515_'+Math.random().toString(36).slice(2);window.__v4515TaskRefs=window.__v4515TaskRefs||{};window.__v4515TaskRefs[key]={taskUid:t.taskUid,id:t.id};return key;}
+  function allFactoryTasks(){
+    try{if(typeof window.prepareStateForSaveV4513==='function')window.prepareStateForSaveV4513();}catch(_){ }
+    return A(window.transportTasks||transportTasks).filter(t=>active(t)&&isFactory(t));
+  }
+  function canSeeDockTask(t){
+    if(isManager())return true;
+    if(role()!=='卸货员')return true;
+    if(typeof window.canViewDock==='function')return window.canViewDock(S(t.unloadingDock));
+    const loc=S(window.currentUser?.location);return !loc||loc==='工厂'||loc===S(t.unloadingDock);
+  }
+  function delayInfo(t,targetRank){
+    const ts=parseTime(eta(t));if(!ts||taskRank(t)>=targetRank)return {late:false,text:'',ms:0};
+    const diff=Date.now()-ts;if(diff<=0)return {late:false,text:'',ms:diff};
+    const h=Math.floor(diff/3600000),d=Math.floor(h/24),rh=h%24;
+    return {late:true,ms:diff,text:d?tr(`延迟 ${d}天${rh}小时`,`Atrasado ${d}d ${rh}h`,`Late ${d}d ${rh}h`):tr(`延迟 ${h}小时`,`Atrasado ${h}h`,`Late ${h}h`)};
+  }
+  function sorter(targetRank){return (a,b)=>{const la=delayInfo(a,targetRank),lb=delayInfo(b,targetRank);if(la.late!==lb.late)return la.late?-1:1;const ea=parseTime(eta(a))||Number.MAX_SAFE_INTEGER,eb=parseTime(eta(b))||Number.MAX_SAFE_INTEGER;if(ea!==eb)return ea-eb;const bc=U(a.batch).localeCompare(U(b.batch),'zh-CN',{numeric:true});if(bc)return bc;return seq(a)-seq(b);};}
+  function badge(rank){const cls=rank===4?'status-completed':rank===3?'status-transport':rank===2?'status-success':rank===1?'status-warning':'status-pending';return `<span class="status-badge ${cls}">${esc(statusText(rank))}</span>`;}
+  function notify(msg,type='info'){
+    try{if(typeof window.showRealtimeSyncHint==='function')window.showRealtimeSyncHint(msg);}catch(_){ }
+    let el=document.getElementById('v4515Toast');if(!el){el=document.createElement('div');el.id='v4515Toast';el.style.cssText='position:fixed;right:20px;top:74px;z-index:99999;max-width:420px;padding:12px 16px;border-radius:8px;color:#fff;font-weight:700;box-shadow:0 6px 20px rgba(0,0,0,.22);transition:.2s';document.body.appendChild(el);}el.textContent=msg;el.style.background=type==='error'?'#d93025':type==='success'?'#169c55':'#2563eb';el.style.display='block';clearTimeout(window.__v4515ToastTimer);window.__v4515ToastTimer=setTimeout(()=>{el.style.display='none';},3500);
+  }
+  function deepState(){try{return JSON.parse(JSON.stringify(typeof window.getCloudStatePayload==='function'?window.getCloudStatePayload():{}));}catch(_){return null;}}
+  async function save(reason){const fn=window.queueSystemSaveV4513||window.queueSaveV455||window.saveCloudState;if(typeof fn!=='function')throw new Error(tr('未找到云端保存函数','Função de salvamento na nuvem não encontrada','Cloud save function not found'));return await fn(reason);}
+  function rerender(){const main=document.getElementById('mainContent');if(!main)return;if(typeof currentMenu!=='undefined'&&currentMenu==='gateMonitoring')window.renderFactoryGateOnly(main);else if(typeof currentMenu!=='undefined'&&currentMenu==='dockMonitoring')window.renderDockMonitoring(main);try{if(typeof window.applyLanguage==='function')window.applyLanguage(main);}catch(_){}}
+  async function mutate(ref,reason,fn,success){const t=resolve(ref);if(!t)return alert(tr('未找到当前工厂任务，请刷新后重试。','Tarefa atual da fábrica não encontrada. Atualize a página e tente novamente.','Current factory task not found. Refresh and try again.'));const snapshot=deepState();try{fn(t);t.updatedAt=nowIso();rerender();notify(success+' · '+tr('保存中','Salvando','Saving'));const ok=await save(reason);if(ok===false)throw new Error(tr('云端保存失败','Falha ao salvar na nuvem','Cloud save failed'));notify(success+' · '+tr('已保存','Salvo','Saved'),'success');return true;}catch(e){console.error(e);if(snapshot&&typeof window.applyCloudState==='function')window.applyCloudState(snapshot);rerender();notify(tr('操作失败：','Falha na operação: ','Operation failed: ')+(e.message||e),'error');return false;}}
+
+  function logs(){warningConfig=warningConfig&&typeof warningConfig==='object'?warningConfig:{};if(!Array.isArray(warningConfig[LOG_KEY]))warningConfig[LOG_KEY]=[];return warningConfig[LOG_KEY];}
+  function logAction(t,action,before,after,reason){const list=logs();list.unshift({id:'log_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),taskUid:t.taskUid||'',taskId:t.id,containerId:t.containerId,containerNo:t.containerNo||'',batch:t.batch||'',action,beforeStatus:statusCode(before),afterStatus:statusCode(after),reason:reason||'',operator:window.currentUser?.email||window.currentUser?.name||role()||'',time:nowIso()});if(list.length>MAX_LOGS)list.length=MAX_LOGS;}
+  function askReason(){const v=prompt(tr('请输入撤回/修正原因（必填）','Informe o motivo da reversão/correção (obrigatório)','Enter rollback/correction reason (required)'),'');return v===null?null:S(v);}
+  function unconfirmedReturn(t){return A(window.returnRecords||returnRecords).find(r=>S(r.containerId)===S(t.containerId)&&['return_needed','return'].includes(S(r.type))&&!r.isReturnConfirmed&&(S(r.sourceTaskUid)===S(t.taskUid)||!r.sourceTaskUid));}
+  function confirmedReturn(t){return A(window.returnRecords||returnRecords).find(r=>S(r.containerId)===S(t.containerId)&&r.isReturnConfirmed);}
+  function removeUnconfirmedReturn(t){const rows=A(window.returnRecords||returnRecords);for(let i=rows.length-1;i>=0;i--){const r=rows[i];if(S(r.containerId)===S(t.containerId)&&['return_needed','return'].includes(S(r.type))&&!r.isReturnConfirmed&&(S(r.sourceTaskUid)===S(t.taskUid)||!r.sourceTaskUid))rows.splice(i,1);}}
+  function ensureReturn(t){if(!['港口','RG堆场'].includes(taskOrigin(t)))return;const rows=A(window.returnRecords||returnRecords);if(rows.some(r=>S(r.containerId)===S(t.containerId)&&['return_needed','return'].includes(S(r.type))))return;rows.push({id:'return_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),containerId:t.containerId,location:'工厂',type:'return_needed',unpackDate:datePart(t.unloadFinishTime||nowIso()),isReturnConfirmed:false,fromLocation:taskOrigin(t),sourceTaskUid:t.taskUid||'',createdAt:nowIso(),updatedAt:nowIso()});}
+
+  window.v4515FactoryForward=async function(ref,kind){const labels={gate:tr('确认到门口','Confirmar chegada à portaria','Confirm gate arrival'),release:tr('放行进厂','Liberar entrada na fábrica','Release into factory'),start:tr('开始卸货','Iniciar descarga','Start unloading'),finish:tr('确认掏箱完成','Confirmar conclusão da descarga','Confirm unloading completion')};return mutate(ref,'v4515_forward_'+kind,(t)=>{const before=taskRank(t),ts=(typeof window.nowLocalInput==='function'?window.nowLocalInput():nowIso());if(kind==='gate'){if(before!==0)throw new Error(tr('当前状态不能再次确认到门口','O status atual não permite nova confirmação na portaria','Current status cannot confirm gate arrival again'));t.gateArrivalTime=ts;t.operationStatus='outside_parking';}
+    else if(kind==='release'){if(before!==1)throw new Error(tr('必须先确认到门口，才能放行进厂','Confirme primeiro a chegada à portaria','Confirm gate arrival before releasing'));t.gateReleaseTime=ts;t.waitingAreaTime=ts;t.operationStatus='inside_waiting';}
+    else if(kind==='start'){if(before!==2)throw new Error(tr('车辆必须处于厂内等待状态','O veículo deve estar aguardando dentro da fábrica','Vehicle must be waiting inside the factory'));t.unloadStartTime=ts;t.operationStatus='unloading';}
+    else if(kind==='finish'){if(before!==3)throw new Error(tr('必须先开始卸货','Inicie a descarga primeiro','Start unloading first'));t.unloadFinishTime=ts;t.unpackConfirmedAt=ts;t.operationStatus='unloaded';t.status=['港口','RG堆场'].includes(taskOrigin(t))?'return_pending':'completed';ensureReturn(t);}logAction(t,kind,before,taskRank(t),'');},labels[kind]);};
+
+  window.v4515Rollback=async function(ref){const t=resolve(ref);if(!t)return alert(tr('未找到当前任务','Tarefa não encontrada','Task not found'));const rank=taskRank(t);let allowed=false,kind='';if(rank===1&&canGateRollback()){allowed=true;kind='rollback_gate';}else if(rank===2&&canGateRollback()&&!t.unloadStartTime){allowed=true;kind='rollback_release';}else if(rank===3&&canDockRollback()){allowed=true;kind='rollback_start';}else if(rank===4&&isAdmin()){allowed=true;kind='rollback_finish';}if(!allowed)return alert(tr('当前状态或权限不允许撤回。','O status atual ou a permissão não permite reversão.','Current status or permission does not allow rollback.'));if(rank===4&&confirmedReturn(t))return alert(tr('该集装箱已经确认还箱，不能撤回掏箱完成。','A devolução do contêiner já foi confirmada; não é possível reverter a descarga.','Container return is confirmed; unloading completion cannot be rolled back.'));const reason=askReason();if(reason===null)return;if(!reason)return alert(tr('撤回原因必须填写。','O motivo da reversão é obrigatório.','Rollback reason is required.'));const name={1:tr('撤回到门口确认','Reverter chegada à portaria','Rollback gate arrival'),2:tr('撤回放行进厂','Reverter liberação de entrada','Rollback factory release'),3:tr('撤回开始卸货','Reverter início da descarga','Rollback unloading start'),4:tr('撤回掏箱完成','Reverter conclusão da descarga','Rollback unloading completion')}[rank];return mutate(ref,'v4515_'+kind,(x)=>{const before=taskRank(x);if(before===1){x.gateArrivalTime='';x.operationStatus='not_arrived';}
+    else if(before===2){x.gateReleaseTime='';x.waitingAreaTime='';x.operationStatus='outside_parking';}
+    else if(before===3){x.unloadStartTime='';x.operationStatus='inside_waiting';}
+    else if(before===4){x.unloadFinishTime='';x.unpackConfirmedAt='';x.operationStatus='unloading';x.status='in_transit';removeUnconfirmedReturn(x);}logAction(x,kind,before,taskRank(x),reason);},name);};
+
+  window.v4515EditTimes=async function(ref){if(!canEditTimes())return alert(tr('您没有修改实际时间的权限。','Você não tem permissão para editar os horários reais.','You do not have permission to edit actual times.'));const t=resolve(ref);if(!t)return alert(tr('未找到当前任务','Tarefa não encontrada','Task not found'));const reason=askReason();if(reason===null)return;if(!reason)return alert(tr('修改原因必须填写。','O motivo da alteração é obrigatório.','Edit reason is required.'));const old={gateArrivalTime:t.gateArrivalTime||'',gateReleaseTime:t.gateReleaseTime||'',unloadStartTime:t.unloadStartTime||'',unloadFinishTime:t.unloadFinishTime||''};const ask=(label,val)=>{const x=prompt(label+'\n'+tr('格式：YYYY-MM-DDTHH:mm；留空保持不变','Formato: YYYY-MM-DDTHH:mm; deixe em branco para manter','Format: YYYY-MM-DDTHH:mm; leave blank to keep'),val||'');return x===null?null:S(x);};const g=ask(tr('实际到门时间','Chegada real à portaria','Actual gate arrival'),old.gateArrivalTime);if(g===null)return;const r=ask(tr('实际放行时间','Liberação real para entrada','Actual release time'),old.gateReleaseTime);if(r===null)return;const s=ask(tr('实际开始卸货时间','Início real da descarga','Actual unloading start'),old.unloadStartTime);if(s===null)return;const f=ask(tr('实际完成掏箱时间','Conclusão real da descarga','Actual unloading completion'),old.unloadFinishTime);if(f===null)return;const vals=[g||old.gateArrivalTime,r||old.gateReleaseTime,s||old.unloadStartTime,f||old.unloadFinishTime].filter(Boolean).map(parseTime);for(let i=1;i<vals.length;i++){if(vals[i]<vals[i-1])return alert(tr('时间顺序不正确，请确保到门≤放行≤开始卸货≤完成掏箱。','A sequência de horários é inválida.','Time order is invalid.'));}return mutate(ref,'v4515_edit_times',(x)=>{const before=taskRank(x);if(g)x.gateArrivalTime=g;if(r)x.gateReleaseTime=r,x.waitingAreaTime=x.waitingAreaTime||r;if(s)x.unloadStartTime=s;if(f)x.unloadFinishTime=f,x.unpackConfirmedAt=x.unpackConfirmedAt||f;const after=taskRank(x);x.operationStatus=statusCode(after);if(after===4){x.status=['港口','RG堆场'].includes(taskOrigin(x))?'return_pending':'completed';ensureReturn(x);}logAction(x,'edit_times',before,after,reason);},tr('实际时间已更新','Horários reais atualizados','Actual times updated'));};
+
+  window.v4515AdminCorrect=async function(ref){if(!isAdmin())return alert(tr('只有Admin可以执行状态修正。','Somente o Admin pode corrigir o status.','Only Admin can correct status.'));const t=resolve(ref);if(!t)return alert(tr('未找到当前任务','Tarefa não encontrada','Task not found'));if(confirmedReturn(t))return alert(tr('该集装箱已经确认还箱，不能直接修正工厂状态。','A devolução já foi confirmada; o status da fábrica não pode ser corrigido diretamente.','Return is confirmed; factory status cannot be directly corrected.'));const targetRaw=prompt(tr('输入目标状态：0未到门口；1已到门口；2已放行进厂；3卸货中；4已完成掏箱','Informe o status alvo: 0 não chegou; 1 na portaria; 2 liberado; 3 em descarga; 4 concluído','Enter target status: 0 not at gate; 1 at gate; 2 released; 3 unloading; 4 completed'),String(taskRank(t)));if(targetRaw===null)return;const target=Number(targetRaw);if(!Number.isInteger(target)||target<0||target>4)return alert(tr('目标状态无效。','Status alvo inválido.','Invalid target status.'));const reason=askReason();if(reason===null)return;if(!reason)return alert(tr('修正原因必须填写。','O motivo da correção é obrigatório.','Correction reason is required.'));return mutate(ref,'v4515_admin_correct',(x)=>{const before=taskRank(x),ts=(typeof window.nowLocalInput==='function'?window.nowLocalInput():nowIso());if(target<4)removeUnconfirmedReturn(x);if(target===0){x.gateArrivalTime='';x.gateReleaseTime='';x.waitingAreaTime='';x.unloadStartTime='';x.unloadFinishTime='';x.unpackConfirmedAt='';x.operationStatus='not_arrived';x.status='in_transit';}
+    if(target===1){x.gateArrivalTime=x.gateArrivalTime||ts;x.gateReleaseTime='';x.waitingAreaTime='';x.unloadStartTime='';x.unloadFinishTime='';x.unpackConfirmedAt='';x.operationStatus='outside_parking';x.status='in_transit';}
+    if(target===2){x.gateArrivalTime=x.gateArrivalTime||ts;x.gateReleaseTime=x.gateReleaseTime||ts;x.waitingAreaTime=x.waitingAreaTime||x.gateReleaseTime;x.unloadStartTime='';x.unloadFinishTime='';x.unpackConfirmedAt='';x.operationStatus='inside_waiting';x.status='in_transit';}
+    if(target===3){x.gateArrivalTime=x.gateArrivalTime||ts;x.gateReleaseTime=x.gateReleaseTime||ts;x.waitingAreaTime=x.waitingAreaTime||x.gateReleaseTime;x.unloadStartTime=x.unloadStartTime||ts;x.unloadFinishTime='';x.unpackConfirmedAt='';x.operationStatus='unloading';x.status='in_transit';}
+    if(target===4){x.gateArrivalTime=x.gateArrivalTime||ts;x.gateReleaseTime=x.gateReleaseTime||ts;x.waitingAreaTime=x.waitingAreaTime||x.gateReleaseTime;x.unloadStartTime=x.unloadStartTime||ts;x.unloadFinishTime=x.unloadFinishTime||ts;x.unpackConfirmedAt=x.unpackConfirmedAt||x.unloadFinishTime;x.operationStatus='unloaded';x.status=['港口','RG堆场'].includes(taskOrigin(x))?'return_pending':'completed';ensureReturn(x);}logAction(x,'admin_correct',before,target,reason);},tr('状态修正完成','Status corrigido','Status corrected'));};
+
+  window.v4515ShowLogs=function(ref){const t=resolve(ref);if(!t)return;const list=logs().filter(x=>S(x.taskUid)===S(t.taskUid)||S(x.taskId)===S(t.id)).slice(0,100);const rows=list.map(x=>`<tr><td>${esc(fmt(x.time))}</td><td>${esc(x.operator||'-')}</td><td>${esc(x.action)}</td><td>${esc(x.beforeStatus)} → ${esc(x.afterStatus)}</td><td>${esc(x.reason||'-')}</td></tr>`).join('')||`<tr><td colspan="5">${tr('暂无操作日志','Nenhum registro de operação','No operation logs')}</td></tr>`;const w=window.open('','_blank','width=900,height=620');if(!w)return;w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(t.containerNo||'')}</title><style>body{font-family:Arial;padding:20px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f3f4f6}</style></head><body><h2>${esc(t.containerNo||'')} · ${tr('操作日志','Registro de operações','Operation log')}</h2><table><thead><tr><th>${tr('时间','Data/hora','Time')}</th><th>${tr('操作人','Usuário','Operator')}</th><th>${tr('操作','Ação','Action')}</th><th>${tr('状态变化','Alteração de status','Status change')}</th><th>${tr('原因','Motivo','Reason')}</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);w.document.close();};
+
+  function searchValue(id){return U(document.getElementById(id)?.value);}
+  window.v4515RefreshGate=()=>window.renderFactoryGateOnly(document.getElementById('mainContent'));
+  window.v4515RefreshDock=()=>window.renderDockMonitoring(document.getElementById('mainContent'));
+  window.v4515Toggle=function(id){const el=document.getElementById(id);if(el)el.style.display=el.style.display==='none'?'block':'none';};
+  function gateActionCell(t){const rank=taskRank(t),ref=register(t);let buttons=[];if(rank===0)buttons.push(`<button class="btn btn-sm btn-success" onclick="v4515FactoryForward('${ref}','gate')">${tr('确认到门口','Confirmar chegada','Confirm arrival')}</button>`);if(rank===1)buttons.push(`<button class="btn btn-sm btn-primary" onclick="v4515FactoryForward('${ref}','release')">${tr('放行进厂','Liberar entrada','Release')}</button>`);if((rank===1||rank===2)&&canGateRollback())buttons.push(`<button class="btn btn-sm btn-warning" onclick="v4515Rollback('${ref}')">${tr('撤回上一步','Reverter etapa','Rollback')}</button>`);if(canEditTimes()&&rank>=1)buttons.push(`<button class="btn btn-sm" onclick="v4515EditTimes('${ref}')">${tr('修改时间','Editar horários','Edit times')}</button>`);if(isAdmin())buttons.push(`<button class="btn btn-sm btn-danger" onclick="v4515AdminCorrect('${ref}')">${tr('状态修正','Corrigir status','Correct status')}</button>`);buttons.push(`<button class="btn btn-sm" onclick="v4515ShowLogs('${ref}')">${tr('日志','Histórico','Log')}</button>`);return buttons.join(' ');}
+  function dockActionCell(t){const rank=taskRank(t),ref=register(t);let buttons=[];if(rank===2)buttons.push(`<button class="btn btn-sm btn-success" onclick="v4515FactoryForward('${ref}','start')">${tr('开始卸货','Iniciar descarga','Start unloading')}</button>`);if(rank===3)buttons.push(`<button class="btn btn-sm btn-success" onclick="v4515FactoryForward('${ref}','finish')">${tr('确认掏箱完成','Concluir descarga','Finish unloading')}</button>`);if((rank===3&&canDockRollback())||(rank===4&&isAdmin()))buttons.push(`<button class="btn btn-sm btn-warning" onclick="v4515Rollback('${ref}')">${tr('撤回上一步','Reverter etapa','Rollback')}</button>`);if(canEditTimes()&&rank>=2)buttons.push(`<button class="btn btn-sm" onclick="v4515EditTimes('${ref}')">${tr('修改时间','Editar horários','Edit times')}</button>`);if(isAdmin())buttons.push(`<button class="btn btn-sm btn-danger" onclick="v4515AdminCorrect('${ref}')">${tr('状态修正','Corrigir status','Correct status')}</button>`);buttons.push(`<button class="btn btn-sm" onclick="v4515ShowLogs('${ref}')">${tr('日志','Histórico','Log')}</button>`);return buttons.join(' ');}
+  function lateMark(t,target){const d=delayInfo(t,target);return d.late?`<span class="status-badge status-danger" style="margin-left:4px">${esc(d.text)}</span>`:'';}
+  function rowClass(t,target){return delayInfo(t,target).late?'priority-row':'';}
+  function gateTable(list,history=false){return `<div class="table-wrapper"><table class="data-table"><thead><tr><th>${tr('计划到厂时间','Chegada planejada','Planned arrival')}</th><th>${tr('批次','Lote','Batch')}</th><th>${tr('序号','Seq.','Seq.')}</th><th>${tr('集装箱号','Contêiner','Container')}</th><th>${tr('出发地','Origem','Origin')}</th><th>${tr('卸货口','Doca','Dock')}</th><th>${tr('车牌/司机','Placa / Motorista','Plate / Driver')}</th><th>${tr('实际到门','Chegada real','Actual gate arrival')}</th><th>${tr('实际放行','Liberação real','Actual release')}</th><th>${tr('状态','Status','Status')}</th><th>${tr('操作','Ação','Action')}</th></tr></thead><tbody>${list.map(t=>{const r=taskRank(t);return `<tr class="${rowClass(t,2)}"><td>${esc(fmt(eta(t)))} ${lateMark(t,2)}</td><td>${esc(t.batch||'-')}</td><td>${seq(t)===999999?'-':seq(t)}</td><td><b>${esc(t.containerNo||'-')}</b></td><td>${esc(taskOrigin(t)||'-')}</td><td>${esc(t.unloadingDock||'-')}</td><td>${esc(t.truckPlate||'-')}<br><small>${esc(t.driverName||'-')}</small></td><td>${esc(fmt(t.gateArrivalTime))}</td><td>${esc(fmt(t.gateReleaseTime||t.waitingAreaTime))}</td><td>${badge(r)}</td><td style="min-width:260px">${gateActionCell(t)}</td></tr>`;}).join('')||`<tr><td colspan="11" style="text-align:center">${tr('暂无记录','Nenhum registro','No records')}</td></tr>`}</tbody></table></div>`;}
+  function dockTable(list){return `<div class="table-wrapper"><table class="data-table"><thead><tr><th>${tr('计划到厂时间','Chegada planejada','Planned arrival')}</th><th>${tr('卸货口','Doca','Dock')}</th><th>${tr('批次','Lote','Batch')}</th><th>${tr('序号','Seq.','Seq.')}</th><th>${tr('集装箱号','Contêiner','Container')}</th><th>${tr('出发地','Origem','Origin')}</th><th>${tr('厂内等待','Espera interna','Inside waiting')}</th><th>${tr('开始卸货','Início da descarga','Unload start')}</th><th>${tr('完成掏箱','Fim da descarga','Unload finish')}</th><th>${tr('状态','Status','Status')}</th><th>${tr('操作','Ação','Action')}</th></tr></thead><tbody>${list.map(t=>{const r=taskRank(t);return `<tr class="${rowClass(t,4)}"><td>${esc(fmt(eta(t)))} ${lateMark(t,4)}</td><td>${esc(t.unloadingDock||'-')}</td><td>${esc(t.batch||'-')}</td><td>${seq(t)===999999?'-':seq(t)}</td><td><b>${esc(t.containerNo||'-')}</b></td><td>${esc(taskOrigin(t)||'-')}</td><td>${esc(fmt(t.waitingAreaTime||t.gateReleaseTime))}</td><td>${esc(fmt(t.unloadStartTime))}</td><td>${esc(fmt(t.unloadFinishTime))}</td><td>${badge(r)}</td><td style="min-width:260px">${dockActionCell(t)}</td></tr>`;}).join('')||`<tr><td colspan="11" style="text-align:center">${tr('暂无记录','Nenhum registro','No records')}</td></tr>`}</tbody></table></div>`;}
+
+  window.renderFactoryGateOnly=renderFactoryGateOnly=function(container){if(!container)return;window.__v4515TaskRefs={};const q=sessionStorage.getItem('v4515_gate_search')||'';let all=allFactoryTasks();const pending=all.filter(t=>taskRank(t)<2).sort(sorter(2));const processedToday=all.filter(t=>datePart(t.gateArrivalTime)===today()||datePart(t.gateReleaseTime||t.waitingAreaTime)===today()).sort((a,b)=>Math.max(parseTime(b.gateReleaseTime),parseTime(b.gateArrivalTime))-Math.max(parseTime(a.gateReleaseTime),parseTime(a.gateArrivalTime)));const history=all.filter(t=>taskRank(t)>=2&&!processedToday.includes(t)).sort((a,b)=>parseTime(b.gateReleaseTime||b.waitingAreaTime)-parseTime(a.gateReleaseTime||a.waitingAreaTime)).slice(0,300);const filter=list=>{const s=U(document.getElementById('v4515GateSearch')?.value||q);return !s?list:list.filter(t=>U([t.containerNo,t.batch,t.containerSeq,t.truckPlate,t.driverName].join(' ')).includes(s));};container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🚪 ${tr('门岗登记—全部未完成任务','Registro na portaria — todas as tarefas pendentes','Gate registration — all pending tasks')}</span><span class="status-badge status-warning">${pending.length}</span></div><div style="color:#606266;margin-bottom:10px">${tr('不再按计划日期分组。所有尚未完成“确认到门口/放行进厂”的工厂任务统一显示；超时任务优先。','Sem agrupamento por data. Todas as tarefas da fábrica ainda não concluídas na portaria são exibidas juntas; tarefas atrasadas têm prioridade.','No date grouping. All unfinished factory gate tasks are shown together; overdue tasks first.')}</div><div class="search-bar"><input id="v4515GateSearch" class="form-control" value="${esc(q)}" placeholder="${tr('搜索箱号/批次/序号/车牌/司机','Pesquisar contêiner/lote/seq./placa/motorista','Search container/batch/seq./plate/driver')}" oninput="sessionStorage.setItem('v4515_gate_search',this.value);v4515RefreshGate()"><button class="btn" onclick="sessionStorage.removeItem('v4515_gate_search');v4515RefreshGate()">${tr('清除','Limpar','Clear')}</button></div><div class="section-label">${tr('待处理','Pendentes','Pending')} (${pending.length})</div><div id="v4515GatePending"></div><div class="section-divider"></div><div class="card-header"><span class="card-title">✅ ${tr('今日已处理','Processados hoje','Processed today')} (${processedToday.length})</span><button class="btn btn-sm" onclick="v4515Toggle('v4515GateToday')">${tr('展开/收起','Expandir/Recolher','Expand/Collapse')}</button></div><div id="v4515GateToday" style="display:none"></div><div class="card-header"><span class="card-title">🕘 ${tr('历史已放行','Histórico de liberações','Release history')} (${history.length})</span><button class="btn btn-sm" onclick="v4515Toggle('v4515GateHistory')">${tr('展开/收起','Expandir/Recolher','Expand/Collapse')}</button></div><div id="v4515GateHistory" style="display:none"></div></div>`;document.getElementById('v4515GatePending').innerHTML=gateTable(filter(pending));document.getElementById('v4515GateToday').innerHTML=gateTable(filter(processedToday));document.getElementById('v4515GateHistory').innerHTML=gateTable(filter(history));try{if(typeof window.applyLanguage==='function')window.applyLanguage(container);}catch(_){}};
+
+  window.renderDockMonitoring=renderDockMonitoring=function(container){if(!container)return;window.__v4515TaskRefs={};const q=sessionStorage.getItem('v4515_dock_search')||'';let all=allFactoryTasks().filter(canSeeDockTask);const pending=all.filter(t=>taskRank(t)<4).sort(sorter(4));const processedToday=all.filter(t=>datePart(t.unloadStartTime)===today()||datePart(t.unloadFinishTime)===today()).sort((a,b)=>Math.max(parseTime(b.unloadFinishTime),parseTime(b.unloadStartTime))-Math.max(parseTime(a.unloadFinishTime),parseTime(a.unloadStartTime)));const history=all.filter(t=>taskRank(t)>=4&&!processedToday.includes(t)).sort((a,b)=>parseTime(b.unloadFinishTime)-parseTime(a.unloadFinishTime)).slice(0,300);const filter=list=>{const s=U(document.getElementById('v4515DockSearch')?.value||q);return !s?list:list.filter(t=>U([t.containerNo,t.batch,t.containerSeq,t.unloadingDock,t.truckPlate].join(' ')).includes(s));};container.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📦 ${tr('卸货口收货—全部未完成任务','Recebimento nas docas — todas as tarefas pendentes','Dock receiving — all pending tasks')}</span><span class="status-badge status-warning">${pending.length}</span></div><div style="color:#606266;margin-bottom:10px">${tr('不再按计划日期分组。所有尚未完成掏箱的工厂任务统一显示，并展示计划到厂时间。','Sem agrupamento por data. Todas as tarefas da fábrica ainda não concluídas são exibidas juntas, com o horário planejado de chegada.','No date grouping. All unfinished factory unloading tasks are shown together with planned arrival time.')}</div><div class="search-bar"><input id="v4515DockSearch" class="form-control" value="${esc(q)}" placeholder="${tr('搜索箱号/批次/序号/卸货口','Pesquisar contêiner/lote/seq./doca','Search container/batch/seq./dock')}" oninput="sessionStorage.setItem('v4515_dock_search',this.value);v4515RefreshDock()"><button class="btn" onclick="sessionStorage.removeItem('v4515_dock_search');v4515RefreshDock()">${tr('清除','Limpar','Clear')}</button></div><div class="section-label">${tr('待处理','Pendentes','Pending')} (${pending.length})</div><div id="v4515DockPending"></div><div class="section-divider"></div><div class="card-header"><span class="card-title">✅ ${tr('今日已处理','Processados hoje','Processed today')} (${processedToday.length})</span><button class="btn btn-sm" onclick="v4515Toggle('v4515DockToday')">${tr('展开/收起','Expandir/Recolher','Expand/Collapse')}</button></div><div id="v4515DockToday" style="display:none"></div><div class="card-header"><span class="card-title">🕘 ${tr('历史已完成','Histórico concluído','Completed history')} (${history.length})</span><button class="btn btn-sm" onclick="v4515Toggle('v4515DockHistory')">${tr('展开/收起','Expandir/Recolher','Expand/Collapse')}</button></div><div id="v4515DockHistory" style="display:none"></div></div>`;document.getElementById('v4515DockPending').innerHTML=dockTable(filter(pending));document.getElementById('v4515DockToday').innerHTML=dockTable(filter(processedToday));document.getElementById('v4515DockHistory').innerHTML=dockTable(filter(history));try{if(typeof window.applyLanguage==='function')window.applyLanguage(container);}catch(_){}};
+
+  /* Keep old button names compatible with the new state machine. */
+  window.confirmGateArrivalByKeyV453=ref=>window.v4515FactoryForward(ref,'gate');
+  window.releaseFromGateByKeyV453=ref=>window.v4515FactoryForward(ref,'release');
+  window.startUnloadingByKeyV453=ref=>window.v4515FactoryForward(ref,'start');
+  window.finishUnloadingByKeyV453=ref=>window.v4515FactoryForward(ref,'finish');
+  window.confirmGateArrival=ref=>window.v4515FactoryForward(ref,'gate');
+  window.releaseFromGate=ref=>window.v4515FactoryForward(ref,'release');
+  window.startUnloading=ref=>window.v4515FactoryForward(ref,'start');
+  window.finishUnloading=ref=>window.v4515FactoryForward(ref,'finish');
+
+  setTimeout(()=>{try{document.title='Sistema Inteligente de Monitoramento de Contêineres V45.15';notify(tr('V45.15已加载：门岗和卸货口全量待处理、受控撤回和操作日志。','V45.15 carregado: tarefas pendentes unificadas, reversão controlada e histórico de operações.','V45.15 loaded: unified pending tasks, controlled rollback, and operation logs.'),'success');if(typeof currentMenu!=='undefined'&&currentMenu==='gateMonitoring')window.renderFactoryGateOnly(document.getElementById('mainContent'));if(typeof currentMenu!=='undefined'&&currentMenu==='dockMonitoring')window.renderDockMonitoring(document.getElementById('mainContent'));}catch(e){console.warn('V45.15 startup',e);}},1500);
+  console.log(VERSION+' loaded');
+})();
+
+</script>
+
+<script>
+/* ==================== V45.16 历史路线归档 + 保存状态修复 ==================== */
+(function(){
+  'use strict';
+  const VERSION='V45.16 Historical Route Archive & Save State Fix';
+  const A=v=>Array.isArray(v)?v:[];
+  const S=v=>String(v??'').trim();
+  const U=v=>S(v).toUpperCase();
+  const nowIso=()=>new Date().toISOString();
+  const isFactory=v=>['工厂','FACTORY','FÁBRICA','FABRICA','GWM'].includes(U(v));
+  const taskDest=t=>t?.to??t?.destination??'';
+  const sameContainer=(plan,t)=>{
+    if(!plan||!t)return false;
+    if(S(plan.containerId)&&S(t.containerId)&&S(plan.containerId)===S(t.containerId))return true;
+    return !!(S(plan.containerNo)&&S(t.containerNo)&&U(plan.containerNo)===U(t.containerNo));
+  };
+  const terminalTask=t=>!!t&&(
+    !!t.cancelled||!!t.archivedAt||
+    !!t.unloadFinishTime||!!t.unpackConfirmedAt||
+    ['UNLOADED','DONE','COMPLETED','RETURN_PENDING','CANCELLED','ARCHIVED'].includes(U(t.operationStatus))||
+    ['COMPLETED','RETURN_PENDING','CANCELLED','ARCHIVED'].includes(U(t.status))
+  );
+  const currentTask=t=>!!t&&!terminalTask(t)&&!t.routeHistoryArchivedAt;
+  const lang=()=>{try{return localStorage.getItem('cc_lang')||window.currentLang||'pt-BR';}catch(_){return 'pt-BR';}};
+  const tr=(zh,pt,en)=>lang()==='zh-CN'?zh:(lang()==='en-US'?en:pt);
+  const operator=()=>{try{return cloudUser?.email||currentUser?.email||currentUser?.name||'';}catch(_){return '';}};
+
+  function relatedCurrentFactoryTasks(plan){
+    return A(typeof transportTasks!=='undefined'?transportTasks:[]).filter(t=>{
+      if(!currentTask(t)||!isFactory(taskDest(t))||!sameContainer(plan,t))return false;
+      const planId=S(plan?.id),sourceId=S(t?.sourcePlanId);
+      if(planId&&sourceId&&planId!==sourceId)return false;
+      return true;
+    });
+  }
+  function historicalFactoryTasksForPlan(plan){
+    return A(typeof transportTasks!=='undefined'?transportTasks:[]).filter(t=>{
+      if(!t||!isFactory(taskDest(t))||!sameContainer(plan,t))return false;
+      const planId=S(plan?.id),sourceId=S(t?.sourcePlanId);
+      if(planId&&sourceId&&planId!==sourceId)return false;
+      return terminalTask(t);
+    });
+  }
+  function trueConflicts(){
+    const rows=[];
+    A(typeof pickupPlans!=='undefined'?pickupPlans:[]).forEach(plan=>{
+      if(!plan||U(plan.status)==='CANCELLED'||isFactory(plan.destination))return;
+      const cont=A(typeof containers!=='undefined'?containers:[]).find(c=>S(c.id)===S(plan.containerId)||U(c.containerNo)===U(plan.containerNo))||{};
+      relatedCurrentFactoryTasks(plan).forEach(t=>rows.push({
+        containerNo:plan.containerNo||t.containerNo||cont.containerNo||'',
+        batch:plan.batch||t.batch||cont.batch||'',
+        containerSeq:plan.containerSeq||t.containerSeq||cont.containerSeq||'',
+        planId:plan.id||'',taskId:t.id||'',taskUid:t.taskUid||'',
+        planDestination:plan.destination||'',taskDestination:taskDest(t)||'',
+        operationStatus:t.operationStatus||'',status:t.status||'',
+        gateArrivalTime:t.gateArrivalTime||'',gateReleaseTime:t.gateReleaseTime||'',
+        unloadStartTime:t.unloadStartTime||'',unloadFinishTime:t.unloadFinishTime||''
+      }));
+    });
+    return rows;
+  }
+
+  /* 只检查当前有效、尚未完成的任务；历史完成任务不再误报为当前路线冲突。 */
+  window.findPickupDestinationConflictsV457=function(showMessage){
+    const list=trueConflicts();
+    window.__v457PickupDestinationConflicts=list;
+    try{console.table(list);}catch(_){}
+    if(showMessage!==false){
+      if(!list.length){
+        alert(tr('未发现当前有效计划的目的地冲突。历史已完成任务不会参与本次检查。','Nenhum conflito de destino foi encontrado nos planos ativos. Tarefas históricas concluídas não entram nesta verificação.','No destination conflicts were found in active plans. Completed historical tasks are excluded.'));
+      }else{
+        const text=list.slice(0,30).map((x,i)=>`${i+1}. ${x.containerNo||'-'} | ${tr('批次','Lote','Batch')} ${x.batch||'-'} | ${tr('序号','Seq.','Seq.')} ${x.containerSeq||'-'} | ${tr('计划目的地','Destino do plano','Plan destination')} ${x.planDestination||'-'} | ${tr('任务目的地','Destino da tarefa','Task destination')} ${x.taskDestination||'-'} | ${tr('状态','Status','Status')} ${x.operationStatus||x.status||'-'}`).join('\n');
+        alert(tr(`发现 ${list.length} 条当前有效目的地冲突：\n\n${text}${list.length>30?'\n\n更多明细已输出到浏览器 Console。':''}`,`Foram encontrados ${list.length} conflitos de destino ativos:\n\n${text}${list.length>30?'\n\nMais detalhes foram enviados ao Console do navegador.':''}`,`Found ${list.length} active destination conflicts:\n\n${text}${list.length>30?'\n\nMore details were written to the browser Console.':''}`));
+      }
+    }
+    return list;
+  };
+
+  window.archiveHistoricalFactoryRouteTasksV4516=async function(){
+    const candidates=[];
+    A(typeof pickupPlans!=='undefined'?pickupPlans:[]).forEach(plan=>{
+      if(!plan||U(plan.status)==='CANCELLED'||isFactory(plan.destination))return;
+      historicalFactoryTasksForPlan(plan).forEach(t=>{
+        if(!t.routeHistoryArchivedAt)candidates.push({plan,t});
+      });
+    });
+    if(!candidates.length){
+      alert(tr('没有需要归档的历史已完成工厂任务。','Não há tarefas históricas concluídas da fábrica para arquivar.','There are no completed historical factory tasks to archive.'));
+      return false;
+    }
+    const preview=candidates.slice(0,20).map((x,i)=>`${i+1}. ${x.t.containerNo||x.plan.containerNo||'-'} | ${x.t.batch||x.plan.batch||'-'} | ${taskDest(x.t)||'-'} | ${x.t.operationStatus||x.t.status||'-'}`).join('\n');
+    if(!confirm(tr(`将标记 ${candidates.length} 条已完成的历史工厂任务为“历史路线”，不删除卸货和操作记录，也不会修改当前RG/Rio Claro/IRA计划。\n\n${preview}${candidates.length>20?'\n\n仅显示前20条。':''}\n\n确认继续？`,`Serão marcadas ${candidates.length} tarefas históricas concluídas da fábrica como “rota histórica”. Os registros de descarga e operação não serão excluídos e os planos atuais de RG/Rio Claro/IRA não serão alterados.\n\n${preview}${candidates.length>20?'\n\nExibindo somente as primeiras 20.':''}\n\nDeseja continuar?`,`Mark ${candidates.length} completed historical factory tasks as “historical routes”. Unloading and operation records will be retained, and current RG/Rio Claro/IRA plans will not be changed.\n\n${preview}${candidates.length>20?'\n\nOnly the first 20 are shown.':''}\n\nContinue?`)))return false;
+    const ts=nowIso();
+    candidates.forEach(({plan,t})=>{
+      t.routeHistoryArchivedAt=ts;
+      t.routeHistoryArchivedBy=operator();
+      t.routeHistoryArchiveReason='V45.16：当前提箱计划目的地为 '+(plan.destination||'-')+'，该工厂任务已完成，仅退出当前路线冲突检查';
+      t.updatedAt=t.updatedAt||ts;
+    });
+    const save=window.queueSystemSaveV4516||window.queueSystemSaveV4513||window.queueSaveV455||window.saveCloudState;
+    const ok=typeof save==='function'?await save('archive_historical_factory_routes'):false;
+    window.__v457PickupDestinationConflicts=trueConflicts();
+    alert(ok===false?tr('历史任务已标记，但云端保存失败，请不要关闭页面并重试。','As tarefas foram marcadas, mas o salvamento na nuvem falhou. Não feche a página e tente novamente.','Tasks were marked, but cloud save failed. Do not close the page and retry.'):tr(`已归档 ${candidates.length} 条历史已完成工厂任务。当前计划和历史卸货记录均未被删除。`,`Foram arquivadas ${candidates.length} tarefas históricas concluídas da fábrica. Os planos atuais e os registros históricos de descarga foram mantidos.`,`Archived ${candidates.length} completed historical factory tasks. Current plans and historical unloading records were retained.`));
+    try{if(typeof renderContent==='function')renderContent();}catch(_){}
+    return ok!==false;
+  };
+
+  /* 过滤数据体检中的历史完成路线误报。 */
+  const originalScan=window.scanDataV4513;
+  function hasCurrentConflictForContainer(containerNo){
+    const key=U(containerNo);
+    return trueConflicts().some(x=>U(x.containerNo)===key);
+  }
+  if(typeof originalScan==='function'){
+    window.scanDataV4513=function(){
+      const report=originalScan.apply(this,arguments)||{counts:{},issues:[]};
+      report.issues=A(report.issues).filter(issue=>{
+        if(S(issue?.type)!=='运输路线冲突')return true;
+        return hasCurrentConflictForContainer(issue?.container);
+      });
+      report.counts=report.counts||{};
+      report.counts.issues=report.issues.length;
+      return report;
+    };
+  }
+
+  /* 在基础数据和数据体检中心增加历史任务归档入口。 */
+  const originalRenderContainers=window.renderContainers;
+  if(typeof originalRenderContainers==='function'){
+    window.renderContainers=renderContainers=function(container){
+      const result=originalRenderContainers.apply(this,arguments);
+      try{
+        const head=container?.querySelector('.card-header>div')||container?.querySelector('.card-header');
+        if(head&&!document.getElementById('btnArchiveHistoryV4516')){
+          const b=document.createElement('button');b.id='btnArchiveHistoryV4516';b.className='btn btn-secondary';
+          b.textContent=tr('🗃 归档历史已完成任务','🗃 Arquivar tarefas históricas','🗃 Archive historical tasks');
+          b.onclick=window.archiveHistoricalFactoryRouteTasksV4516;head.insertBefore(b,head.firstChild);
+        }
+        const check=document.getElementById('btnCheckPickupConflictV457');
+        if(check)check.textContent=tr('⚠ 检查当前计划冲突','⚠ Verificar conflitos atuais','⚠ Check current conflicts');
+      }catch(_){}
+      return result;
+    };
+  }
+  const originalClinic=window.renderDataClinicV4513;
+  if(typeof originalClinic==='function'){
+    window.renderDataClinicV4513=function(container){
+      try{window.__v4513LastReport=typeof window.scanDataV4513==='function'?window.scanDataV4513():window.__v4513LastReport;}catch(_){}
+      const result=originalClinic.apply(this,arguments);
+      try{
+        if(container&&!document.getElementById('v4516HistoryArchiveCard')){
+          const box=document.createElement('div');box.id='v4516HistoryArchiveCard';box.className='card';box.style.cssText='margin-top:12px;border:1px solid #dcdfe6;box-shadow:none';
+          box.innerHTML=`<div class="card-header"><span class="card-title">🗃 ${tr('历史路线管理','Gestão de rotas históricas','Historical route management')}</span></div><div style="line-height:1.7;color:#606266;margin-bottom:10px">${tr('已完成卸货、已完成运输或已取消的旧工厂任务不会再参与当前计划目的地冲突检查。此操作只添加历史标记，不删除门岗、卸货和操作日志。','Tarefas antigas da fábrica já descarregadas, concluídas ou canceladas não participam mais da verificação de conflitos dos planos atuais. Esta ação apenas adiciona uma marca histórica; os registros de portaria, descarga e operação não são excluídos.','Old factory tasks that are unloaded, completed, or cancelled are excluded from current destination conflict checks. This action only adds a historical marker; gate, unloading, and operation logs are retained.')}</div><button class="btn btn-secondary" onclick="archiveHistoricalFactoryRouteTasksV4516()">${tr('归档历史已完成任务','Arquivar tarefas históricas concluídas','Archive completed historical tasks')}</button>`;
+          container.appendChild(box);
+        }
+      }catch(_){}
+      return result;
+    };
+  }
+
+  /* ---------- 保存状态：只有真正未保存或保存失败时才阻止关闭 ---------- */
+  const oldHint=window.showRealtimeSyncHint;
+  window.showRealtimeSyncHint=function(text){
+    let value=S(text);
+    if(value.includes('保存中'))value=tr('同步进行中…','Sincronizando…','Synchronizing…');
+    if(typeof oldHint==='function')return oldHint(value);
+    let el=document.getElementById('realtimeSyncHint');
+    if(!el){el=document.createElement('span');el.id='realtimeSyncHint';el.className='role-badge';document.querySelector('.user-info')?.prepend(el);}
+    el.textContent=value;
+  };
+  try{showRealtimeSyncHint=window.showRealtimeSyncHint;}catch(_){}
+
+  const originalSave=window.queueSystemSaveV4513||window.queueSaveV455||window.saveCloudState;
+  const saveState={pending:0,dirty:false,lastError:'',lastSavedAt:''};
+  window.__v4516SaveState=saveState;
+  async function queueSave(reason){
+    saveState.pending++;
+    saveState.dirty=true;
+    saveState.lastError='';
+    window.showRealtimeSyncHint(tr('同步进行中…','Sincronizando…','Synchronizing…'));
+    try{
+      const ok=typeof originalSave==='function'?await originalSave('v4516_'+(reason||'save')):false;
+      if(ok===false)throw new Error(tr('云端保存返回失败','Falha retornada pelo salvamento na nuvem','Cloud save returned failure'));
+      saveState.lastSavedAt=nowIso();
+      return true;
+    }catch(e){
+      saveState.lastError=S(e?.message||e||'save failed');
+      console.error('V45.16 save error',e);
+      return false;
+    }finally{
+      saveState.pending=Math.max(0,saveState.pending-1);
+      if(saveState.pending===0){
+        if(saveState.lastError){saveState.dirty=true;window.showRealtimeSyncHint(tr('保存失败，请重试','Falha ao salvar. Tente novamente.','Save failed. Please retry.'));}
+        else{saveState.dirty=false;window.showRealtimeSyncHint(tr('已保存到云端','Salvo na nuvem','Saved to cloud'));}
+      }
+    }
+  }
+  window.queueSystemSaveV4516=queueSave;
+  window.queueSystemSaveV4513=queueSave;
+  window.queueSaveV455=queueSave;
+  window.queueCloudPersistV435=reason=>queueSave(reason||'legacy_queue');
+  window.saveCloudState=saveCloudState=()=>queueSave('saveCloudState');
+  window.saveData=saveData=()=>queueSave('saveData');
+
+  /* 旧版离开提示依据“保存中”文字判断。V45.16不再使用该文字，改为真实保存状态。 */
+  window.addEventListener('beforeunload',e=>{
+    if(saveState.pending>0||saveState.dirty){
+      e.preventDefault();
+      e.returnValue=tr('数据尚未完成云端保存，请稍候。','Os dados ainda não foram totalmente salvos na nuvem. Aguarde.','Data has not finished saving to the cloud. Please wait.');
+    }
+  });
+
+  setTimeout(()=>{
+    try{
+      const el=document.getElementById('realtimeSyncHint');
+      if(saveState.pending===0&&el&&el.textContent.includes('保存中'))window.showRealtimeSyncHint(tr('已保存到云端','Salvo na nuvem','Saved to cloud'));
+      document.title='Sistema Inteligente de Monitoramento de Contêineres V45.16';
+      const current=trueConflicts();
+      if(!current.length&&typeof window.showRealtimeSyncHint==='function')window.showRealtimeSyncHint(tr('数据已加载','Dados carregados','Data loaded'));
+    }catch(e){console.warn('V45.16 startup',e);}
+  },1200);
+  console.log(VERSION+' loaded');
+})();
+
+</script>
 </body>
 </html>
