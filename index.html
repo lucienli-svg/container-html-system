@@ -13787,7 +13787,204 @@ ${preview}
     const rows=list.map(x=>'<tr><td>'+esc(fmt(x.time))+'</td><td>'+esc(x.operator||'-')+'</td><td>'+esc(x.action)+'</td><td>'+esc(x.beforeStatus)+' → '+esc(x.afterStatus)+'</td><td>'+esc(x.reason||'-')+'</td></tr>').join('') || '<tr><td colspan="5">'+tr('暂无操作日志','Nenhum registro de operação','No operation logs')+'</td></tr>';
     const w=window.open('','_blank','width=900,height=620');
     if(!w)return;
-    const html=['<!doctype html>','<html><head><meta charset="utf-8"><title>',esc(t.containerNo||''),'</title><style>body{font-family:Arial;padding:20px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f3f4f6}</style></head><body><h2>',esc(t.containerNo||''),' · ',tr('操作日志','Registro de operações','Operation log'),'</h2><table><thead><tr><th>',tr('时间','Data/hora','Time'),'</th><th>',tr('操作人','Usuário','Operator'),'</th><th>',tr('操作','Ação','Action'),'</th><th>',tr('状态变化','Alteração de status','Status change'),'</th><th>',tr('原因','Motivo','Reason'),'</th></tr></thead><tbody>',rows,'</tbody></table></body></html>'].join('');
+    const html=['<!doctype html>','<html><head><meta charset="utf-8"><title>',esc(t.containerNo||''),'</title><style>body{font-family:Arial;padding:20px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f3f4f6}</style></head><body><h2>',esc(t.containerNo||''),' · ',tr('操作日志','Registro de operações','Operation log'),'</h2><table><thead><tr><th>',tr('时间','Data/hora','Time'),'</th><th>',tr('操作人','Usuário','Operator'),'</th><th>',tr('操作','Ação','Action'),'</th><th>',tr('状态变化','Alteração de status','Status change'),'</th><th>',tr('原因','Motivo','Reason'),'</th></tr></thead><tbody>',rows,'</tbody></table>
+
+<script>
+/* ==================== V45.20 工厂任务引用兜底修复 ====================
+   Fix: rows rendered by old factory/dock pages may pass V45.3 map ids, encoded JSON keys,
+   plain ids, taskUid, or routeLegKey. V45.15 only resolved its own temporary refs, so the
+   task appeared on the page but the click handler could not find it.
+*/
+(function(){
+  'use strict';
+  const VERSION='V45.20 Factory Task Reference Resolver Fix';
+  const S=v=>String(v??'').trim();
+  const U=v=>S(v).toUpperCase();
+  const A=v=>Array.isArray(v)?v:[];
+  const nowIso=()=>new Date().toISOString();
+  const isPt=()=>{try{return (currentLanguage==='pt'||localStorage.getItem('cc_lang')==='pt-BR');}catch(_){return false;}};
+  const isEn=()=>{try{return currentLanguage==='en'||localStorage.getItem('cc_lang')==='en-US';}catch(_){return false;}};
+  const tr=(zh,pt,en)=>isPt()?pt:(isEn()?en:zh);
+  const esc=v=>S(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  function isFactoryDest(v){const d=U(v);return ['工厂','FACTORY','GWM','FABRICA','FÁBRICA'].includes(d);}
+  function taskDest(t){return t?.to??t?.destination??t?.dest??'';}
+  function taskOrigin(t){return t?.from??t?.origin??'';}
+  function activeFactory(t){return !!t && !t.cancelled && U(t.status)!=='CANCELLED' && isFactoryDest(taskDest(t));}
+  function norm(v){return U(v).replace(/\s+/g,'');}
+  function parseRefObject(ref){
+    const s=S(ref); if(!s) return null;
+    if(window.__v4515TaskRefs && window.__v4515TaskRefs[s]) return window.__v4515TaskRefs[s];
+    if(window.__v453TaskKeys && window.__v453TaskKeys[s]){
+      try{return JSON.parse(decodeURIComponent(window.__v453TaskKeys[s]));}catch(_){return {rawKey:window.__v453TaskKeys[s]};}
+    }
+    try{ if(s[0]==='{') return JSON.parse(s); }catch(_){ }
+    try{ if(s.includes('%7B')||s.includes('%22')) return JSON.parse(decodeURIComponent(s)); }catch(_){ }
+    try{
+      const maybe=atob(s); if(maybe && maybe[0]==='{') return JSON.parse(maybe);
+    }catch(_){ }
+    return null;
+  }
+  function scoreTask(t, obj){
+    if(!t) return -999;
+    let score=0;
+    if(activeFactory(t)) score+=50;
+    if(obj){
+      const fields=[['taskUid','taskUid'],['id','id'],['routeLegKey','routeLegKey'],['sourcePlanId','sourcePlanId'],['containerId','containerId'],['containerNo','containerNo'],['batch','batch'],['containerSeq','containerSeq'],['seq','containerSeq']];
+      for(const [ok,tk] of fields){ if(obj[ok]!=null && t[tk]!=null && norm(obj[ok])===norm(t[tk])) score+= ok==='containerNo'?20:(ok==='batch'?8:(ok==='containerSeq'||ok==='seq'?5:25)); }
+      if(obj.to!=null && norm(obj.to)===norm(taskDest(t))) score+=10;
+      if(obj.from!=null && norm(obj.from)===norm(taskOrigin(t))) score+=8;
+      if(obj.eta!=null && norm(obj.eta)===norm(t.estimatedArrival||t.arrivalDate)) score+=8;
+    }
+    const rank = taskRank(t);
+    // For dock actions, prefer inside_waiting/unloading tasks over already completed records.
+    score += (rank===2?8:rank===3?7:rank===1?4:rank===0?2:0);
+    score += Date.parse(t.updatedAt||t.createdAt||'')/1e13 || 0;
+    return score;
+  }
+  function taskRank(t){
+    const op=U(t?.operationStatus);
+    if(t?.unloadFinishTime||t?.unpackConfirmedAt||op==='UNLOADED')return 4;
+    if(t?.unloadStartTime||op==='UNLOADING')return 3;
+    if(t?.gateReleaseTime||t?.waitingAreaTime||op==='INSIDE_WAITING')return 2;
+    if(t?.gateArrivalTime||op==='OUTSIDE_PARKING')return 1;
+    return 0;
+  }
+  function statusCode(rank){return ['not_arrived','outside_parking','inside_waiting','unloading','unloaded'][Math.max(0,Math.min(4,rank))];}
+  function resolveFactoryTaskAny(ref){
+    const key=S(ref);
+    const rows=A(window.transportTasks||transportTasks);
+    const obj=parseRefObject(key);
+    let candidates=[];
+    if(key){
+      candidates=rows.filter(t=>S(t.taskUid)===key || S(t.id)===key || S(t.routeLegKey)===key || S(t.sourcePlanId)===key);
+    }
+    if(obj){
+      candidates=candidates.concat(rows.filter(t=>{
+        if(obj.taskUid && S(t.taskUid)===S(obj.taskUid)) return true;
+        if(obj.id && S(t.id)===S(obj.id)) return true;
+        if(obj.routeLegKey && S(t.routeLegKey)===S(obj.routeLegKey)) return true;
+        if(obj.sourcePlanId && S(t.sourcePlanId)===S(obj.sourcePlanId)) return true;
+        const noOk=obj.containerNo && norm(t.containerNo)===norm(obj.containerNo);
+        const batchOk=!obj.batch || norm(t.batch)===norm(obj.batch);
+        const seqOk=!obj.containerSeq && !obj.seq || norm(t.containerSeq)===norm(obj.containerSeq||obj.seq);
+        const destOk=!obj.to || norm(taskDest(t))===norm(obj.to);
+        const etaOk=!obj.eta || norm(t.estimatedArrival||t.arrivalDate)===norm(obj.eta);
+        return noOk && batchOk && seqOk && destOk && etaOk;
+      }));
+    }
+    // Last-resort: avoid empty candidates when a plain numeric id is duplicated or typed differently.
+    if(!candidates.length && key){
+      candidates=rows.filter(t=>norm(t.id)===norm(key) || norm(t.taskUid)===norm(key));
+    }
+    // Keep only factory tasks when possible, but if the row was rendered from a legacy page, prefer the best match.
+    const factory=candidates.filter(activeFactory);
+    const final=(factory.length?factory:candidates).filter(Boolean);
+    final.sort((a,b)=>scoreTask(b,obj)-scoreTask(a,obj));
+    return final[0]||null;
+  }
+  function logActionSafe(t,action,before,after,reason){
+    try{
+      warningConfig=warningConfig&&typeof warningConfig==='object'?warningConfig:{};
+      const key='factoryActionLogsV4515';
+      if(!Array.isArray(warningConfig[key])) warningConfig[key]=[];
+      warningConfig[key].unshift({id:'log_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),taskUid:t.taskUid||'',taskId:t.id,containerId:t.containerId,containerNo:t.containerNo||'',batch:t.batch||'',action,beforeStatus:statusCode(before),afterStatus:statusCode(after),reason:reason||'',operator:window.currentUser?.email||window.currentUser?.name||'',time:nowIso()});
+      if(warningConfig[key].length>3000) warningConfig[key].length=3000;
+    }catch(e){console.warn('V45.20 log skipped',e);}
+  }
+  function ensureReturnSafe(t){
+    try{
+      if(!['港口','RG堆场'].includes(S(taskOrigin(t)))) return;
+      const rows=A(window.returnRecords||returnRecords);
+      if(rows.some(r=>S(r.containerId)===S(t.containerId)&&['return_needed','return'].includes(S(r.type)))) return;
+      rows.push({id:'return_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),containerId:t.containerId,location:'工厂',type:'return_needed',unpackDate:(t.unloadFinishTime||nowIso()).slice(0,10),isReturnConfirmed:false,fromLocation:taskOrigin(t),sourceTaskUid:t.taskUid||'',createdAt:nowIso(),updatedAt:nowIso()});
+    }catch(e){console.warn('V45.20 ensureReturn skipped',e);}
+  }
+  async function saveNow(reason){
+    const fn=window.queueSystemSaveV4513||window.queueSaveV455||window.saveCloudState;
+    if(typeof fn==='function') return await fn(reason||'v4520_factory_action');
+    return true;
+  }
+  function rerenderSamePage(){
+    const y=window.scrollY;
+    const main=document.getElementById('mainContent');
+    try{
+      if(typeof currentMenu!=='undefined' && currentMenu==='gateMonitoring' && typeof window.renderFactoryGateOnly==='function') window.renderFactoryGateOnly(main);
+      else if(typeof currentMenu!=='undefined' && currentMenu==='dockMonitoring' && typeof window.renderDockMonitoring==='function') window.renderDockMonitoring(main);
+      else if(typeof renderContent==='function') renderContent();
+      if(typeof window.applyLanguage==='function') window.applyLanguage(main||document.body);
+    }catch(e){console.warn('V45.20 rerender skipped',e);} 
+    setTimeout(()=>window.scrollTo(0,y),0);
+  }
+  function notify(msg,type='info'){
+    try{ if(typeof window.showRealtimeSyncHint==='function') window.showRealtimeSyncHint(msg); }catch(_){ }
+    try{ if(typeof window.showToast==='function') return window.showToast(msg,type); }catch(_){ }
+    console.log(msg);
+  }
+  async function factoryActionAny(ref,kind){
+    const t=resolveFactoryTaskAny(ref);
+    if(!t){
+      alert(tr('未找到当前工厂任务。系统已增强兼容旧任务引用，请刷新后重新进入该页面；如果仍出现，请在数据体检中心执行“修复任务ID/路线冲突”。','Tarefa atual da fábrica não encontrada. Atualize a página e tente novamente; se persistir, execute a correção no centro de diagnóstico.','Current factory task not found. Refresh and try again; if it persists, run the repair in Data Clinic.'));
+      return false;
+    }
+    const before=taskRank(t);
+    const ts=(typeof window.nowLocalInput==='function'?window.nowLocalInput():nowIso());
+    const label={gate:tr('确认到门口','Chegada à portaria confirmada','Gate arrival confirmed'),release:tr('放行进厂','Entrada na fábrica liberada','Released into factory'),start:tr('已开始卸货','Descarga iniciada','Unloading started'),finish:tr('已确认掏箱完成','Descarga concluída','Unloading completed')}[kind]||kind;
+    try{
+      if(kind==='gate'){
+        if(before>0) throw new Error(tr('当前任务已经确认到门口，不能重复确认。','A tarefa já foi confirmada na portaria.','Task already confirmed at gate.'));
+        t.gateArrivalTime=t.gateArrivalTime||ts; t.operationStatus='outside_parking'; t.status=t.status&&U(t.status)!=='PLANNED'?t.status:'in_transit';
+      }else if(kind==='release'){
+        if(before<1) throw new Error(tr('必须先确认到门口，才能放行进厂。','Confirme primeiro a chegada à portaria.','Confirm gate arrival first.'));
+        if(before>1) throw new Error(tr('该任务已经放行或进入后续流程。','Esta tarefa já foi liberada ou avançou no fluxo.','Task is already released or further in workflow.'));
+        t.gateReleaseTime=t.gateReleaseTime||ts; t.waitingAreaTime=t.waitingAreaTime||ts; t.operationStatus='inside_waiting'; t.status='in_transit';
+      }else if(kind==='start'){
+        if(before<2) throw new Error(tr('车辆必须先放行进厂，才能开始卸货。','O veículo deve ser liberado para a fábrica antes da descarga.','Vehicle must be released before unloading.'));
+        if(before>2) throw new Error(tr('该任务已经开始或完成卸货。','Esta tarefa já iniciou ou concluiu a descarga.','Task already started or completed unloading.'));
+        t.unloadStartTime=t.unloadStartTime||ts; t.operationStatus='unloading'; t.status='in_transit';
+      }else if(kind==='finish'){
+        if(before<3) throw new Error(tr('必须先开始卸货，才能确认掏箱完成。','Inicie a descarga antes de concluir.','Start unloading before finishing.'));
+        if(before>3) throw new Error(tr('该任务已经完成掏箱。','Esta tarefa já foi concluída.','Task already completed.'));
+        t.unloadFinishTime=t.unloadFinishTime||ts; t.unpackConfirmedAt=t.unpackConfirmedAt||ts; t.operationStatus='unloaded'; t.status=['港口','RG堆场'].includes(S(taskOrigin(t)))?'return_pending':'completed'; ensureReturnSafe(t);
+      }
+      t.updatedAt=nowIso();
+      logActionSafe(t,'v4520_'+kind,before,taskRank(t),'');
+      rerenderSamePage();
+      notify(label+' · '+tr('保存中','Salvando','Saving'));
+      const ok=await saveNow('v4520_factory_'+kind);
+      if(ok===false) throw new Error(tr('云端保存失败','Falha ao salvar na nuvem','Cloud save failed'));
+      notify(label+' · '+tr('已保存','Salvo','Saved'),'success');
+      return true;
+    }catch(e){
+      console.error('V45.20 factory action failed',e);
+      alert(tr('操作失败：','Falha na operação: ','Operation failed: ')+(e.message||e));
+      rerenderSamePage();
+      return false;
+    }
+  }
+  window.resolveFactoryTaskAnyV4520=resolveFactoryTaskAny;
+  window.v4520FactoryAction=factoryActionAny;
+  // Override all legacy and current action names. This protects rows rendered by old pages and V45.15 pages.
+  window.confirmGateArrivalByKeyV453=ref=>factoryActionAny(ref,'gate');
+  window.releaseFromGateByKeyV453=ref=>factoryActionAny(ref,'release');
+  window.startUnloadingByKeyV453=ref=>factoryActionAny(ref,'start');
+  window.finishUnloadingByKeyV453=ref=>factoryActionAny(ref,'finish');
+  window.confirmGateArrival=ref=>factoryActionAny(ref,'gate');
+  window.releaseFromGate=ref=>factoryActionAny(ref,'release');
+  window.startUnloading=ref=>factoryActionAny(ref,'start');
+  window.finishUnloading=ref=>factoryActionAny(ref,'finish');
+  // Make V45.15 forward use the robust resolver too.
+  window.v4515FactoryForward=(ref,kind)=>factoryActionAny(ref,kind);
+  setTimeout(()=>{
+    try{
+      document.title='Sistema Inteligente de Monitoramento de Contêineres V45.20';
+      notify(tr('V45.20已加载：工厂任务点击定位已修复。','V45.20 carregado: localização da tarefa da fábrica corrigida.','V45.20 loaded: factory task click resolver fixed.'),'success');
+    }catch(_){ }
+  },800);
+  console.log(VERSION+' loaded');
+})();
+</script>
+
+</body></html>'].join('');
     w.document.open();
     w.document.write(html);
     w.document.close();
