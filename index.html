@@ -13984,6 +13984,179 @@ ${preview}
 })();
 </script>
 
+<script>
+/* ==================== V45.21 提箱确认路线冲突误拦截修复 ====================
+   修复：确认提箱时，已到达/已卸货/已完成/已归档的不同目的地历史任务不再阻止当前计划。
+   原则：只有“当前仍在执行中的不同目的地任务”才阻止确认提箱；历史任务只归档退出当前运营流程。
+*/
+(function(){
+  'use strict';
+  const VERSION='V45.21 Pickup Conflict Guard Alignment';
+  const S=v=>v==null?'':String(v).trim();
+  const U=v=>S(v).toUpperCase();
+  const A=v=>Array.isArray(v)?v:[];
+  const now=()=>new Date().toISOString();
+  const tr=(zh,pt,en)=>{try{const l=String(window.currentLang||window.currentLanguage||localStorage.getItem('cc_lang')||'').toLowerCase();if(l.includes('pt'))return pt||zh;if(l.includes('en'))return en||zh;}catch(_){}return zh;};
+  const operator=()=>S(window.cloudUser?.email||window.currentUser?.email||window.currentUser?.name||'system');
+  const isFactory=d=>{const x=U(d);return ['工厂','FACTORY','FABRICA','FÁBRICA','GWM'].includes(x);};
+  const destOf=t=>S(t?.to||t?.destination||t?.destino||'');
+  const originOf=t=>S(t?.from||t?.origin||t?.origem||'港口');
+  const taskContainerNo=t=>S(t?.containerNo||t?.container_no||'');
+  const planContainerNo=p=>S(p?.containerNo||p?.container_no||'');
+  const taskSeq=t=>S(t?.containerSeq||t?.seq||t?.container_seq||'');
+  const planSeq=p=>S(p?.containerSeq||p?.seq||p?.container_seq||'');
+  const norm=v=>U(v).replace(/\s+/g,'');
+  function uuid(prefix){return (prefix||'id')+'_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,9);}
+  function numericTaskId(){try{if(window.nextIds&&typeof nextIds.task==='number')return nextIds.task++;}catch(_){}let max=0;A(window.transportTasks||transportTasks).forEach(t=>{const n=parseInt(t?.id,10);if(!isNaN(n)&&n>max)max=n;});return max+1;}
+  function isArchived(t){return !!(t?.currentFlowExcluded||t?.routeHistoryArchivedAt||t?.orphanHistoryArchivedAt||t?.archivedAt||t?.cancelled||['CANCELLED','ARCHIVED'].includes(U(t?.status))||['CANCELLED','ARCHIVED'].includes(U(t?.operationStatus)));}
+  function isTerminal(t){
+    const st=U(t?.status),op=U(t?.operationStatus);
+    return !!(t?.unloadFinishTime||t?.unpackConfirmedAt||t?.destuffingTime||
+      ['ARRIVED','UNLOADED','COMPLETED','RETURN_PENDING','RETURN','CANCELLED','ARCHIVED'].includes(st)||
+      ['UNLOADED','COMPLETED','CANCELLED','ARCHIVED'].includes(op));
+  }
+  function factoryInProgress(t){const op=U(t?.operationStatus);return ['NOT_ARRIVED','OUTSIDE_PARKING','INSIDE_WAITING','UNLOADING'].includes(op)&&!isTerminal(t);}
+  function activeDifferentDestTask(t,currentDest){
+    if(!t||isArchived(t))return false;
+    if(norm(destOf(t))===norm(currentDest))return false;
+    if(isTerminal(t))return false;
+    const st=U(t.status);
+    if(['IN_TRANSIT','PLANNED'].includes(st))return true;
+    if(isFactory(destOf(t))&&factoryInProgress(t))return true;
+    return false;
+  }
+  function historicalDifferentDestTask(t,currentDest){
+    return !!(t&&!isArchived(t)&&norm(destOf(t))!==norm(currentDest)&&!activeDifferentDestTask(t,currentDest));
+  }
+  function sameContainer(t,p){
+    if(t?.containerId!=null&&p?.containerId!=null&&S(t.containerId)===S(p.containerId))return true;
+    if(taskContainerNo(t)&&planContainerNo(p)&&norm(taskContainerNo(t))===norm(planContainerNo(p)))return true;
+    return false;
+  }
+  function routeKey(t){return [t?.containerId||taskContainerNo(t),originOf(t),destOf(t),t?.sourcePlanId||'',t?.estimatedArrival||t?.arrivalDate||''].map(S).join('|').toUpperCase();}
+  function markHistorical(t,reason){
+    if(!t)return false;
+    const ts=now();
+    t.currentFlowExcluded=true;
+    t.isHistoricalTask=true;
+    t.routeHistoryArchivedAt=t.routeHistoryArchivedAt||ts;
+    t.orphanHistoryArchivedAt=t.orphanHistoryArchivedAt||ts;
+    t.archivedAt=t.archivedAt||ts;
+    t.routeHistoryArchiveReason=reason||'V45.21：历史不同目的地任务退出当前流程';
+    t.routeHistoryArchivedBy=operator();
+    t.updatedAt=ts;
+    return true;
+  }
+  function cancelUnusedWrongTask(t,dest){
+    if(!t)return false;
+    const ts=now();
+    t.cancelled=true;
+    t.status='cancelled';
+    t.currentFlowExcluded=true;
+    t.archivedAt=ts;
+    t.cancelReason='V45.21：取消未执行的错误目的地任务，当前计划目的地为 '+dest;
+    t.updatedAt=ts;
+    return true;
+  }
+  function decodeRef(ref){
+    if(ref&&typeof ref==='object')return ref;
+    const raw=S(ref),vals=[];
+    if(window.__v453TaskKeys&&window.__v453TaskKeys[raw])vals.push(window.__v453TaskKeys[raw]);
+    if(window.__v4515TaskRefs&&window.__v4515TaskRefs[raw])vals.push(window.__v4515TaskRefs[raw]);
+    vals.push(raw);
+    for(const val of vals.filter(v=>v!=null&&v!=='')){
+      if(val&&typeof val==='object')return val;
+      const text=S(val);
+      try{const o=JSON.parse(text);if(o)return o;}catch(_){}
+      try{const o=JSON.parse(decodeURIComponent(text));if(o)return o;}catch(_){}
+      try{let s=text.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const o=JSON.parse(decodeURIComponent(escape(atob(s))));if(o)return o;}catch(_){}
+    }
+    return {id:raw,planUid:raw,taskUid:raw};
+  }
+  function activePlans(){return A(window.pickupPlans||pickupPlans).filter(p=>p&&U(p.status)!=='CANCELLED');}
+  function pickPlan(ref){
+    const key=decodeRef(ref);let list=activePlans();let m=[];
+    if(key.planUid)m=list.filter(p=>S(p.planUid)===S(key.planUid));
+    if(!m.length&&key.id!=null&&S(key.id)!=='')m=list.filter(p=>S(p.id)===S(key.id));
+    if(!m.length&&key.sourcePlanId)m=list.filter(p=>S(p.id)===S(key.sourcePlanId));
+    if(!m.length&&key.containerNo)m=list.filter(p=>norm(planContainerNo(p))===norm(key.containerNo));
+    if(!m.length&&key.containerId!=null&&S(key.containerId)!=='')m=list.filter(p=>S(p.containerId)===S(key.containerId));
+    if(m.length>1&&key.batch){const x=m.filter(p=>norm(p.batch)===norm(key.batch));if(x.length)m=x;}
+    if(m.length>1&&(key.seq||key.containerSeq)){const sq=norm(key.seq||key.containerSeq);const x=m.filter(p=>norm(planSeq(p))===sq);if(x.length)m=x;}
+    if(m.length>1&&key.destination){const x=m.filter(p=>norm(p.destination)===norm(key.destination));if(x.length)m=x;}
+    m.sort((a,b)=>Date.parse(b.updatedAt||b.createdAt||0)-Date.parse(a.updatedAt||a.createdAt||0));
+    return m[0]||null;
+  }
+  function findContainer(plan){return A(window.containers||containers).find(c=>S(c.id)===S(plan.containerId)||norm(c.containerNo)===norm(planContainerNo(plan)))||{};}
+  function readActualPickup(ref,plan){
+    const raw=S(ref);
+    const ids=['pickupTimeKey_'+raw,'pickupTime_'+S(plan.id),'pickupDate_'+S(plan.id),'actualPickup_'+S(plan.id)];
+    for(const id of ids){const el=document.getElementById(id);if(el&&S(el.value))return S(el.value);}
+    return S(plan.actualPickupTime||plan.pickupTime||'');
+  }
+  function existingTasksForPlanOrContainer(plan){
+    return A(window.transportTasks||transportTasks).filter(t=>t&&sameContainer(t,plan)&&!isArchived(t));
+  }
+  function createOrUpdateCurrentTask(plan,container){
+    const dest=S(plan.destination),from='港口',all=A(window.transportTasks||transportTasks);
+    const same=existingTasksForPlanOrContainer(plan);
+    const blocking=same.filter(t=>activeDifferentDestTask(t,dest));
+    if(blocking.length){
+      const detail=blocking.slice(0,8).map(t=>`${taskContainerNo(t)||planContainerNo(plan)||'-'}：${tr('任务目的地','Destino da tarefa','Task destination')} ${destOf(t)||'-'}，${tr('状态','Status','Status')} ${t.operationStatus||t.status||'-'}`).join('\n');
+      throw new Error(tr('该计划存在当前仍在执行的不同目的地运输任务，请先在数据体检中心处理路线冲突。','Este plano possui tarefa ativa com destino diferente. Trate o conflito no Centro de Diagnóstico de Dados.','This plan has an active transport task with a different destination. Please handle it in Data Clinic.')+'\n'+detail);
+    }
+    let archived=0;
+    same.filter(t=>historicalDifferentDestTask(t,dest)).forEach(t=>{if(markHistorical(t,'V45.21：确认提箱时归档已到达/已完成的不同目的地历史任务'))archived++;});
+    same.filter(t=>norm(destOf(t))!==norm(dest)&&!isArchived(t)).forEach(t=>{ if(!t.actualPickupTime&&!t.actualArrival&&!t.gateArrivalTime&&!t.unloadStartTime) cancelUnusedWrongTask(t,dest); });
+    let task=same.filter(t=>!isArchived(t)&&norm(destOf(t))===norm(dest)&&S(t.sourcePlanId)===S(plan.id)&&!isTerminal(t)).sort((a,b)=>Date.parse(b.updatedAt||b.createdAt||0)-Date.parse(a.updatedAt||a.createdAt||0))[0];
+    if(!task){
+      task={id:numericTaskId(),taskUid:uuid('task'),containerId:plan.containerId,containerNo:planContainerNo(plan)||container.containerNo||'',containerSeq:container.containerSeq||planSeq(plan)||'',batch:plan.batch||container.batch||'',blNo:plan.blNo||'',iraNo:plan.iraNo||'',from,to:dest,carrier:plan.carrier||'RG',status:'in_transit',operationStatus:isFactory(dest)?'not_arrived':'',estimatedArrival:plan.arrivalDate||'',arrivalDate:plan.arrivalDate||'',unloadingDock:plan.unloadingDock||'',source:'pickupPlan',sourcePlanId:plan.id,planUid:plan.planUid,createdAt:now(),publishedAt:now(),updatedAt:now()};
+      task.routeLegKey=routeKey(task);all.push(task);
+    }else{
+      Object.assign(task,{containerId:plan.containerId,containerNo:planContainerNo(plan)||container.containerNo||task.containerNo||'',containerSeq:container.containerSeq||planSeq(plan)||task.containerSeq||'',batch:plan.batch||container.batch||task.batch||'',from,to:dest,carrier:plan.carrier||task.carrier||'RG',estimatedArrival:plan.arrivalDate||task.estimatedArrival||'',arrivalDate:plan.arrivalDate||task.arrivalDate||'',unloadingDock:plan.unloadingDock||task.unloadingDock||'',source:'pickupPlan',sourcePlanId:plan.id,planUid:plan.planUid,status:'in_transit',cancelled:false,currentFlowExcluded:false,isHistoricalTask:false,routeHistoryArchivedAt:'',orphanHistoryArchivedAt:'',archivedAt:'',updatedAt:now()});
+      if(isFactory(dest)&&!task.operationStatus)task.operationStatus='not_arrived';
+      task.routeLegKey=routeKey(task);
+    }
+    return {task,archived};
+  }
+  function captureUi(){try{return window.captureCurrentUiStateV4513?window.captureCurrentUiStateV4513():{scrollY:window.scrollY};}catch(_){return {scrollY:window.scrollY};}}
+  function rerender(ui){try{if(window.renderSidebar)renderSidebar();if(window.renderContent)renderContent();if(window.applyLanguage)applyLanguage();setTimeout(()=>{try{window.restoreCurrentUiStateV4513&&window.restoreCurrentUiStateV4513(ui);if(ui&&ui.scrollY!=null)window.scrollTo(0,ui.scrollY);}catch(_){}},0);}catch(_){} }
+  async function save(reason){const fn=window.queueSystemSaveV4516||window.queueSystemSaveV4513||window.queueSaveV455||window.saveCloudState;if(typeof fn==='function')return await fn(reason||'v4521_save');return true;}
+  async function confirmPickupV4521(ref){
+    const plan=pickPlan(ref);
+    if(!plan)return alert(tr('未找到当前行对应的提箱计划，请刷新后重试。','Plano de coleta da linha atual não encontrado. Atualize e tente novamente.','Pickup plan for this row was not found. Refresh and retry.'));
+    const actual=readActualPickup(ref,plan);
+    if(!actual)return alert(tr('请填写实际提箱日期','Informe a data real de coleta','Please enter the actual pickup date'));
+    const ui=captureUi();
+    try{
+      const container=findContainer(plan);
+      plan.planUid=plan.planUid||uuid('plan');
+      plan.status='confirmed';plan.actualPickupTime=actual;plan.needReconfirm=false;plan.updatedAt=now();plan.updatedBy=operator();
+      if(container)container.actualPickupTime=actual;
+      const res=createOrUpdateCurrentTask(plan,container||{});
+      if(typeof window.prepareStateForSave==='function')try{window.prepareStateForSave();}catch(_){}
+      rerender(ui);
+      if(typeof window.showRealtimeSyncHint==='function')window.showRealtimeSyncHint(tr('已确认提箱，正在保存…','Coleta confirmada, salvando…','Pickup confirmed, saving…'));
+      const ok=await save('confirm_pickup_v4521_'+(planContainerNo(plan)||plan.id));
+      if(typeof window.showRealtimeSyncHint==='function')window.showRealtimeSyncHint(ok===false?tr('保存失败，请重试','Falha ao salvar. Tente novamente.','Save failed. Please retry.'):tr('已保存到云端','Salvo na nuvem','Saved to cloud'));
+      if(res.archived&&typeof window.showToast==='function')window.showToast(tr(`已自动归档 ${res.archived} 条已完成的旧路线任务。`,`Arquivadas automaticamente ${res.archived} tarefas antigas já concluídas.`,`Automatically archived ${res.archived} completed old route task(s).`),'info');
+      if(ok===false)alert(tr('提箱状态已更新到页面，但云端保存失败，请不要关闭页面并重试。','O status foi atualizado na tela, mas falhou ao salvar na nuvem. Não feche a página e tente novamente.','Pickup status updated on screen, but cloud save failed. Do not close the page and retry.'));
+      return ok!==false;
+    }catch(e){console.error('V45.21 confirm pickup failed',e);alert(tr('操作失败：','Falha na operação: ','Operation failed: ')+(e.message||e));return false;}
+  }
+  window.confirmPickupTaskByKeyV4521=confirmPickupV4521;
+  window.confirmPickupTaskByKeyV4518=confirmPickupV4521;
+  window.confirmPickupTaskByKeyV4517=confirmPickupV4521;
+  window.confirmPickupTaskByKeyV455=confirmPickupV4521;
+  window.confirmPickupTaskByKeyV451=confirmPickupV4521;
+  window.confirmPickupTaskByKeyV45=confirmPickupV4521;
+  window.confirmPickupTaskByKey=confirmPickupV4521;
+  window.confirmPickupTask=function(id){return confirmPickupV4521({id});};
+  setTimeout(()=>{try{document.title='Sistema Inteligente de Monitoramento de Contêineres V45.21';if(typeof window.showRealtimeSyncHint==='function')window.showRealtimeSyncHint(tr('V45.21已加载：提箱路线冲突误拦截已修复。','V45.21 carregado: bloqueio incorreto de conflito de rota corrigido.','V45.21 loaded: false pickup route conflict block fixed.'));}catch(_){}},900);
+  console.log(VERSION+' loaded');
+})();
+</script>
+
 </body></html>'].join('');
     w.document.open();
     w.document.write(html);
