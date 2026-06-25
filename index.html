@@ -14799,5 +14799,160 @@ ${preview}
 })();
 </script>
 
+<script>
+/* ==================== V45.24 费率配置持久化 + 预警修复 ==================== */
+(function(){
+  'use strict';
+  const VERSION='V45.24 Fee Config Persistence & Warning Fix';
+  const DEFAULT_STORAGE_WARNING_DAYS=5;
+  const DEFAULT_DEMURRAGE_WARNING_DAYS=7;
+  const isArr=Array.isArray;
+  const arr=v=>isArr(v)?v:[];
+  const S=v=>String(v==null?'':v).trim();
+  const U=v=>S(v).toUpperCase();
+  const nowIso=()=>new Date().toISOString();
+  function toNum(v,def=0){const n=Number(v);return Number.isFinite(n)?n:def;}
+  function toInt(v,def=0){const n=parseInt(v,10);return Number.isFinite(n)?n:def;}
+  function today(){try{return getTodayStr();}catch(_){const d=new Date();return d.toISOString().slice(0,10);}}
+  function dateOnly(v){try{if(typeof normalizeDateOnly==='function')return normalizeDateOnly(v);}catch(_){} const s=S(v); if(!s)return ''; const m=s.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/); if(m)return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`; const d=new Date(s); return isNaN(d)?'':`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+  function fmtInput(v){const d=dateOnly(v);return d||today();}
+  function tr(cn,pt,en){try{if(typeof currentLang!=='undefined'){if(currentLang==='pt')return pt||cn;if(currentLang==='en')return en||cn;}}catch(_){}return cn;}
+  function toast(msg,type='info',ms=3500){try{if(typeof showToast==='function')return showToast(msg,type,ms);if(typeof showRealtimeSyncHint==='function')return showRealtimeSyncHint(msg);}catch(_){} console.log(msg);}
+  function saveQueue(){return window.queueSystemSaveV4516||window.queueSystemSaveV4513||window.queueSaveV455||window.saveCloudState||window.saveData;}
+  function ensureWarningConfigV4524(){
+    if(typeof window.warningConfig==='undefined' || !window.warningConfig || typeof window.warningConfig!=='object') window.warningConfig={};
+    if(typeof warningConfig==='undefined' || !warningConfig || typeof warningConfig!=='object') warningConfig=window.warningConfig;
+    const old=warningConfig;
+    const sd=toInt(old.storageWarningDays, DEFAULT_STORAGE_WARNING_DAYS);
+    const dd=toInt(old.demurrageWarningDays, DEFAULT_DEMURRAGE_WARNING_DAYS);
+    old.storageWarningDays = sd>=0 ? sd : DEFAULT_STORAGE_WARNING_DAYS;
+    old.demurrageWarningDays = dd>=0 ? dd : DEFAULT_DEMURRAGE_WARNING_DAYS;
+    window.warningConfig=warningConfig=old;
+    return old;
+  }
+  window.ensureWarningConfigV4524=ensureWarningConfigV4524;
+  function normalizeStorageConfigV4524(){
+    if(typeof storageConfig==='undefined'||!isArr(storageConfig)) storageConfig=[];
+    storageConfig=storageConfig.map(c=>({
+      startDate:fmtInput(c&&c.startDate),
+      endDate:fmtInput(c&&c.endDate),
+      fixedDays:Math.max(0,toInt(c&&c.fixedDays,15)),
+      fixedRate:Math.max(0,toNum(c&&c.fixedRate,0)),
+      overtimeRate:Math.max(0,toNum(c&&c.overtimeRate,0))
+    })).filter(c=>c.startDate&&c.endDate);
+    window.storageConfig=storageConfig;
+    return storageConfig;
+  }
+  function normalizeDemurrageConfigV4524(){
+    if(typeof demurrageConfig==='undefined'||!isArr(demurrageConfig)) demurrageConfig=[];
+    demurrageConfig=demurrageConfig.map(c=>({
+      carrier:S(c&&c.carrier)||'MSC',
+      type:S(c&&c.type)||'普柜',
+      startDate:fmtInput(c&&c.startDate),
+      endDate:fmtInput(c&&c.endDate),
+      freeDays:Math.max(0,toInt(c&&c.freeDays,28)),
+      ratePerDay:Math.max(0,toNum(c&&c.ratePerDay,0))
+    })).filter(c=>c.startDate&&c.endDate);
+    window.demurrageConfig=demurrageConfig;
+    return demurrageConfig;
+  }
+  function normalizeFeeConfigV4524(){ensureWarningConfigV4524();normalizeStorageConfigV4524();normalizeDemurrageConfigV4524();return true;}
+  window.normalizeFeeConfigV4524=normalizeFeeConfigV4524;
+  function feeStamp(){try{return JSON.stringify({s:storageConfig||[],d:demurrageConfig||[],w:{s:warningConfig&&warningConfig.storageWarningDays,d:warningConfig&&warningConfig.demurrageWarningDays}});}catch(_){return String(Date.now());}}
+  function resetFeeCache(){try{localStorage.removeItem('cc_lastFeeUpdate');localStorage.removeItem('cc_cachedFees');localStorage.setItem('cc_feeConfigStampV4524',feeStamp());}catch(_){}}
+  function carrierKey(v){const x=U(v);if(!x)return '';if(x.includes('MSC'))return 'MSC';if(x.includes('COSCO'))return 'COSCO';if(x.includes('EVERGREEN')||x.includes('EGLV')||x.includes('长荣')||x.includes('長榮'))return 'EVERGREEN';return x;}
+  function typeKey(v){const x=U(v);if(!x)return '';if(x.includes('冷')||x.includes('RF')||x.includes('REEFER'))return 'REEFER';return 'NORMAL';}
+  window.getStorageConfigByDate=getStorageConfigByDate=function(etaDate){
+    normalizeStorageConfigV4524();
+    const eta=dateOnly(etaDate); if(!eta||!storageConfig.length)return null;
+    let matched=null;
+    for(const c of storageConfig){const a=dateOnly(c.startDate),b=dateOnly(c.endDate);if(a&&b&&eta>=a&&eta<=b){matched=c;break;}}
+    if(!matched){const sorted=[...storageConfig].sort((a,b)=>dateOnly(a.startDate).localeCompare(dateOnly(b.startDate)));matched=sorted.find(c=>eta<=dateOnly(c.endDate))||sorted[sorted.length-1]||null;}
+    return matched;
+  };
+  window.getDemurrageConfigByDate=getDemurrageConfigByDate=function(container,etaDate){
+    normalizeDemurrageConfigV4524();
+    const eta=dateOnly(etaDate); if(!eta||!demurrageConfig.length)return null;
+    const ck=carrierKey(container&&container.vessel), tk=typeKey(container&&container.containerType);
+    let candidates=demurrageConfig.filter(c=>{
+      const a=dateOnly(c.startDate),b=dateOnly(c.endDate); if(!(a&&b&&eta>=a&&eta<=b))return false;
+      const carrierOk=!S(c.carrier)||carrierKey(c.carrier)===ck;
+      const typeOk=!S(c.type)||typeKey(c.type)===tk||S(c.type)==='普柜'&&tk==='NORMAL'||S(c.type)==='冷柜'&&tk==='REEFER';
+      return carrierOk&&typeOk;
+    });
+    if(!candidates.length)candidates=demurrageConfig.filter(c=>{const a=dateOnly(c.startDate),b=dateOnly(c.endDate);return a&&b&&eta>=a&&eta<=b&&(!S(c.carrier)||carrierKey(c.carrier)===ck);});
+    return candidates[0]||null;
+  };
+  function rebuildWarningListsV4524(){
+    ensureWarningConfigV4524();
+    if(typeof cachedFeeData==='undefined'||!cachedFeeData||typeof cachedFeeData!=='object')return;
+    const storageList=[], demList=[];
+    const current=today();
+    try{
+      arr(containers).filter(c=>typeof isOperationalVisibleContainer==='function'?isOperationalVisibleContainer(c):true).forEach(c=>{
+        const r=typeof calculateFeesForContainer==='function'?calculateFeesForContainer(c,current):null; if(!r)return;
+        if(!c.actualPickupTime && Number(r.storageRemainingDays)<=warningConfig.storageWarningDays && Number(r.storageRemainingDays)>=0 && Number(r.storageRemainingDays)<999){
+          storageList.push({id:c.id,batch:c.batch,containerNo:c.containerNo,vessel:c.vessel,eta:c.eta,remainingDays:r.storageRemainingDays,fee:r.abnormalStorageFee||0,storageDays:r.storageDays||0,abnormalDays:r.storageAbnormalDays||0});
+        }
+        const returned=typeof isContainerReturnConfirmed==='function'?isContainerReturnConfirmed(c.id):false;
+        if(!returned && Number(r.demurrageRemainingDays)<=warningConfig.demurrageWarningDays && Number(r.demurrageRemainingDays)>=0 && Number(r.demurrageRemainingDays)<999){
+          demList.push({id:c.id,batch:c.batch,containerNo:c.containerNo,vessel:c.vessel,type:c.containerType,eta:c.eta,remainingDays:r.demurrageRemainingDays,fee:r.demurrageFee||0});
+        }
+      });
+      cachedFeeData.storageWarningList=storageList;
+      cachedFeeData.demurrageWarningList=demList;
+      cachedFeeData.cacheVersion=(typeof FEE_CACHE_VERSION!=='undefined'?FEE_CACHE_VERSION:'v4524');
+      cachedFeeData.warningConfigStamp=feeStamp();
+      try{localStorage.setItem('cc_cachedFees',JSON.stringify(cachedFeeData));localStorage.setItem('cc_lastFeeUpdate',current);localStorage.setItem('cc_feeConfigStampV4524',feeStamp());}catch(_){ }
+    }catch(e){console.warn('V45.24 rebuild warnings skipped',e);}
+  }
+  const oldUpdateDailyFees=window.updateDailyFees;
+  if(typeof oldUpdateDailyFees==='function') window.updateDailyFees=updateDailyFees=function(){
+    normalizeFeeConfigV4524();
+    try{if(localStorage.getItem('cc_feeConfigStampV4524')!==feeStamp()){localStorage.removeItem('cc_lastFeeUpdate');localStorage.removeItem('cc_cachedFees');}}catch(_){ }
+    const r=oldUpdateDailyFees.apply(this,arguments);
+    rebuildWarningListsV4524();
+    return r;
+  };
+  function collectRatesFromDom(){
+    const s=[];for(let i=0;i<999;i++){const start=document.getElementById(`storage_start_${i}`);if(!start)continue;const end=document.getElementById(`storage_end_${i}`);s.push({startDate:fmtInput(start.value),endDate:fmtInput(end&&end.value),fixedDays:Math.max(0,toInt(document.getElementById(`storage_fixedDays_${i}`)?.value,15)),fixedRate:Math.max(0,toNum(document.getElementById(`storage_fixedRate_${i}`)?.value,0)),overtimeRate:Math.max(0,toNum(document.getElementById(`storage_overtimeRate_${i}`)?.value,0))});}
+    const d=[];for(let i=0;i<999;i++){const start=document.getElementById(`dem_start_${i}`);if(!start)continue;const end=document.getElementById(`dem_end_${i}`);d.push({carrier:S(document.getElementById(`dem_carrier_${i}`)?.value)||'MSC',type:S(document.getElementById(`dem_type_${i}`)?.value)||'普柜',startDate:fmtInput(start.value),endDate:fmtInput(end&&end.value),freeDays:Math.max(0,toInt(document.getElementById(`dem_freeDays_${i}`)?.value,28)),ratePerDay:Math.max(0,toNum(document.getElementById(`dem_rate_${i}`)?.value,0))});}
+    if(s.length)storageConfig=s;
+    if(d.length)demurrageConfig=d;
+    window.storageConfig=storageConfig;window.demurrageConfig=demurrageConfig;
+  }
+  function collectWarningFromDom(){ensureWarningConfigV4524();const s=document.getElementById('warningStorageDays');const d=document.getElementById('warningDemurrageDays');if(s)warningConfig.storageWarningDays=Math.max(0,toInt(s.value,DEFAULT_STORAGE_WARNING_DAYS));if(d)warningConfig.demurrageWarningDays=Math.max(0,toInt(d.value,DEFAULT_DEMURRAGE_WARNING_DAYS));window.warningConfig=warningConfig;}
+  async function persistFeeConfig(reason){
+    normalizeFeeConfigV4524();
+    resetFeeCache();
+    try{if(typeof updateDailyFees==='function')updateDailyFees();}catch(e){console.warn(e);}
+    const fn=saveQueue();
+    if(typeof fn!=='function'){toast(tr('未找到云端保存函数','Função de salvamento na nuvem não encontrada','Cloud save function not found'),'error');return false;}
+    toast(tr('正在保存费率配置…','Salvando configuração de tarifas…','Saving rate configuration…'),'info');
+    const ok=await fn(reason||'fee_config_v4524');
+    if(ok===false){toast(tr('费率配置保存失败，请检查网络后重试','Falha ao salvar tarifas. Verifique a rede e tente novamente.','Failed to save rate configuration. Check network and retry.'),'error');return false;}
+    toast(tr('费率配置已保存到云端，预警已重新计算','Configuração de tarifas salva na nuvem; alertas recalculados','Rate config saved to cloud; warnings recalculated'),'success');
+    try{if(typeof renderContent==='function')renderContent();}catch(_){ }
+    return true;
+  }
+  const oldRenderRate=window.renderRateConfig;
+  if(typeof oldRenderRate==='function') window.renderRateConfig=renderRateConfig=function(container){normalizeFeeConfigV4524();const r=oldRenderRate.apply(this,arguments);setTimeout(()=>{try{normalizeFeeConfigV4524();const a=document.getElementById('warningStorageDays');const b=document.getElementById('warningDemurrageDays');if(a&&(!a.value||a.value==='undefined'))a.value=warningConfig.storageWarningDays;if(b&&(!b.value||b.value==='undefined'))b.value=warningConfig.demurrageWarningDays;if(typeof applyLanguage==='function')applyLanguage(container||document.getElementById('mainContent'));}catch(_){ }},0);return r;};
+  window.saveWarningConfig=async function(){collectWarningFromDom();await persistFeeConfig('warning_config_v4524');};
+  window.saveAllRates=async function(){collectRatesFromDom();collectWarningFromDom();await persistFeeConfig('all_rates_v4524');};
+  window.addStoragePeriod=function(){normalizeStorageConfigV4524();storageConfig.push({startDate:today(),endDate:today(),fixedDays:15,fixedRate:0,overtimeRate:0});renderRateConfig(document.getElementById('mainContent'));};
+  window.deleteStoragePeriod=function(idx){normalizeStorageConfigV4524();storageConfig.splice(idx,1);renderRateConfig(document.getElementById('mainContent'));};
+  window.addDemPeriod=function(){normalizeDemurrageConfigV4524();demurrageConfig.push({carrier:'MSC',type:'普柜',startDate:today(),endDate:today(),freeDays:28,ratePerDay:170});renderRateConfig(document.getElementById('mainContent'));};
+  window.deleteDemPeriod=function(idx){normalizeDemurrageConfigV4524();demurrageConfig.splice(idx,1);renderRateConfig(document.getElementById('mainContent'));};
+  const oldRenderDashboard=window.renderDashboard;
+  if(typeof oldRenderDashboard==='function') window.renderDashboard=renderDashboard=function(container){normalizeFeeConfigV4524();try{if(typeof updateDailyFees==='function')updateDailyFees();}catch(_){ }const r=oldRenderDashboard.apply(this,arguments);setTimeout(()=>{try{const root=container||document.getElementById('mainContent');if(root)root.innerHTML=root.innerHTML.replace(/undefined天内/g,warningConfig.storageWarningDays+'天内').replace(/undefined dias/g,warningConfig.storageWarningDays+' dias');}catch(_){ }},0);return r;};
+  const oldShowWarning=window.showWarningDetail;
+  if(typeof oldShowWarning==='function') window.showWarningDetail=function(type){normalizeFeeConfigV4524();try{resetFeeCache();if(typeof updateDailyFees==='function')updateDailyFees();}catch(_){ }return oldShowWarning.apply(this,arguments);};
+  const oldApplyState=window.applyStateV455;
+  if(typeof oldApplyState==='function') window.applyStateV455=function(st){const r=oldApplyState.apply(this,arguments);normalizeFeeConfigV4524();resetFeeCache();try{if(typeof updateDailyFees==='function')updateDailyFees();}catch(_){ }return r;};
+  setTimeout(()=>{try{normalizeFeeConfigV4524();resetFeeCache();if(typeof updateDailyFees==='function')updateDailyFees();if(typeof currentMenu!=='undefined'&&currentMenu==='rateConfig')renderRateConfig(document.getElementById('mainContent'));if(typeof showRealtimeSyncHint==='function')showRealtimeSyncHint(tr('V45.24已加载：费率配置和预警保存已修复','V45.24 carregado: tarifas e alertas corrigidos','V45.24 loaded: rate config and warnings fixed'));}catch(e){console.warn('V45.24 startup',e);}},900);
+  console.log(VERSION+' loaded');
+})();
+</script>
+
 </body>
 </html>
