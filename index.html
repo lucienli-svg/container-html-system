@@ -13933,6 +13933,253 @@ ${preview}
 })();
 </script>
 
+
+<script>
+/* ==================== V45.27 Safe Sync Optimizer：快速操作 + 断电/误关防丢草稿 ====================
+   目标：连续操作时页面立即响应，云端保存合并排队；即使误关浏览器，也保留未同步草稿供恢复。
+   原则：本地草稿只作为“应急恢复”，不自动覆盖云端主数据。
+*/
+(function(){
+  'use strict';
+  const VERSION = 'V45.27 Safe Sync Optimizer';
+  const META_KEY = 'cc_v4527_unsynced_meta';
+  const SNAPSHOT_KEY = 'cc_v4527_unsynced_snapshot';
+  const DB_NAME = 'cms_safe_sync_v4527';
+  const STORE = 'drafts';
+  const MAX_LOCAL_CHARS = 4200000;
+  const SAVE_DEBOUNCE_MS = 1200;
+  let saveTimer = null;
+  let saveRunning = false;
+  let saveRequested = false;
+  let saveReason = '';
+  let savePromise = Promise.resolve(true);
+  let lastDraftAt = 0;
+
+  const coreSave = (typeof window.saveCloudState === 'function') ? window.saveCloudState.bind(window) : null;
+  const oldSaveAndRender = (typeof window.saveAndRenderContentKeepState === 'function') ? window.saveAndRenderContentKeepState.bind(window) : null;
+
+  function now(){ return new Date().toISOString(); }
+  function user(){ try{return (window.cloudUser&&cloudUser.email)||(window.currentUser&&(currentUser.email||currentUser.name))||'';}catch(_){return '';} }
+  function A(v){ return Array.isArray(v) ? v : []; }
+  function clone(v){ return JSON.parse(JSON.stringify(v || {})); }
+  function hint(msg){
+    try{ if(typeof showRealtimeSyncHint === 'function') showRealtimeSyncHint(msg); }catch(_){ }
+    try{
+      const pill = document.querySelector('.sync-status,.cloud-status,.status-pill,[data-sync-status]');
+      if(pill) pill.textContent = msg;
+    }catch(_){ }
+    try{ console.log('[V45.27]', msg); }catch(_){ }
+  }
+  function stateSnapshot(){
+    try{
+      const st = (typeof getCloudStatePayload === 'function') ? getCloudStatePayload() : {
+        containers: window.containers || [], blList: window.blList || [], containerBlMap: window.containerBlMap || [],
+        transportTasks: window.transportTasks || [], locationStock: window.locationStock || [], returnRecords: window.returnRecords || [],
+        pickupPlans: window.pickupPlans || [], productionRecords: window.productionRecords || [], productionPlans: window.productionPlans || [],
+        factoryCalendar: window.factoryCalendar || [], storageConfig: window.storageConfig || [], demurrageConfig: window.demurrageConfig || [],
+        nextIds: window.nextIds || {}, warningConfig: window.warningConfig || {}
+      };
+      return clone(st);
+    }catch(e){ console.warn('V45.27 snapshot failed', e); return {}; }
+  }
+  function counts(st){
+    st = st || {};
+    return {
+      containers:A(st.containers).length,
+      pickupPlans:A(st.pickupPlans).length,
+      transportTasks:A(st.transportTasks).length,
+      returnRecords:A(st.returnRecords).length,
+      productionPlans:A(st.productionPlans).length
+    };
+  }
+  function hasBusinessData(st){
+    const c = counts(st);
+    return (c.containers+c.pickupPlans+c.transportTasks+c.returnRecords+c.productionPlans) > 0;
+  }
+  function openDb(){
+    return new Promise((resolve,reject)=>{
+      try{
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = e => { const db = e.target.result; if(!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, {keyPath:'id'}); };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error || new Error('IndexedDB open failed'));
+      }catch(e){ reject(e); }
+    });
+  }
+  async function idbPut(record){
+    const db = await openDb();
+    return new Promise((resolve,reject)=>{
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).put(record);
+      tx.oncomplete = () => { try{db.close();}catch(_){}; resolve(true); };
+      tx.onerror = () => { try{db.close();}catch(_){}; reject(tx.error || new Error('IndexedDB write failed')); };
+    });
+  }
+  async function idbGet(){
+    const db = await openDb();
+    return new Promise((resolve,reject)=>{
+      const tx = db.transaction(STORE, 'readonly');
+      const req = tx.objectStore(STORE).get('latest');
+      req.onsuccess = () => { try{db.close();}catch(_){}; resolve(req.result || null); };
+      req.onerror = () => { try{db.close();}catch(_){}; reject(req.error || new Error('IndexedDB read failed')); };
+    });
+  }
+  async function idbDelete(){
+    try{
+      const db = await openDb();
+      await new Promise((resolve,reject)=>{
+        const tx = db.transaction(STORE, 'readwrite');
+        tx.objectStore(STORE).delete('latest');
+        tx.oncomplete = () => { try{db.close();}catch(_){}; resolve(true); };
+        tx.onerror = () => { try{db.close();}catch(_){}; reject(tx.error || new Error('IndexedDB delete failed')); };
+      });
+    }catch(e){ console.warn('V45.27 clear IDB failed', e); }
+  }
+  async function saveEmergencyDraft(reason){
+    const st = stateSnapshot();
+    if(!hasBusinessData(st)) return false;
+    const meta = {reason:reason||'operation', savedAt:now(), user:user(), counts:counts(st), version:VERSION};
+    lastDraftAt = Date.now();
+    try{ localStorage.setItem(META_KEY, JSON.stringify(meta)); }catch(_){ }
+    try{
+      const text = JSON.stringify(st);
+      if(text.length < MAX_LOCAL_CHARS) localStorage.setItem(SNAPSHOT_KEY, text);
+      else localStorage.removeItem(SNAPSHOT_KEY);
+    }catch(_){ try{ localStorage.removeItem(SNAPSHOT_KEY); }catch(__){} }
+    try{ await idbPut({id:'latest', meta, state:st}); }catch(e){ console.warn('V45.27 IDB draft failed', e); }
+    return true;
+  }
+  async function loadEmergencyDraft(){
+    let meta = null, state = null;
+    try{ meta = JSON.parse(localStorage.getItem(META_KEY) || 'null'); }catch(_){ }
+    try{ state = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || 'null'); }catch(_){ }
+    if(!state){ try{ const rec = await idbGet(); if(rec){ meta = rec.meta || meta; state = rec.state || null; } }catch(e){ console.warn('V45.27 IDB load failed', e); } }
+    if(state && hasBusinessData(state)) return {meta:meta||{}, state};
+    return null;
+  }
+  async function clearEmergencyDraft(){
+    try{ localStorage.removeItem(META_KEY); localStorage.removeItem(SNAPSHOT_KEY); }catch(_){ }
+    await idbDelete();
+  }
+  function applyState(st){
+    try{
+      if(typeof applyStateV455 === 'function') return applyStateV455(st);
+      if(typeof applyCloudState === 'function') return applyCloudState(st);
+    }catch(e){ console.warn('V45.27 apply existing failed', e); }
+    try{
+      window.containers = A(st.containers); window.blList = A(st.blList); window.containerBlMap = A(st.containerBlMap);
+      window.transportTasks = A(st.transportTasks); window.locationStock = A(st.locationStock); window.returnRecords = A(st.returnRecords);
+      window.pickupPlans = A(st.pickupPlans); window.productionRecords = A(st.productionRecords); window.productionPlans = A(st.productionPlans);
+      window.factoryCalendar = A(st.factoryCalendar); window.storageConfig = A(st.storageConfig); window.demurrageConfig = A(st.demurrageConfig);
+      window.nextIds = st.nextIds || {}; window.warningConfig = st.warningConfig || {storageWarningDays:5,demurrageWarningDays:7};
+      try{ if(typeof updateContainerStatus === 'function') updateContainerStatus(); }catch(_){ }
+      try{ if(typeof updateDailyFees === 'function') updateDailyFees(); }catch(_){ }
+    }catch(e){ console.error('V45.27 manual apply failed', e); }
+  }
+  function renderKeepPosition(){
+    const y = window.scrollY;
+    let ui = null;
+    try{ if(typeof captureCurrentUiStateV4513 === 'function') ui = captureCurrentUiStateV4513(); }catch(_){ }
+    try{ if(typeof renderSidebar === 'function') renderSidebar(); }catch(_){ }
+    try{ if(typeof renderContent === 'function') renderContent(); }catch(e){ console.warn('V45.27 renderContent failed', e); }
+    try{ if(typeof applyLanguage === 'function') applyLanguage(); }catch(_){ }
+    setTimeout(()=>{ try{ if(ui && typeof restoreCurrentUiStateV4513 === 'function') restoreCurrentUiStateV4513(ui); else window.scrollTo(0,y); }catch(_){ window.scrollTo(0,y); } },0);
+  }
+  async function flush(reason){
+    saveRequested = false;
+    saveRunning = true;
+    hint('同步进行中...');
+    try{
+      await saveEmergencyDraft(reason||saveReason||'flush');
+      let ok = true;
+      if(coreSave) ok = await coreSave('v4527_'+(reason||saveReason||'save'));
+      if(ok === false) throw new Error('云端保存返回失败');
+      await clearEmergencyDraft();
+      hint('已保存到云端');
+      return true;
+    }catch(e){
+      console.error('V45.27 cloud save failed', e);
+      hint('保存失败，已保留本地草稿');
+      try{ localStorage.setItem(META_KEY, JSON.stringify({reason:reason||saveReason||'failed_save', savedAt:now(), user:user(), counts:counts(stateSnapshot()), version:VERSION, error:String(e.message||e)})); }catch(_){ }
+      return false;
+    }finally{
+      saveRunning = false;
+      if(saveRequested){
+        const r = saveReason || 'coalesced_followup';
+        saveTimer = setTimeout(()=>{ savePromise = flush(r); }, SAVE_DEBOUNCE_MS);
+      }
+    }
+  }
+  function queue(reason, immediate){
+    saveReason = reason || saveReason || 'save';
+    saveRequested = true;
+    saveEmergencyDraft(saveReason).catch(()=>{});
+    if(saveTimer) clearTimeout(saveTimer);
+    if(immediate){
+      if(saveRunning) return savePromise;
+      savePromise = flush(saveReason);
+      return savePromise;
+    }
+    if(!saveRunning){
+      saveTimer = setTimeout(()=>{ savePromise = flush(saveReason); }, SAVE_DEBOUNCE_MS);
+    }
+    hint('待同步，已保留本地草稿');
+    return savePromise;
+  }
+  window.queueSafeSyncV4527 = queue;
+  window.saveCloudState = window.saveData = function(){ return queue('save', false); };
+  window.saveCloudStateV45 = window.saveCloudStateV44 = window.saveCloudStateV442 = window.saveCloudState;
+  window.queueSaveV455 = window.queueSystemSaveV4513 = function(reason){ return queue(reason||'queue', false); };
+  window.queueCloudPersistV435 = function(reason){ return queue(reason||'legacy_queue', false); };
+  window.saveAndRenderContentKeepState = function(){ renderKeepPosition(); return queue('save_and_render', false); };
+  window.forceSyncNowV4527 = function(){ return queue('manual_force_sync', true); };
+  window.downloadEmergencyDraftV4527 = async function(){
+    const d = await loadEmergencyDraft();
+    if(!d) return alert('没有未同步草稿。');
+    const blob = new Blob([JSON.stringify(d.state, null, 2)], {type:'application/json'});
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'cms_unsynced_draft_'+(d.meta.savedAt||now()).replace(/[-:.TZ]/g,'').slice(0,14)+'.json'; a.click();
+  };
+  window.recoverEmergencyDraftV4527 = async function(){
+    const d = await loadEmergencyDraft();
+    if(!d) return alert('没有未同步草稿。');
+    const c = d.meta.counts || counts(d.state);
+    if(!confirm('确认恢复本地未同步草稿并写入云端？\n\n基础数据：'+(c.containers||0)+'\n提箱计划：'+(c.pickupPlans||0)+'\n运输任务：'+(c.transportTasks||0)+'\n草稿时间：'+(d.meta.savedAt||'-'))) return;
+    applyState(d.state);
+    renderKeepPosition();
+    await queue('recover_emergency_draft', true);
+    alert('草稿已恢复并提交云端保存。请等待顶部显示“已保存到云端”后再关闭页面。');
+  };
+  window.discardEmergencyDraftV4527 = async function(){
+    if(!confirm('确认忽略本地未同步草稿？此操作不会影响云端数据。')) return;
+    await clearEmergencyDraft();
+    const b=document.getElementById('v4527DraftBanner'); if(b) b.remove();
+  };
+  function showDraftBannerIfNeeded(){
+    loadEmergencyDraft().then(d=>{
+      if(!d) return;
+      const meta=d.meta||{}, c=meta.counts||counts(d.state);
+      if(document.getElementById('v4527DraftBanner')) return;
+      const div=document.createElement('div');
+      div.id='v4527DraftBanner';
+      div.style.cssText='position:fixed;left:16px;right:16px;bottom:16px;z-index:99999;background:#fff7ed;border:1px solid #fb923c;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:12px 14px;color:#7c2d12;font-size:13px;line-height:1.6;';
+      div.innerHTML='<b>⚠ 发现本地未同步草稿</b>　时间：'+(meta.savedAt||'-')+'　基础数据 '+(c.containers||0)+' / 提箱计划 '+(c.pickupPlans||0)+' / 运输任务 '+(c.transportTasks||0)+
+        '<div style="margin-top:8px;"><button class="btn btn-warning" onclick="recoverEmergencyDraftV4527()">恢复草稿并同步云端</button> <button class="btn btn-secondary" onclick="downloadEmergencyDraftV4527()">下载草稿JSON</button> <button class="btn btn-danger" onclick="discardEmergencyDraftV4527()">忽略草稿</button></div>';
+      document.body.appendChild(div);
+    }).catch(()=>{});
+  }
+  window.addEventListener('beforeunload', function(e){
+    if(saveRunning || saveRequested || localStorage.getItem(META_KEY)){
+      try{ saveEmergencyDraft('beforeunload'); }catch(_){ }
+      e.preventDefault();
+      e.returnValue = '系统仍有未同步数据，但已保存本地应急草稿。建议等待“已保存到云端”后再关闭。';
+      return e.returnValue;
+    }
+  });
+  setTimeout(showDraftBannerIfNeeded, 2500);
+  console.log(VERSION + ' loaded');
+})();
+</script>
+
 </body></html>'].join('');
     w.document.open();
     w.document.write(html);
