@@ -13935,13 +13935,13 @@ ${preview}
 
 
 <script>
-/* ==================== V45.27 Safe Sync Optimizer：快速操作 + 断电/误关防丢草稿 ====================
+/* ==================== V45.28 Safe Sync Optimizer：快速操作 + 断电/误关防丢草稿 ====================
    目标：连续操作时页面立即响应，云端保存合并排队；即使误关浏览器，也保留未同步草稿供恢复。
    原则：本地草稿只作为“应急恢复”，不自动覆盖云端主数据。
 */
 (function(){
   'use strict';
-  const VERSION = 'V45.27 Safe Sync Optimizer';
+  const VERSION = 'V45.28 Safe Sync Optimizer';
   const META_KEY = 'cc_v4527_unsynced_meta';
   const SNAPSHOT_KEY = 'cc_v4527_unsynced_snapshot';
   const DB_NAME = 'cms_safe_sync_v4527';
@@ -14177,6 +14177,42 @@ ${preview}
   });
   setTimeout(showDraftBannerIfNeeded, 2500);
   console.log(VERSION + ' loaded');
+})();
+</script>
+
+
+
+<script>
+/* ==================== V45.28 离开页面误提示修复：权威 beforeunload 控制器 ==================== */
+(function(){
+  'use strict';
+  const VERSION='V45.28 BeforeUnload Authority Fix';
+  const META_KEY='cc_v4527_unsynced_meta';
+  const SNAPSHOT_KEY='cc_v4527_unsynced_snapshot';
+  const IDB_NAME='cms_safe_sync_v4527';
+  const STORE='drafts';
+  const STALE_GRACE_MS=15000;
+  function S(v){return String(v==null?'':v);}
+  function parseTime(v){const t=Date.parse(v||'');return Number.isFinite(t)?t:0;}
+  function getSyncText(){try{return [...document.querySelectorAll('#realtimeSyncHint,.sync-status,.cloud-status,.role-badge,[data-sync-status]')].map(e=>S(e.textContent)).join(' | ');}catch(_){return '';}}
+  function setHint(msg){try{if(typeof window.showRealtimeSyncHint==='function')window.showRealtimeSyncHint(msg);}catch(_){} try{let el=document.getElementById('realtimeSyncHint');if(!el){el=document.createElement('span');el.id='realtimeSyncHint';el.className='role-badge';document.querySelector('.user-info')?.prepend(el);}if(el)el.textContent=msg;}catch(_){} }
+  function getLocalJson(k){try{return JSON.parse(localStorage.getItem(k)||'null');}catch(_){return null;}}
+  function removeLocalDraft(){try{localStorage.removeItem(META_KEY);localStorage.removeItem(SNAPSHOT_KEY);localStorage.removeItem('cc_dirty');localStorage.removeItem('cc_dirtyAt');localStorage.removeItem('cc_dirtyError');}catch(_){} }
+  function clearIdbDraft(){try{const req=indexedDB.open(IDB_NAME,1);req.onsuccess=function(){const db=req.result;try{if(db.objectStoreNames.contains(STORE)){const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).delete('latest');tx.oncomplete=()=>{try{db.close();}catch(_){}};tx.onerror=()=>{try{db.close();}catch(_){}};}else{try{db.close();}catch(_){}}}catch(_){try{db.close();}catch(__){}}};}catch(_){} }
+  function markSavedClean(){try{if(window.__v4516SaveState){window.__v4516SaveState.pending=0;window.__v4516SaveState.dirty=false;window.__v4516SaveState.lastError='';window.__v4516SaveState.lastSavedAt=new Date().toISOString();}}catch(_){} removeLocalDraft();clearIdbDraft();}
+  function savedIndicators(){return /已保存|已同步|Salvo|Sincronizado|Saved|Synchronized|Dados carregados|数据已加载/.test(getSyncText());}
+  function savingIndicators(){return /同步进行|保存中|Sincronizando|Synchronizing|Saving|salvando|待同步/.test(getSyncText());}
+  function failedIndicators(){return /保存失败|同步失败|Falha|failed|erro/i.test(getSyncText());}
+  function isDraftStaleAndAlreadySaved(){const meta=getLocalJson(META_KEY);if(!meta)return true;const draftAt=parseTime(meta.savedAt);const cloudAt=parseTime(localStorage.getItem('cc_lastCloudSaveAt')||localStorage.getItem('cc_lastSyncTime')||localStorage.getItem('cc_safe_last_good_at')||'');if(cloudAt&&draftAt&&cloudAt+1000>=draftAt)return true;if(savedIndicators()&&draftAt&&Date.now()-draftAt>STALE_GRACE_MS)return true;return false;}
+  function hasRealUnsavedWork(){try{const st=window.__v4516SaveState;if(st&&(Number(st.pending||0)>0||(st.dirty&&st.lastError)))return true;}catch(_){} if(failedIndicators())return true;if(savingIndicators()&&!savedIndicators())return true;const meta=getLocalJson(META_KEY);if(meta&&!isDraftStaleAndAlreadySaved())return true;return false;}
+  function cleanupIfSafe(){if(!hasRealUnsavedWork()){markSavedClean();if(savedIndicators()||!getSyncText())setHint('已保存到云端');return true;}return false;}
+  const oldForce=window.forceSyncNowV4527;
+  window.forceSyncNowV4528=async function(){let ok=true;try{if(typeof oldForce==='function')ok=await oldForce();else if(typeof window.saveCloudState==='function')ok=await window.saveCloudState();}catch(e){ok=false;console.error('V45.28 force sync failed',e);}if(ok!==false){markSavedClean();setHint('已保存到云端');}return ok;};
+  window.forceSyncNowV4527=window.forceSyncNowV4528;
+  window.addEventListener('beforeunload',function(e){if(!hasRealUnsavedWork()){markSavedClean();try{e.stopImmediatePropagation();}catch(_){} try{delete e.returnValue;}catch(_){} return undefined;}try{if(typeof window.forceSyncNowV4528==='function')window.forceSyncNowV4528();}catch(_){} e.preventDefault();e.returnValue='系统仍有未同步数据，请等待顶部显示“已保存到云端”后再关闭。';return e.returnValue;},true);
+  setInterval(cleanupIfSafe,3000);setTimeout(cleanupIfSafe,1500);setTimeout(cleanupIfSafe,6000);
+  window.clearFalseUnsavedWarningV4528=function(){markSavedClean();setHint('已保存到云端');alert('已清除本地误提示标记。此操作不会删除云端业务数据。');};
+  console.log(VERSION+' loaded');
 })();
 </script>
 
