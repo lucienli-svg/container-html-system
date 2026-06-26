@@ -13787,7 +13787,153 @@ ${preview}
     const rows=list.map(x=>'<tr><td>'+esc(fmt(x.time))+'</td><td>'+esc(x.operator||'-')+'</td><td>'+esc(x.action)+'</td><td>'+esc(x.beforeStatus)+' → '+esc(x.afterStatus)+'</td><td>'+esc(x.reason||'-')+'</td></tr>').join('') || '<tr><td colspan="5">'+tr('暂无操作日志','Nenhum registro de operação','No operation logs')+'</td></tr>';
     const w=window.open('','_blank','width=900,height=620');
     if(!w)return;
-    const html=['<!doctype html>','<html><head><meta charset="utf-8"><title>',esc(t.containerNo||''),'</title><style>body{font-family:Arial;padding:20px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f3f4f6}</style></head><body><h2>',esc(t.containerNo||''),' · ',tr('操作日志','Registro de operações','Operation log'),'</h2><table><thead><tr><th>',tr('时间','Data/hora','Time'),'</th><th>',tr('操作人','Usuário','Operator'),'</th><th>',tr('操作','Ação','Action'),'</th><th>',tr('状态变化','Alteração de status','Status change'),'</th><th>',tr('原因','Motivo','Reason'),'</th></tr></thead><tbody>',rows,'</tbody></table></body></html>'].join('');
+    const html=['<!doctype html>','<html><head><meta charset="utf-8"><title>',esc(t.containerNo||''),'</title><style>body{font-family:Arial;padding:20px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f3f4f6}</style></head><body><h2>',esc(t.containerNo||''),' · ',tr('操作日志','Registro de operações','Operation log'),'</h2><table><thead><tr><th>',tr('时间','Data/hora','Time'),'</th><th>',tr('操作人','Usuário','Operator'),'</th><th>',tr('操作','Ação','Action'),'</th><th>',tr('状态变化','Alteração de status','Status change'),'</th><th>',tr('原因','Motivo','Reason'),'</th></tr></thead><tbody>',rows,'</tbody></table>
+
+<script>
+/* ==================== V45.25 Cloud-only business data guard ====================
+   目标：彻底阻断旧版本 localStorage 业务数据参与启动、保存和自动回写。
+   - 业务数据唯一来源：Supabase app_state / v455 generation manifest
+   - localStorage 仅允许语言、筛选、页签、滚动位置等 UI 状态
+   - 不自动删除旧本地业务缓存，避免误删可能用于人工恢复的数据
+============================================================================ */
+(function(){
+  const VERSION = 'V45.25 Cloud-only Business State Guard';
+  const BUSINESS_KEYS = [
+    'cc_containers','cc_blList','cc_containerBlMap','cc_transportTasks','cc_locationStock','cc_returnRecords',
+    'cc_pickupPlans','cc_productionRecords','cc_productionPlans','cc_factoryCalendar','cc_nextIds',
+    'cc_storageConfig','cc_demurrageConfig','cc_warningConfig','cc_localUpdatedAt','cc_localUpdatedBy',
+    'cc_version','cc_dirty','cc_dirtyAt','cc_dirtyError','cc_business_source'
+  ];
+  function arr(v){ return Array.isArray(v) ? v : []; }
+  function parse(key, fallback){ try{ const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }catch(e){ return fallback; } }
+  function toast(msg,type){
+    try{ if(typeof showRealtimeSyncHint==='function') showRealtimeSyncHint(msg); else console.log(msg); }catch(_){ console.log(msg); }
+  }
+  function localBusinessSnapshot(){
+    return {
+      containers: parse('cc_containers', []), blList: parse('cc_blList', []), containerBlMap: parse('cc_containerBlMap', []),
+      transportTasks: parse('cc_transportTasks', []), locationStock: parse('cc_locationStock', []), returnRecords: parse('cc_returnRecords', []),
+      pickupPlans: parse('cc_pickupPlans', []), productionRecords: parse('cc_productionRecords', []), productionPlans: parse('cc_productionPlans', []),
+      factoryCalendar: parse('cc_factoryCalendar', []), nextIds: parse('cc_nextIds', {}), storageConfig: parse('cc_storageConfig', []),
+      demurrageConfig: parse('cc_demurrageConfig', []), warningConfig: parse('cc_warningConfig', {}),
+      localMeta: { localUpdatedAt: localStorage.getItem('cc_localUpdatedAt') || '', version: localStorage.getItem('cc_version') || '' }
+    };
+  }
+  function score(st){
+    st = st || localBusinessSnapshot();
+    return arr(st.containers).length + arr(st.pickupPlans).length + arr(st.transportTasks).length + arr(st.returnRecords).length + arr(st.productionPlans).length;
+  }
+  window.v4525LocalBusinessCacheCounts = function(){
+    const s = localBusinessSnapshot();
+    return {
+      containers: arr(s.containers).length,
+      pickupPlans: arr(s.pickupPlans).length,
+      transportTasks: arr(s.transportTasks).length,
+      returnRecords: arr(s.returnRecords).length,
+      productionPlans: arr(s.productionPlans).length,
+      storageConfig: arr(s.storageConfig).length,
+      demurrageConfig: arr(s.demurrageConfig).length,
+      localUpdatedAt: s.localMeta.localUpdatedAt,
+      version: s.localMeta.version
+    };
+  };
+  window.downloadLocalBusinessBackupV4525 = function(){
+    const s = localBusinessSnapshot();
+    if(score(s) <= 0){ alert('当前浏览器没有可导出的业务缓存。'); return; }
+    const blob = new Blob([JSON.stringify(s,null,2)], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'local_business_cache_before_clear_' + new Date().toISOString().replace(/[-:.TZ]/g,'').slice(0,14) + '.json';
+    a.click();
+  };
+  window.clearLocalBusinessCacheV4525 = function(){
+    const c = window.v4525LocalBusinessCacheCounts();
+    if(!confirm('确认清理本浏览器旧业务缓存？\n\n这不会删除Supabase云端数据。\n清理前建议先执行 downloadLocalBusinessBackupV4525() 导出本地缓存。\n\n本地缓存数量：\n基础数据 '+c.containers+'\n提箱计划 '+c.pickupPlans+'\n运输任务 '+c.transportTasks)) return;
+    BUSINESS_KEYS.forEach(k=>{ try{ localStorage.removeItem(k); }catch(_){ } });
+    toast('已清理本浏览器旧业务缓存');
+  };
+
+  /* 阻止旧函数从localStorage加载业务数据 */
+  window.loadLocalDataOnly = function(){
+    console.warn('V45.25: blocked legacy loadLocalDataOnly(). Business data must come from Supabase app_state.');
+    toast('已阻止读取浏览器业务缓存');
+    return false;
+  };
+  window.saveLocalData = function(){
+    console.warn('V45.25: blocked legacy saveLocalData(). Business data is cloud-only.');
+    return false;
+  };
+  window.persistLocalV44 = function(){ return false; };
+  window.persistLocal = function(){ return false; };
+
+  /* 阻止旧代码继续写入业务localStorage，但保留语言、筛选、日期、滚动位置等UI缓存 */
+  if(!window.__v4525LocalStorageGuardInstalled){
+    const rawSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(key, value){
+      if(BUSINESS_KEYS.includes(String(key))){
+        console.warn('V45.25 blocked business localStorage write:', key);
+        return;
+      }
+      return rawSetItem.call(this, key, value);
+    };
+    window.__v4525LocalStorageGuardInstalled = true;
+  }
+
+  /* 覆盖登录初始化：云端失败/云端空时绝不自动用本地数据进入系统或回写云端 */
+  const strictLoadCloud = window.loadCloudState;
+  window.ensureCloudSession = ensureCloudSession = async function(){
+    const sb = (typeof initSupabaseClient === 'function') ? initSupabaseClient() : null;
+    if(!sb) return false;
+    const {data, error: sessionError} = await sb.auth.getSession();
+    if(sessionError){ alert('读取登录会话失败：' + sessionError.message); return false; }
+    const session = data && data.session ? data.session : null;
+    if(!session || !session.user) return false;
+    cloudUser = session.user;
+
+    const {data: profile, error} = await sb.from('user_profiles').select('*').ilike('email', cloudUser.email).maybeSingle();
+    if(error){ alert('读取用户权限失败：' + error.message); return false; }
+    if(!profile || profile.is_active === false){
+      document.getElementById('loginPage').style.display='none';
+      document.getElementById('mainApp').style.display='block';
+      document.getElementById('sidebar').innerHTML='';
+      document.getElementById('mainContent').innerHTML='<div class="card"><div class="card-header"><span class="card-title">⏳ 等待管理员授权</span></div><p>当前账号：<b>'+cloudUser.email+'</b></p><p>该账号尚未在 user_profiles 中分配角色，请联系系统管理员。</p><button class="btn btn-primary" onclick="logoutCloud()">退出</button></div>';
+      return false;
+    }
+    cloudProfile = profile;
+    currentUser = mapProfileToCurrentUser(profile, cloudUser);
+    currentMenu = (currentUser.role === '订购科' || isAdminUser()) ? 'dashboard' : (allMenus.find(m => canAccessMenu(m))?.id || 'containers');
+
+    let ok = false;
+    try{ ok = typeof strictLoadCloud === 'function' ? await strictLoadCloud() : false; }catch(e){ console.error('V45.25 strict cloud load failed', e); ok = false; }
+    document.getElementById('loginPage').style.display='none';
+    document.getElementById('mainApp').style.display='block';
+    document.getElementById('currentRole').innerText = currentUser.role || '';
+    document.getElementById('currentUser').innerText = currentUser.name || currentUser.email || '';
+
+    if(!ok){
+      const localCounts = window.v4525LocalBusinessCacheCounts();
+      document.getElementById('sidebar').innerHTML='';
+      document.getElementById('mainContent').innerHTML = '<div class="card"><div class="card-header"><span class="card-title">🛡️ 云端数据未加载</span></div>'+
+        '<p>系统已阻止读取浏览器本地业务缓存，避免旧电脑数据覆盖云端。</p>'+
+        '<p>如果昨天维护的数据消失，请先检查 Supabase 的 app_state 备份或每日恢复点。</p>'+
+        '<p>当前浏览器仍检测到本地业务缓存：基础数据 '+localCounts.containers+'，提箱计划 '+localCounts.pickupPlans+'，运输任务 '+localCounts.transportTasks+'。</p>'+
+        '<button class="btn btn-primary" onclick="downloadLocalBusinessBackupV4525()">导出本浏览器旧缓存</button> '+
+        '<button class="btn btn-danger" onclick="clearLocalBusinessCacheV4525()">清理本浏览器旧业务缓存</button></div>';
+      return true;
+    }
+    try{ renderSidebar(); renderContent(); applyLanguage(); startRealtimeSync(); }catch(e){ console.error(e); }
+    toast('V45.25：已从Supabase云端加载业务数据');
+    return true;
+  };
+
+  /* 关闭页面提示只应由真实保存状态决定；避免旧dirty标记长期残留 */
+  try{ localStorage.removeItem('cc_dirty'); localStorage.removeItem('cc_dirtyAt'); localStorage.removeItem('cc_dirtyError'); }catch(_){ }
+
+  console.log(VERSION + ' loaded');
+})();
+</script>
+
+</body></html>'].join('');
     w.document.open();
     w.document.write(html);
     w.document.close();
@@ -14951,6 +15097,152 @@ ${preview}
   if(typeof oldApplyState==='function') window.applyStateV455=function(st){const r=oldApplyState.apply(this,arguments);normalizeFeeConfigV4524();resetFeeCache();try{if(typeof updateDailyFees==='function')updateDailyFees();}catch(_){ }return r;};
   setTimeout(()=>{try{normalizeFeeConfigV4524();resetFeeCache();if(typeof updateDailyFees==='function')updateDailyFees();if(typeof currentMenu!=='undefined'&&currentMenu==='rateConfig')renderRateConfig(document.getElementById('mainContent'));if(typeof showRealtimeSyncHint==='function')showRealtimeSyncHint(tr('V45.24已加载：费率配置和预警保存已修复','V45.24 carregado: tarifas e alertas corrigidos','V45.24 loaded: rate config and warnings fixed'));}catch(e){console.warn('V45.24 startup',e);}},900);
   console.log(VERSION+' loaded');
+})();
+</script>
+
+
+
+<script>
+/* ==================== V45.25 Cloud-only business data guard ====================
+   目标：彻底阻断旧版本 localStorage 业务数据参与启动、保存和自动回写。
+   - 业务数据唯一来源：Supabase app_state / v455 generation manifest
+   - localStorage 仅允许语言、筛选、页签、滚动位置等 UI 状态
+   - 不自动删除旧本地业务缓存，避免误删可能用于人工恢复的数据
+============================================================================ */
+(function(){
+  const VERSION = 'V45.25 Cloud-only Business State Guard';
+  const BUSINESS_KEYS = [
+    'cc_containers','cc_blList','cc_containerBlMap','cc_transportTasks','cc_locationStock','cc_returnRecords',
+    'cc_pickupPlans','cc_productionRecords','cc_productionPlans','cc_factoryCalendar','cc_nextIds',
+    'cc_storageConfig','cc_demurrageConfig','cc_warningConfig','cc_localUpdatedAt','cc_localUpdatedBy',
+    'cc_version','cc_dirty','cc_dirtyAt','cc_dirtyError','cc_business_source'
+  ];
+  function arr(v){ return Array.isArray(v) ? v : []; }
+  function parse(key, fallback){ try{ const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }catch(e){ return fallback; } }
+  function toast(msg,type){
+    try{ if(typeof showRealtimeSyncHint==='function') showRealtimeSyncHint(msg); else console.log(msg); }catch(_){ console.log(msg); }
+  }
+  function localBusinessSnapshot(){
+    return {
+      containers: parse('cc_containers', []), blList: parse('cc_blList', []), containerBlMap: parse('cc_containerBlMap', []),
+      transportTasks: parse('cc_transportTasks', []), locationStock: parse('cc_locationStock', []), returnRecords: parse('cc_returnRecords', []),
+      pickupPlans: parse('cc_pickupPlans', []), productionRecords: parse('cc_productionRecords', []), productionPlans: parse('cc_productionPlans', []),
+      factoryCalendar: parse('cc_factoryCalendar', []), nextIds: parse('cc_nextIds', {}), storageConfig: parse('cc_storageConfig', []),
+      demurrageConfig: parse('cc_demurrageConfig', []), warningConfig: parse('cc_warningConfig', {}),
+      localMeta: { localUpdatedAt: localStorage.getItem('cc_localUpdatedAt') || '', version: localStorage.getItem('cc_version') || '' }
+    };
+  }
+  function score(st){
+    st = st || localBusinessSnapshot();
+    return arr(st.containers).length + arr(st.pickupPlans).length + arr(st.transportTasks).length + arr(st.returnRecords).length + arr(st.productionPlans).length;
+  }
+  window.v4525LocalBusinessCacheCounts = function(){
+    const s = localBusinessSnapshot();
+    return {
+      containers: arr(s.containers).length,
+      pickupPlans: arr(s.pickupPlans).length,
+      transportTasks: arr(s.transportTasks).length,
+      returnRecords: arr(s.returnRecords).length,
+      productionPlans: arr(s.productionPlans).length,
+      storageConfig: arr(s.storageConfig).length,
+      demurrageConfig: arr(s.demurrageConfig).length,
+      localUpdatedAt: s.localMeta.localUpdatedAt,
+      version: s.localMeta.version
+    };
+  };
+  window.downloadLocalBusinessBackupV4525 = function(){
+    const s = localBusinessSnapshot();
+    if(score(s) <= 0){ alert('当前浏览器没有可导出的业务缓存。'); return; }
+    const blob = new Blob([JSON.stringify(s,null,2)], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'local_business_cache_before_clear_' + new Date().toISOString().replace(/[-:.TZ]/g,'').slice(0,14) + '.json';
+    a.click();
+  };
+  window.clearLocalBusinessCacheV4525 = function(){
+    const c = window.v4525LocalBusinessCacheCounts();
+    if(!confirm('确认清理本浏览器旧业务缓存？\n\n这不会删除Supabase云端数据。\n清理前建议先执行 downloadLocalBusinessBackupV4525() 导出本地缓存。\n\n本地缓存数量：\n基础数据 '+c.containers+'\n提箱计划 '+c.pickupPlans+'\n运输任务 '+c.transportTasks)) return;
+    BUSINESS_KEYS.forEach(k=>{ try{ localStorage.removeItem(k); }catch(_){ } });
+    toast('已清理本浏览器旧业务缓存');
+  };
+
+  /* 阻止旧函数从localStorage加载业务数据 */
+  window.loadLocalDataOnly = function(){
+    console.warn('V45.25: blocked legacy loadLocalDataOnly(). Business data must come from Supabase app_state.');
+    toast('已阻止读取浏览器业务缓存');
+    return false;
+  };
+  window.saveLocalData = function(){
+    console.warn('V45.25: blocked legacy saveLocalData(). Business data is cloud-only.');
+    return false;
+  };
+  window.persistLocalV44 = function(){ return false; };
+  window.persistLocal = function(){ return false; };
+
+  /* 阻止旧代码继续写入业务localStorage，但保留语言、筛选、日期、滚动位置等UI缓存 */
+  if(!window.__v4525LocalStorageGuardInstalled){
+    const rawSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(key, value){
+      if(BUSINESS_KEYS.includes(String(key))){
+        console.warn('V45.25 blocked business localStorage write:', key);
+        return;
+      }
+      return rawSetItem.call(this, key, value);
+    };
+    window.__v4525LocalStorageGuardInstalled = true;
+  }
+
+  /* 覆盖登录初始化：云端失败/云端空时绝不自动用本地数据进入系统或回写云端 */
+  const strictLoadCloud = window.loadCloudState;
+  window.ensureCloudSession = ensureCloudSession = async function(){
+    const sb = (typeof initSupabaseClient === 'function') ? initSupabaseClient() : null;
+    if(!sb) return false;
+    const {data, error: sessionError} = await sb.auth.getSession();
+    if(sessionError){ alert('读取登录会话失败：' + sessionError.message); return false; }
+    const session = data && data.session ? data.session : null;
+    if(!session || !session.user) return false;
+    cloudUser = session.user;
+
+    const {data: profile, error} = await sb.from('user_profiles').select('*').ilike('email', cloudUser.email).maybeSingle();
+    if(error){ alert('读取用户权限失败：' + error.message); return false; }
+    if(!profile || profile.is_active === false){
+      document.getElementById('loginPage').style.display='none';
+      document.getElementById('mainApp').style.display='block';
+      document.getElementById('sidebar').innerHTML='';
+      document.getElementById('mainContent').innerHTML='<div class="card"><div class="card-header"><span class="card-title">⏳ 等待管理员授权</span></div><p>当前账号：<b>'+cloudUser.email+'</b></p><p>该账号尚未在 user_profiles 中分配角色，请联系系统管理员。</p><button class="btn btn-primary" onclick="logoutCloud()">退出</button></div>';
+      return false;
+    }
+    cloudProfile = profile;
+    currentUser = mapProfileToCurrentUser(profile, cloudUser);
+    currentMenu = (currentUser.role === '订购科' || isAdminUser()) ? 'dashboard' : (allMenus.find(m => canAccessMenu(m))?.id || 'containers');
+
+    let ok = false;
+    try{ ok = typeof strictLoadCloud === 'function' ? await strictLoadCloud() : false; }catch(e){ console.error('V45.25 strict cloud load failed', e); ok = false; }
+    document.getElementById('loginPage').style.display='none';
+    document.getElementById('mainApp').style.display='block';
+    document.getElementById('currentRole').innerText = currentUser.role || '';
+    document.getElementById('currentUser').innerText = currentUser.name || currentUser.email || '';
+
+    if(!ok){
+      const localCounts = window.v4525LocalBusinessCacheCounts();
+      document.getElementById('sidebar').innerHTML='';
+      document.getElementById('mainContent').innerHTML = '<div class="card"><div class="card-header"><span class="card-title">🛡️ 云端数据未加载</span></div>'+
+        '<p>系统已阻止读取浏览器本地业务缓存，避免旧电脑数据覆盖云端。</p>'+
+        '<p>如果昨天维护的数据消失，请先检查 Supabase 的 app_state 备份或每日恢复点。</p>'+
+        '<p>当前浏览器仍检测到本地业务缓存：基础数据 '+localCounts.containers+'，提箱计划 '+localCounts.pickupPlans+'，运输任务 '+localCounts.transportTasks+'。</p>'+
+        '<button class="btn btn-primary" onclick="downloadLocalBusinessBackupV4525()">导出本浏览器旧缓存</button> '+
+        '<button class="btn btn-danger" onclick="clearLocalBusinessCacheV4525()">清理本浏览器旧业务缓存</button></div>';
+      return true;
+    }
+    try{ renderSidebar(); renderContent(); applyLanguage(); startRealtimeSync(); }catch(e){ console.error(e); }
+    toast('V45.25：已从Supabase云端加载业务数据');
+    return true;
+  };
+
+  /* 关闭页面提示只应由真实保存状态决定；避免旧dirty标记长期残留 */
+  try{ localStorage.removeItem('cc_dirty'); localStorage.removeItem('cc_dirtyAt'); localStorage.removeItem('cc_dirtyError'); }catch(_){ }
+
+  console.log(VERSION + ' loaded');
 })();
 </script>
 
