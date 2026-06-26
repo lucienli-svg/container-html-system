@@ -15246,5 +15246,258 @@ ${preview}
 })();
 </script>
 
+<script>
+/* ==================== V45.26 Backup Recovery Professional：V44备份恢复到V45 Generation ==================== */
+(function(){
+  'use strict';
+  const VERSION = 'V45.26 Backup Recovery Professional';
+  const BASE_ID = (typeof CLOUD_STATE_ID !== 'undefined' && CLOUD_STATE_ID) ? CLOUD_STATE_ID : 'container-monitoring-main';
+  const V44_BACKUP_PREFIX = BASE_ID + ':v44:backup:';
+  const V455_CURRENT_MANIFEST_ID = BASE_ID + ':v455:manifest';
+  const V455_GEN_PREFIX = BASE_ID + ':v455:g:';
+  const V455_CHUNK_SIZE = 250;
+  const V455_UPSERT_BATCH = 25;
+  const ARRAY_MODULES = ['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig'];
+  const OBJECT_MODULES = ['nextIds','warningConfig'];
+  const ALL_MODULES = ARRAY_MODULES.concat(OBJECT_MODULES);
+  let backupsCache = [];
+  let previewCache = null;
+
+  const A = v => Array.isArray(v) ? v : [];
+  const N = v => String(v == null ? '' : v).trim();
+  const nowIso = () => new Date().toISOString();
+  const clone = v => JSON.parse(JSON.stringify(v || {}));
+  function sb(){ return (typeof initSupabaseClient === 'function') ? initSupabaseClient() : null; }
+  function user(){ return (typeof cloudUser !== 'undefined' && cloudUser && cloudUser.email) || (typeof currentUser !== 'undefined' && currentUser && (currentUser.email || currentUser.name)) || ''; }
+  function score(st){ return A(st.containers).length + A(st.blList).length + A(st.containerBlMap).length + A(st.transportTasks).length + A(st.locationStock).length + A(st.returnRecords).length + A(st.pickupPlans).length + A(st.productionRecords).length + A(st.productionPlans).length; }
+  function fmtNum(n){ return Number(n||0).toLocaleString('zh-CN'); }
+  function esc(v){ return String(v == null ? '' : v).replace(/[&<>"]/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[s])); }
+  function splitChunks(list, size){ const arr=A(list), out=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); if(!out.length) out.push([]); return out; }
+  function makeGeneration(){ return 'recover-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,8); }
+  function setStatus(msg, cls){ const el=document.getElementById('v4526Status'); if(el){ el.className='status-badge '+(cls||''); el.textContent=msg; } try{ if(typeof showRealtimeSyncHint==='function') showRealtimeSyncHint(msg); }catch(_){} }
+
+  function parseV44BackupId(id){
+    const s = String(id||'');
+    if(!s.startsWith(V44_BACKUP_PREFIX)) return null;
+    const rest = s.slice(V44_BACKUP_PREFIX.length);
+    const p = rest.split(':');
+    const date = p[0];
+    if(!date) return null;
+    if(p[1] === 'manifest') return {date, type:'manifest', module:'manifest', index:0};
+    if(p[1] === 'chunk') return {date, type:'chunk', module:p[2]||'', index:Number(p[3]||0)};
+    return {date, type:'other', module:p[1]||'', index:Number(p[2]||0)};
+  }
+
+  async function listV44BackupsV4526(){
+    const client = sb(); if(!client) throw new Error('Supabase未连接');
+    setStatus('正在扫描V44备份...', 'status-warning');
+    const {data, error} = await client.from('app_state').select('id, data, updated_at, updated_by').like('id', V44_BACKUP_PREFIX + '%').order('updated_at', {ascending:false}).limit(5000);
+    if(error) throw error;
+    const groups = new Map();
+    A(data).forEach(row => {
+      const info = parseV44BackupId(row.id); if(!info || !info.date) return;
+      const g = groups.get(info.date) || {date:info.date, updated_at:'', updated_by:'', chunk_count:0, total_size:0, modules:new Set(), has_manifest:false, manifest:null};
+      if(!g.updated_at || String(row.updated_at||'') > String(g.updated_at||'')) g.updated_at=row.updated_at||'';
+      if(row.updated_by) g.updated_by=row.updated_by;
+      g.total_size += String(JSON.stringify(row.data||{})).length;
+      if(info.type === 'manifest'){ g.has_manifest=true; g.manifest=row.data||null; }
+      if(info.type === 'chunk'){ g.chunk_count++; if(info.module) g.modules.add(info.module); }
+      groups.set(info.date, g);
+    });
+    backupsCache = Array.from(groups.values()).sort((a,b)=>String(b.updated_at).localeCompare(String(a.updated_at))).map(g=>({...g, modules:Array.from(g.modules).sort()}));
+    setStatus('已扫描到 '+backupsCache.length+' 个V44备份', 'status-success');
+    return backupsCache;
+  }
+
+  async function readV44BackupStateV4526(date){
+    const client = sb(); if(!client) throw new Error('Supabase未连接');
+    const prefix = V44_BACKUP_PREFIX + date + ':';
+    const {data:rows, error} = await client.from('app_state').select('id, data, updated_at, updated_by').like('id', prefix + 'chunk:%').order('id', {ascending:true}).limit(5000);
+    if(error) throw error;
+    if(!A(rows).length) throw new Error('未找到该日期的V44备份分片');
+    const grouped = {};
+    A(rows).forEach(row => {
+      const d = row.data || {};
+      const moduleName = d.module || (parseV44BackupId(row.id)||{}).module;
+      if(!moduleName) return;
+      (grouped[moduleName] || (grouped[moduleName]=[])).push(d);
+    });
+    const st = {version:'Recovered from V44 backup '+date, recoveredFrom:'v44:'+date, updatedAt:nowIso(), updatedBy:user()};
+    ARRAY_MODULES.forEach(name => {
+      const parts = A(grouped[name]).sort((a,b)=>Number(a.index||0)-Number(b.index||0));
+      st[name] = parts.flatMap(x => A(x.items));
+    });
+    OBJECT_MODULES.forEach(name => {
+      const first = A(grouped[name]).sort((a,b)=>Number(a.index||0)-Number(b.index||0))[0];
+      st[name] = first && first.value && typeof first.value === 'object' ? first.value : {};
+    });
+    if(!st.nextIds || !Object.keys(st.nextIds).length) st.nextIds = {container:1,task:1,plan:1,production:1,stock:1};
+    if(!st.warningConfig || !Object.keys(st.warningConfig).length) st.warningConfig = {storageWarningDays:5,demurrageWarningDays:7};
+    const missing = ARRAY_MODULES.filter(m => !A(st[m]).length && ['containers','blList','containerBlMap'].includes(m));
+    return {state:st, rows:A(rows), missing};
+  }
+
+  function countsV4526(st){
+    return {
+      containers:A(st.containers).length,
+      blList:A(st.blList).length,
+      containerBlMap:A(st.containerBlMap).length,
+      pickupPlans:A(st.pickupPlans).length,
+      transportTasks:A(st.transportTasks).length,
+      returnRecords:A(st.returnRecords).length,
+      locationStock:A(st.locationStock).length,
+      productionPlans:A(st.productionPlans).length,
+      productionRecords:A(st.productionRecords).length,
+      factoryCalendar:A(st.factoryCalendar).length,
+      score:score(st)
+    };
+  }
+
+  async function writeV455GenerationFromStateV4526(st, reason){
+    const client = sb(); if(!client) throw new Error('Supabase未连接');
+    const updatedAt = nowIso(), updatedBy = user();
+    const generation = makeGeneration();
+    st.version = VERSION;
+    st.updatedAt = updatedAt;
+    st.updatedBy = updatedBy;
+    const manifest = {version:VERSION, mode:'generation_split_app_state', generation, reason:reason||'restore_v44_backup', updatedAt, updatedBy, chunkSize:V455_CHUNK_SIZE, modules:{}, score:score(st), source:st.recoveredFrom||''};
+    const rows = [];
+    ARRAY_MODULES.forEach(name => {
+      const parts = splitChunks(st[name], V455_CHUNK_SIZE);
+      manifest.modules[name] = {type:'array', length:A(st[name]).length, chunks:parts.length};
+      parts.forEach((items,index) => rows.push({id:V455_GEN_PREFIX+generation+':chunk:'+name+':'+index, data:{module:name,index,items}, updated_by:updatedBy, updated_at:updatedAt}));
+    });
+    OBJECT_MODULES.forEach(name => {
+      manifest.modules[name] = {type:'object', chunks:1};
+      rows.push({id:V455_GEN_PREFIX+generation+':chunk:'+name+':0', data:{module:name,index:0,value:st[name]||{}}, updated_by:updatedBy, updated_at:updatedAt});
+    });
+
+    // 先保留当前指针，便于回退；不删除任何旧generation或V44备份。
+    try{
+      const {data:curMain} = await client.from('app_state').select('data,updated_by,updated_at').eq('id', BASE_ID).maybeSingle();
+      if(curMain && curMain.data){
+        await client.from('app_state').upsert({id:BASE_ID+':pointer-backup:'+updatedAt.replace(/[-:.TZ]/g,'').slice(0,14), data:curMain.data, updated_by:updatedBy, updated_at:updatedAt});
+      }
+      const {data:curMf} = await client.from('app_state').select('data,updated_by,updated_at').eq('id', V455_CURRENT_MANIFEST_ID).maybeSingle();
+      if(curMf && curMf.data){
+        await client.from('app_state').upsert({id:V455_CURRENT_MANIFEST_ID+':backup:'+updatedAt.replace(/[-:.TZ]/g,'').slice(0,14), data:curMf.data, updated_by:updatedBy, updated_at:updatedAt});
+      }
+    }catch(e){ console.warn('V45.26 pointer backup skipped', e); }
+
+    for(let i=0;i<rows.length;i+=V455_UPSERT_BATCH){
+      const {error} = await client.from('app_state').upsert(rows.slice(i,i+V455_UPSERT_BATCH));
+      if(error) throw error;
+    }
+    const pointer = {score:manifest.score, version:VERSION, updatedAt, generation, manifestId:V455_CURRENT_MANIFEST_ID, storageMode:'v455_generation', restoredFrom:st.recoveredFrom||'', previousDataProtected:true};
+    const {error:e1} = await client.from('app_state').upsert({id:V455_CURRENT_MANIFEST_ID, data:manifest, updated_by:updatedBy, updated_at:updatedAt});
+    if(e1) throw e1;
+    const {error:e2} = await client.from('app_state').upsert({id:BASE_ID, data:pointer, updated_by:updatedBy, updated_at:updatedAt});
+    if(e2) throw e2;
+    return {generation, manifest, pointer};
+  }
+
+  function applyRecoveredStateToGlobalsV4526(st){
+    try{
+      containers=A(st.containers); blList=A(st.blList); containerBlMap=A(st.containerBlMap); transportTasks=A(st.transportTasks); locationStock=A(st.locationStock); returnRecords=A(st.returnRecords); pickupPlans=A(st.pickupPlans); productionRecords=A(st.productionRecords); productionPlans=A(st.productionPlans); factoryCalendar=A(st.factoryCalendar); storageConfig=A(st.storageConfig); demurrageConfig=A(st.demurrageConfig); nextIds=st.nextIds||{container:1,task:1,plan:1,production:1,stock:1}; warningConfig=st.warningConfig||{storageWarningDays:5,demurrageWarningDays:7};
+      try{ if(typeof normalizeStateV455==='function') normalizeStateV455(false); }catch(_){}
+      try{ if(typeof updateContainerStatus==='function') updateContainerStatus(); }catch(_){}
+      try{ if(typeof updateDailyFees==='function') updateDailyFees(); }catch(_){}
+      try{ localStorage.setItem('cc_business_source','supabase_app_state_v4526_recovered'); }catch(_){}
+    }catch(e){ console.error('applyRecoveredStateToGlobalsV4526', e); }
+  }
+
+  function backupOptionsHtml(){
+    if(!backupsCache.length) return '<div class="empty-state">尚未扫描到V44备份。</div>';
+    return '<table class="data-table"><thead><tr><th>备份日期</th><th>更新时间</th><th>分片</th><th>大小</th><th>模块</th><th>操作</th></tr></thead><tbody>' + backupsCache.map(b => {
+      const mod = b.modules.slice(0,8).join(', ') + (b.modules.length>8?' ...':'');
+      return '<tr><td><b>'+esc(b.date)+'</b></td><td>'+esc(b.updated_at||'-')+'</td><td>'+fmtNum(b.chunk_count)+'</td><td>'+fmtNum(b.total_size)+'</td><td style="max-width:360px;white-space:normal;">'+esc(mod)+'</td><td><button class="btn btn-secondary" onclick="previewV44BackupV4526(\''+esc(b.date)+'\')">预览</button> <button class="btn btn-warning" onclick="restoreV44BackupAsV455V4526(\''+esc(b.date)+'\')">恢复为当前版本</button></td></tr>';
+    }).join('') + '</tbody></table>';
+  }
+
+  function renderRecoveryCenterV4526(container){
+    if(!container) return;
+    container.innerHTML = '<div class="card"><div class="card-header"><span class="card-title">🧯 V45.26 Backup Recovery Professional</span><span id="v4526Status" class="status-badge status-info">准备就绪</span></div>'+
+      '<div style="line-height:1.8;color:#606266;margin-bottom:12px;">用于把旧版 <b>V44 split backup</b> 安全转换成当前 <b>V45 generation</b> 数据版本。系统不会删除今天的数据和旧备份，恢复前会自动保留当前读取指针。</div>'+
+      '<div style="margin-bottom:12px;"><button class="btn btn-primary" onclick="scanV44BackupsV4526()">扫描V44备份</button> <button class="btn btn-secondary" onclick="downloadCurrentCloudSnapshotV4526()">下载当前云端快照</button></div>'+
+      '<div id="v4526BackupList">'+backupOptionsHtml()+'</div>'+
+      '<div id="v4526Preview" style="margin-top:14px;"></div></div>';
+  }
+
+  window.scanV44BackupsV4526 = async function(){
+    try{ await listV44BackupsV4526(); const box=document.getElementById('v4526BackupList'); if(box) box.innerHTML=backupOptionsHtml(); }
+    catch(e){ console.error(e); setStatus('扫描失败', 'status-danger'); alert('扫描V44备份失败：'+(e.message||e)); }
+  };
+
+  window.previewV44BackupV4526 = async function(date){
+    try{
+      setStatus('正在读取 '+date+' ...', 'status-warning');
+      const res = await readV44BackupStateV4526(date);
+      previewCache = {date, state:res.state, missing:res.missing};
+      const c = countsV4526(res.state);
+      const html = '<div class="card" style="background:#f8f9fc;border:1px solid #ebeef5;box-shadow:none;"><div class="card-header"><span class="card-title">📦 备份预览：'+esc(date)+'</span><span class="status-badge '+(res.missing.length?'status-warning':'status-success')+'">Score '+fmtNum(c.score)+'</span></div>'+
+        '<div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));">'+
+        '<div class="stat-card"><div class="stat-number">'+fmtNum(c.containers)+'</div><div class="stat-label">基础数据</div></div>'+
+        '<div class="stat-card"><div class="stat-number">'+fmtNum(c.blList)+'</div><div class="stat-label">提单</div></div>'+
+        '<div class="stat-card"><div class="stat-number">'+fmtNum(c.pickupPlans)+'</div><div class="stat-label">提箱计划</div></div>'+
+        '<div class="stat-card"><div class="stat-number">'+fmtNum(c.transportTasks)+'</div><div class="stat-label">运输任务</div></div>'+
+        '<div class="stat-card"><div class="stat-number">'+fmtNum(c.returnRecords)+'</div><div class="stat-label">还箱记录</div></div>'+
+        '<div class="stat-card"><div class="stat-number">'+fmtNum(c.productionPlans)+'</div><div class="stat-label">生产计划</div></div></div>'+
+        (res.missing.length?'<div style="color:#b45309;margin-top:8px;">注意：关键模块为空或未找到：'+esc(res.missing.join(', '))+'</div>':'<div style="color:#15803d;margin-top:8px;">该备份包含关键业务数据，可执行恢复。</div>')+
+        '<div style="margin-top:12px;"><button class="btn btn-warning" onclick="restoreV44BackupAsV455V4526(\''+esc(date)+'\')">恢复此备份为当前系统数据</button> <button class="btn btn-secondary" onclick="downloadPreviewBackupV4526()">下载此备份JSON</button></div></div>';
+      const box=document.getElementById('v4526Preview'); if(box) box.innerHTML=html;
+      setStatus('预览完成', 'status-success');
+    }catch(e){ console.error(e); setStatus('预览失败','status-danger'); alert('读取备份失败：'+(e.message||e)); }
+  };
+
+  window.downloadPreviewBackupV4526 = function(){
+    if(!previewCache || !previewCache.state) return alert('请先预览备份');
+    const blob = new Blob([JSON.stringify(previewCache.state,null,2)], {type:'application/json'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='v44_backup_'+previewCache.date+'_converted_preview.json'; a.click();
+  };
+
+  window.downloadCurrentCloudSnapshotV4526 = async function(){
+    try{
+      const st = (typeof getCloudStatePayload === 'function') ? getCloudStatePayload() : {containers,blList,containerBlMap,transportTasks,locationStock,returnRecords,pickupPlans,productionRecords,productionPlans,factoryCalendar,storageConfig,demurrageConfig,nextIds,warningConfig};
+      const blob = new Blob([JSON.stringify(st,null,2)], {type:'application/json'});
+      const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='current_cloud_snapshot_before_recovery_'+new Date().toISOString().replace(/[-:.TZ]/g,'').slice(0,14)+'.json'; a.click();
+    }catch(e){ alert('下载当前快照失败：'+(e.message||e)); }
+  };
+
+  window.restoreV44BackupAsV455V4526 = async function(date){
+    try{
+      const res = (previewCache && previewCache.date===date) ? {state:previewCache.state, missing:previewCache.missing||[]} : await readV44BackupStateV4526(date);
+      const st = res.state || res;
+      const c = countsV4526(st);
+      if(!c.containers || !c.score) return alert('该备份没有有效业务数据，禁止恢复。');
+      const msg = '确认恢复 V44 备份 '+date+' 到当前系统？\n\n基础数据：'+c.containers+'\n提箱计划：'+c.pickupPlans+'\n运输任务：'+c.transportTasks+'\n还箱记录：'+c.returnRecords+'\n生产计划：'+c.productionPlans+'\n\n系统会生成新的 V45 generation，并保留当前版本指针备份。';
+      if(!confirm(msg)) return;
+      setStatus('正在转换并写入云端...', 'status-warning');
+      const result = await writeV455GenerationFromStateV4526(st, 'restore_v44_backup_'+date);
+      applyRecoveredStateToGlobalsV4526(st);
+      try{ if(typeof renderSidebar==='function') renderSidebar(); if(typeof renderContent==='function') renderContent(); if(typeof applyLanguage==='function') applyLanguage(); }catch(_){}
+      setStatus('恢复完成：'+result.generation, 'status-success');
+      alert('恢复完成。系统已切换到 '+date+' 的备份版本。请立即检查基础数据数量，并下载一份新的Backup。');
+    }catch(e){ console.error(e); setStatus('恢复失败','status-danger'); alert('恢复失败：'+(e.message||e)); }
+  };
+
+  // 接入菜单与渲染
+  try{
+    if(Array.isArray(allMenus) && !allMenus.some(m=>m.id==='backupRecoveryV4526')) allMenus.push({id:'backupRecoveryV4526', name:'V44备份恢复', icon:'🧯', roles:['Admin','订购科']});
+    if(Array.isArray(permissionModules) && !permissionModules.some(m=>m.id==='backupRecoveryV4526')) permissionModules.push({id:'backupRecoveryV4526', name:'V44备份恢复'});
+  }catch(e){ console.warn(e); }
+  const prevRenderContentV4526 = window.renderContent;
+  if(typeof prevRenderContentV4526 === 'function'){
+    window.renderContent = renderContent = function(){
+      if(typeof currentMenu !== 'undefined' && currentMenu === 'backupRecoveryV4526'){
+        const main=document.getElementById('mainContent'); renderRecoveryCenterV4526(main); try{ if(typeof applyLanguage==='function') applyLanguage(); }catch(_){}; return;
+      }
+      return prevRenderContentV4526.apply(this, arguments);
+    };
+  }
+
+  console.log(VERSION + ' loaded');
+})();
+</script>
+
 </body>
 </html>
