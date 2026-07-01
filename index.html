@@ -12305,7 +12305,7 @@ let main=document.getElementById('mainContent');
 /* ==================== V45.5 Stable Core：云端唯一数据源 + 原子分片保存 + 统一状态机 ==================== */
 (function(){
   'use strict';
-  const VERSION = 'V46.0 Clean Core';
+  const VERSION = 'V46.1 Notebook Stable';
   const BASE_ID = (typeof CLOUD_STATE_ID !== 'undefined' ? CLOUD_STATE_ID : 'container-monitoring-main');
   const CURRENT_MANIFEST_ID = BASE_ID + ':v455:manifest';
   const DAILY_PREFIX = BASE_ID + ':v455:daily:';
@@ -12887,11 +12887,11 @@ ${preview}
 </script>
 
 <script>
-/* ==================== V46.0 Clean Core：单一数据源 + 统一任务身份 + 统一状态机 + 数据体检 ==================== */
+/* ==================== V46.1 Notebook Stable：单一数据源 + 统一任务身份 + 统一状态机 + 数据体检 ==================== */
 (function(){
   'use strict';
 
-  const VERSION = 'V46.0 Clean Core';
+  const VERSION = 'V46.1 Notebook Stable';
   const UI_PREFIX = 'cms:v4513:ui:';
   const BUSINESS_LOCAL_KEYS = [
     'cc_containers','cc_blList','cc_containerBlMap','cc_transportTasks','cc_locationStock',
@@ -13430,18 +13430,18 @@ ${preview}
   },2200);
 
   try{document.title='Sistema Inteligente de Monitoramento de Contêineres V46.0';}catch(_){}
-  console.log('V46.0 Clean Core loaded: single cloud source, serial save queue, task identity, monotonic state machine, manual data clinic');
+  console.log('V46.1 Notebook Stable loaded: single cloud source, serial save queue, task identity, monotonic state machine, manual data clinic');
 })();
 
 </script>
 
 <script>
-/* ==================== V46.0 Clean Core：统一业务流转核心 ====================
+/* ==================== V46.1 Notebook Stable：统一业务流转核心 ====================
    目标：停止补丁式修复按钮，把确认动作收敛到一套状态机。
    原则：页面只渲染当前状态与下一步动作；所有状态变更必须通过 cc46Transition。 */
 (function(){
   'use strict';
-  const VERSION = 'V46.0 Clean Core';
+  const VERSION = 'V46.1 Notebook Stable';
   const W = window;
   const refMap = W.__cc46Refs = Object.create(null);
 
@@ -13758,8 +13758,289 @@ ${preview}
     }catch(e){ console.warn('V46 menu patch skipped', e); }
   }
   patchMenus();
-  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V46.0 Clean Core'; }catch(_){ }
+  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V46.1 Notebook Stable'; }catch(_){ }
   console.log(VERSION+' loaded: unified flow templates, central transitions, no daily repair buttons.');
+})();
+</script>
+
+<script>
+/* ==================== V46.1 Notebook UI + Performance Stabilization ====================
+   目的：不再增加修复按钮，先修复 V46.0 测试中的 3 个核心问题：
+   1) 基础数据打开卡死：改为索引计算状态，避免每行反复全量扫描。
+   2) 还箱确认查询失效：查询值先读取再渲染，按批次/箱号/提单/地点过滤待还箱和已还箱。
+   3) 14寸笔记本布局：V46页面表格使用紧凑固定布局，横向显示所有字段，操作后保持当前滚动位置。
+*/
+(function(){
+  'use strict';
+  const VERSION = 'V46.1 Notebook Stable';
+  const W = window;
+
+  function A(v){ return Array.isArray(v) ? v : []; }
+  function S(v){ return String(v == null ? '' : v).trim(); }
+  function SL(v){ return S(v).toLowerCase(); }
+  function esc(v){ return S(v).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+  function rows(name){ try{ const v = (0,eval)(name); return Array.isArray(v) ? v : []; }catch(_){ return []; } }
+  function fmtDateSafe(v){ try{ return typeof W.fmtDate === 'function' ? W.fmtDate(v) : (S(v).slice(0,10)||'-'); }catch(_){ return S(v).slice(0,10)||'-'; } }
+  function fmtDateTimeSafe(v){ try{ return typeof W.fmtDateTime === 'function' ? W.fmtDateTime(v) : (S(v)||'-'); }catch(_){ return S(v)||'-'; } }
+  function nowIso(){ return new Date().toISOString(); }
+  function nowLocal(){ try{ return typeof W.nowLocalInput === 'function' ? W.nowLocalInput() : new Date().toISOString().slice(0,16); }catch(_){ return new Date().toISOString().slice(0,16); } }
+  function normLoc(v){
+    const raw=S(v); const s=raw.replace(/\s+/g,'').toLowerCase();
+    if(!s) return '';
+    if(s.includes('rioclaro') || s.includes('rio claro')) return 'Rio Claro';
+    if(s.includes('ira')) return 'IRA库房';
+    if(s.includes('rg')) return 'RG堆场';
+    if(s.includes('工厂') || s.includes('factory') || s.includes('fabrica') || s.includes('fábrica') || s.includes('gwm')) return '工厂';
+    if(['120b','132','140b','140c'].includes(s)) return s.toUpperCase();
+    if(s.includes('港口') || s.includes('santos') || s.includes('porto')) return '港口';
+    return raw;
+  }
+  function dateOnly(v){ const s=S(v); if(!s) return ''; return s.includes('T') ? s.split('T')[0] : s.split(' ')[0].replace(/\//g,'-'); }
+  function getSeq(v){ const n=parseInt(S(v).replace(/[^0-9]/g,''),10); return Number.isFinite(n) ? n : 999999; }
+  function sortByBatchSeq(a,b){
+    return S(a.batch).localeCompare(S(b.batch),'zh-CN',{numeric:true}) || getSeq(a.containerSeq||a.seq)-getSeq(b.containerSeq||b.seq) || S(a.containerNo).localeCompare(S(b.containerNo));
+  }
+  function tableHTML(headers, body, cls){
+    return `<div class="table-wrapper cc46-compact-wrapper"><table class="data-table cc46-compact-table ${cls||''}"><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${body||`<tr><td colspan="${headers.length}" class="cc46-empty">暂无数据</td></tr>`}</tbody></table></div>`;
+  }
+  function install(name, fn){
+    W[name]=fn;
+    try{ (0,eval)(name + ' = window["' + name + '"]'); }catch(_){ }
+  }
+  function mainEl(){ return document.getElementById('mainContent'); }
+  function captureView(){ const m=mainEl(); return {scrollTop:m?m.scrollTop:0, y:window.scrollY||0}; }
+  function restoreView(pos){ if(!pos) return; const m=mainEl(); if(m) m.scrollTop=pos.scrollTop||0; try{ window.scrollTo(0,pos.y||0); }catch(_){ } }
+  function restoreLater(pos){ [60,180,450,900].forEach(ms=>setTimeout(()=>restoreView(pos),ms)); }
+
+  function injectCss(){
+    if(document.getElementById('cc46-1-style')) return;
+    const style=document.createElement('style');
+    style.id='cc46-1-style';
+    style.textContent=`
+      /* V46.1 14寸笔记本紧凑显示：所有 V46 表格横向不溢出，内容允许换行 */
+      #mainContent{overflow-x:hidden!important;}
+      .card{padding:12px!important;margin-bottom:12px!important;border-radius:10px!important;}
+      .card-header{min-height:auto!important;padding:10px 12px!important;margin-bottom:8px!important;gap:8px!important;}
+      .card-title{font-size:17px!important;line-height:24px!important;}
+      .search-bar{padding:9px 10px!important;margin-bottom:8px!important;gap:8px!important;min-height:auto!important;align-items:center!important;flex-wrap:wrap!important;}
+      .search-bar input,.search-bar select{height:30px!important;max-width:180px!important;font-size:12px!important;padding:3px 6px!important;}
+      .btn{padding:6px 11px!important;font-size:12px!important;border-radius:7px!important;line-height:18px!important;}
+      .btn-sm{padding:4px 7px!important;font-size:11px!important;line-height:16px!important;}
+      .status-badge{font-size:11px!important;padding:3px 7px!important;line-height:16px!important;white-space:normal!important;}
+      .cc46-compact-wrapper{width:100%!important;overflow-x:hidden!important;overflow-y:visible!important;border:1px solid #ebeef5!important;border-radius:8px!important;margin-top:8px!important;}
+      .cc46-compact-table{width:100%!important;min-width:0!important;table-layout:fixed!important;border-collapse:collapse!important;font-size:12px!important;}
+      .cc46-compact-table th,.cc46-compact-table td{padding:6px 4px!important;height:auto!important;min-height:30px!important;line-height:16px!important;text-align:center!important;vertical-align:middle!important;white-space:normal!important;word-break:break-word!important;overflow:visible!important;text-overflow:clip!important;}
+      .cc46-compact-table th{font-weight:700!important;background:#f5f7fa!important;position:sticky!important;top:0!important;z-index:10!important;}
+      .cc46-compact-table input[type="date"]{width:100%!important;max-width:120px!important;height:28px!important;font-size:12px!important;padding:2px 4px!important;}
+      .cc46-compact-table input[type="file"]{width:100%!important;max-width:130px!important;font-size:11px!important;padding:2px!important;}
+      .cc46-empty{padding:18px!important;color:#909399!important;text-align:center!important;}
+      .cc46-note{font-size:12px;color:#606266;line-height:1.5;margin:2px 0 8px 0;}
+      .cc46-basic-table th:nth-child(1),.cc46-basic-table td:nth-child(1){width:4%;}
+      .cc46-basic-table th:nth-child(2),.cc46-basic-table td:nth-child(2){width:7%;}
+      .cc46-basic-table th:nth-child(3),.cc46-basic-table td:nth-child(3){width:5%;}
+      .cc46-basic-table th:nth-child(4),.cc46-basic-table td:nth-child(4){width:10%;}
+      .cc46-basic-table th:nth-child(5),.cc46-basic-table td:nth-child(5){width:6%;}
+      .cc46-basic-table th:nth-child(6),.cc46-basic-table td:nth-child(6){width:5%;}
+      .cc46-basic-table th:nth-child(7),.cc46-basic-table td:nth-child(7){width:7%;}
+      .cc46-basic-table th:nth-child(8),.cc46-basic-table td:nth-child(8){width:7%;}
+      .cc46-basic-table th:nth-child(9),.cc46-basic-table td:nth-child(9){width:12%;}
+      .cc46-basic-table th:nth-child(10),.cc46-basic-table td:nth-child(10){width:8%;}
+      .cc46-basic-table th:nth-child(11),.cc46-basic-table td:nth-child(11){width:7%;}
+      .cc46-basic-table th:nth-child(12),.cc46-basic-table td:nth-child(12){width:7%;}
+      .cc46-basic-table th:nth-child(13),.cc46-basic-table td:nth-child(13){width:7%;}
+      .cc46-basic-table th:nth-child(14),.cc46-basic-table td:nth-child(14){width:8%;}
+      .cc46-return-table th:nth-child(1),.cc46-return-table td:nth-child(1){width:8%;}
+      .cc46-return-table th:nth-child(2),.cc46-return-table td:nth-child(2){width:12%;}
+      .cc46-return-table th:nth-child(3),.cc46-return-table td:nth-child(3){width:14%;}
+      .cc46-return-table th:nth-child(4),.cc46-return-table td:nth-child(4){width:9%;}
+      .cc46-return-table th:nth-child(5),.cc46-return-table td:nth-child(5){width:8%;}
+      .cc46-return-table th:nth-child(6),.cc46-return-table td:nth-child(6){width:12%;}
+      .cc46-return-table th:nth-child(7),.cc46-return-table td:nth-child(7){width:14%;}
+      .cc46-return-table th:nth-child(8),.cc46-return-table td:nth-child(8){width:9%;}
+      .cc46-dock-table th:nth-child(1),.cc46-dock-table td:nth-child(1){width:9%;}
+      .cc46-dock-table th:nth-child(2),.cc46-dock-table td:nth-child(2){width:7%;}
+      .cc46-dock-table th:nth-child(3),.cc46-dock-table td:nth-child(3){width:9%;}
+      .cc46-dock-table th:nth-child(4),.cc46-dock-table td:nth-child(4){width:5%;}
+      .cc46-dock-table th:nth-child(5),.cc46-dock-table td:nth-child(5){width:8%;}
+      .cc46-dock-table th:nth-child(6),.cc46-dock-table td:nth-child(6){width:11%;}
+      .cc46-dock-table th:nth-child(7),.cc46-dock-table td:nth-child(7){width:13%;}
+      .cc46-dock-table th:nth-child(8),.cc46-dock-table td:nth-child(8){width:8%;}
+      .cc46-dock-table th:nth-child(9),.cc46-dock-table td:nth-child(9){width:10%;}
+      .cc46-dock-table th:nth-child(10),.cc46-dock-table td:nth-child(10){width:10%;}
+      .cc46-dock-table th:nth-child(11),.cc46-dock-table td:nth-child(11){width:10%;}
+      @media (max-width:1500px){.sidebar{width:205px!important}.main-content{padding:10px!important}.cc46-compact-table{font-size:11.5px!important}.cc46-compact-table th,.cc46-compact-table td{padding:5px 3px!important;line-height:15px!important}.btn{padding:5px 9px!important;font-size:11.5px!important}.search-bar input,.search-bar select{max-width:160px!important;}}
+    `;
+    document.head.appendChild(style);
+  }
+
+  function buildIndex(){
+    const cs=rows('containers'), tasks=rows('transportTasks'), returns=rows('returnRecords'), maps=rows('containerBlMap'), bls=rows('blList'), stocks=rows('locationStock'), prods=rows('productionRecords');
+    const idx={byId:new Map(), byNo:new Map(), blByKey:new Map(), blTextByCid:new Map(), iraByCid:new Map(), stockByCid:new Map(), confirmedReturnByCid:new Map(), confirmedReturnByNo:new Map(), pendingReturnByCid:new Map(), pendingReturnByNo:new Map(), latestTaskByCid:new Map(), latestTaskByNo:new Map(), producedCid:new Set()};
+    cs.forEach(c=>{ if(S(c.id)) idx.byId.set(S(c.id),c); if(S(c.containerNo)) idx.byNo.set(SL(c.containerNo),c); });
+    bls.forEach(b=>{ [b.blNo,b.houseBlNo,b.masterBlNo].forEach(k=>{ if(S(k)) idx.blByKey.set(S(k),b); }); });
+    maps.forEach(m=>{
+      const cid=S(m.containerId); if(!cid) return;
+      const b=idx.blByKey.get(S(m.blNo)) || null;
+      const txt=(b && b.carrier==='长荣' && b.masterBlNo) ? `${b.masterBlNo}|${b.houseBlNo||m.blNo}` : S(m.blNo);
+      if(txt){ const list=idx.blTextByCid.get(cid)||[]; if(!list.includes(txt)) list.push(txt); idx.blTextByCid.set(cid,list); }
+      const ira=S(m.iraNo || (b&&(b.iraNo||b.ira)) || '');
+      if(ira){ const il=idx.iraByCid.get(cid)||[]; if(!il.includes(ira)) il.push(ira); idx.iraByCid.set(cid,il); }
+    });
+    stocks.forEach(s=>{ const cid=S(s.containerId); if(cid) idx.stockByCid.set(cid,normLoc(s.location)); });
+    returns.forEach(r=>{
+      const cid=S(r.containerId), no=SL(r.containerNo), confirmed=!!(r.isReturnConfirmed || r.type==='return' || r.returnDate || r.returnConfirmedAt);
+      if(confirmed){ if(cid) idx.confirmedReturnByCid.set(cid,r); if(no) idx.confirmedReturnByNo.set(no,r); }
+      else if(S(r.type||'return_needed')==='return_needed'){ if(cid && !idx.pendingReturnByCid.has(cid)) idx.pendingReturnByCid.set(cid,r); if(no && !idx.pendingReturnByNo.has(no)) idx.pendingReturnByNo.set(no,r); }
+    });
+    tasks.slice().sort((a,b)=>S(b.updatedAt||b.unloadFinishTime||b.actualArrival||b.estimatedArrival||b.createdAt).localeCompare(S(a.updatedAt||a.unloadFinishTime||a.actualArrival||a.estimatedArrival||a.createdAt))).forEach(t=>{
+      if(t.cancelled || ['cancelled','archived','closed','produced'].includes(S(t.status))) return;
+      const cid=S(t.containerId), no=SL(t.containerNo);
+      if(cid && !idx.latestTaskByCid.has(cid)) idx.latestTaskByCid.set(cid,t);
+      if(no && !idx.latestTaskByNo.has(no)) idx.latestTaskByNo.set(no,t);
+    });
+    prods.forEach(p=>{ A(p.containerIds).forEach(cid=>idx.producedCid.add(S(cid))); if(S(p.containerId)) idx.producedCid.add(S(p.containerId)); });
+    return idx;
+  }
+
+  function taskDest(t){ return normLoc(t && (t.to || t.destination || t.location || t.dest)); }
+  function taskDock(t){ const d=normLoc(t && (t.unloadingDock || t.dock || t.dockName)); return taskDest(t)==='IRA库房' ? 'IRA库房' : d; }
+  function taskStatusRank(t){
+    if(!t) return 0;
+    if(t.unloadFinishTime || t.unpackConfirmedAt || t.operationStatus==='unloaded') return 4;
+    if(t.unloadStartTime || t.operationStatus==='unloading') return 3;
+    if(t.waitingAreaTime || t.gateReleaseTime || t.operationStatus==='inside_waiting') return 2;
+    if(t.gateArrivalTime || t.operationStatus==='outside_parking') return 1;
+    return 0;
+  }
+  function statusForContainer(c, idx){
+    const cid=S(c.id), no=SL(c.containerNo);
+    const customs = S(c.customsStatus || c.clearanceStatus || (c.customsCompleteTime||c.clearanceTime ? '已清关' : '清关中')) || '清关中';
+    const confirmed=idx.confirmedReturnByCid.get(cid) || idx.confirmedReturnByNo.get(no);
+    if(confirmed) return {customs, loc:normLoc(confirmed.location)||idx.stockByCid.get(cid)||'已还箱', text:'已完成', cls:'status-completed'};
+    if(idx.producedCid.has(cid)) return {customs, loc:'已生产', text:'已完成', cls:'status-completed'};
+    const pending=idx.pendingReturnByCid.get(cid) || idx.pendingReturnByNo.get(no);
+    if(pending) return {customs, loc:normLoc(pending.location)||'待还箱', text:'待还箱', cls:'status-return-pending'};
+    const t=idx.latestTaskByCid.get(cid) || idx.latestTaskByNo.get(no);
+    if(t){
+      const d=taskDest(t), r=taskStatusRank(t), st=S(t.status);
+      if(st==='return_pending' || r>=4) return {customs, loc:d||'已掏箱', text:'待还箱', cls:'status-return-pending'};
+      if(r===3) return {customs, loc:d||'卸货口', text:'卸货中', cls:'status-transport'};
+      if(r===2) return {customs, loc:d||'等待区', text:'工厂内等待', cls:'status-warning'};
+      if(r===1) return {customs, loc:d||'门岗', text:'已到门口', cls:'status-warning'};
+      if(st==='arrived') return {customs, loc:d||'已到达', text:'已到达'+(d||''), cls:'status-at-location'};
+      if(st==='in_transit' || c.actualPickupTime) return {customs, loc:'运输中', text:'运输中', cls:'status-transport'};
+    }
+    const stock=idx.stockByCid.get(cid);
+    if(stock) return {customs, loc:stock, text:'已到达'+stock, cls:'status-at-location'};
+    if(c.actualPickupTime) return {customs, loc:'运输中', text:'运输中', cls:'status-transport'};
+    return {customs, loc:'港口', text:customs, cls:customs==='已清关'?'status-ready':'status-clearing'};
+  }
+
+  function renderContainersV461(container){
+    injectCss();
+    const main=container||mainEl(); if(!main) return;
+    main.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📦 基础数据 <span class="status-badge status-ready">${VERSION}</span></span><div><button class="btn btn-primary" onclick="showAddContainer && showAddContainer()">+ 新增</button><button class="btn export-btn" onclick="exportTemplate && exportTemplate()">📥 导出模板</button><button class="btn btn-success" onclick="showImport && showImport()">📎 批量导入</button></div></div>
+      <div class="cc46-note">统一规则：基础数据只显示状态，不再在打开页面时做全量修复；状态由运输任务、卸货记录、待还箱/已还箱记录索引计算，避免页面卡死。</div>
+      <div class="search-bar"><input type="text" id="searchBatch" placeholder="批次"><input type="text" id="searchContainer" placeholder="集装箱号"><select id="searchLocation"><option value="">全部当前位置</option><option>港口</option><option>运输中</option><option>RG堆场</option><option>Rio Claro</option><option>IRA库房</option><option>工厂</option><option>已生产</option></select><select id="searchStatus"><option value="">全部运输状态</option><option>清关中</option><option>已清关</option><option>运输中</option><option>已到门口</option><option>工厂内等待</option><option>卸货中</option><option>待还箱</option><option>已完成</option></select><button class="btn btn-primary" onclick="renderContainerTable()">查询</button><button class="btn" onclick="clearContainerSearch()">重置</button></div><div id="containerTable"></div></div>`;
+    renderContainerTableV461();
+  }
+
+  function renderContainerTableV461(){
+    injectCss();
+    const box=document.getElementById('containerTable'); if(!box) return;
+    const qBatch=SL(document.getElementById('searchBatch')?.value), qNo=SL(document.getElementById('searchContainer')?.value), qLoc=normLoc(document.getElementById('searchLocation')?.value||''), qStatus=S(document.getElementById('searchStatus')?.value||'');
+    const idx=buildIndex();
+    const list=rows('containers').slice().sort(sortByBatchSeq).filter(c=>{
+      const st=statusForContainer(c, idx);
+      return (!qBatch || SL(c.batch).includes(qBatch)) && (!qNo || SL(c.containerNo).includes(qNo)) && (!qLoc || st.loc===qLoc) && (!qStatus || st.text===qStatus || st.customs===qStatus);
+    });
+    const body=list.map((c,i)=>{
+      const st=statusForContainer(c, idx), cid=S(c.id), bls=(idx.blTextByCid.get(cid)||[]).join(','), ira=(idx.iraByCid.get(cid)||[]).join(',');
+      return `<tr><td>${i+1}</td><td>${esc(c.batch||'-')}</td><td>${esc(c.containerSeq||c.seq||'-')}</td><td>${esc(c.containerNo||'-')}</td><td>${esc(c.vessel||c.carrier||'-')}</td><td>${esc(c.containerType||'-')}</td><td>${esc(fmtDateSafe(c.eta||c.arrivalDate))}</td><td>${esc((typeof W.getDemurrageLastFreeDay==='function'?W.getDemurrageLastFreeDay(c):'')||'-')}</td><td>${esc(bls||'-')}</td><td>${esc(ira||'-')}</td><td><span class="status-badge ${st.customs==='已清关'?'status-ready':'status-clearing'}">${esc(st.customs||'-')}</span></td><td><span class="status-badge status-pending">${esc(st.loc||'-')}</span></td><td><span class="status-badge ${esc(st.cls||'status-pending')}">${esc(st.text||'-')}</span></td><td><button class="btn btn-sm btn-warning" onclick="editContainer && editContainer(${JSON.stringify(c.id)})">编辑</button> <button class="btn btn-sm btn-danger" onclick="deleteContainer && deleteContainer(${JSON.stringify(c.id)})">删除</button></td></tr>`;
+    }).join('');
+    box.innerHTML = `<div class="cc46-note">查询结果：${list.length} 条</div>` + tableHTML(['序号','批次','序号','集装箱号','船公司','箱型','到港','滞箱LFD','关联提单','IRA号','清关','位置','运输状态','操作'], body, 'cc46-basic-table');
+  }
+
+  function clearContainerSearchV461(){ ['searchBatch','searchContainer','searchLocation','searchStatus'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; }); renderContainerTableV461(); }
+
+  function returnRecordId(r,i){ if(!r.id) r.id='ret_'+Date.now()+'_'+i+'_'+Math.random().toString(36).slice(2,6); return S(r.id); }
+  function hasConfirmedReturn(r){ const cid=S(r.containerId), no=SL(r.containerNo), bl=SL(r.blNo), loc=normLoc(r.location); return rows('returnRecords').some(x=>x!==r && (x.isReturnConfirmed || x.type==='return' || x.returnDate || x.returnConfirmedAt) && ((cid && S(x.containerId)===cid) || (no && SL(x.containerNo)===no)) && (!bl || !x.blNo || SL(x.blNo)===bl) && (!loc || !x.location || normLoc(x.location)===loc)); }
+  function filterReturnRows(list,q){ q=SL(q); if(!q) return list; return list.filter(r=>[r.batch,r.containerNo,r.blNo,r.location,r.iraNo].join(' ').toLowerCase().includes(q)); }
+
+  function renderReturnConfirmV461(container){
+    injectCss();
+    const main=container||mainEl(); if(!main) return;
+    const oldQ=S(document.getElementById('retSearch')?.value);
+    const allPending=rows('returnRecords').filter(r=>r && !r.isReturnConfirmed && S(r.type||'return_needed')==='return_needed' && !hasConfirmedReturn(r));
+    const seen=new Set(), unique=[];
+    allPending.forEach((r,i)=>{ const k=[SL(r.containerNo),S(r.containerId),SL(r.blNo),normLoc(r.location)].join('|'); if(!seen.has(k)){seen.add(k); returnRecordId(r,i); unique.push(r);} });
+    const pending=filterReturnRows(unique, oldQ);
+    const done=filterReturnRows(rows('returnRecords').filter(r=>r && (r.isReturnConfirmed || r.type==='return' || r.returnDate || r.returnConfirmedAt)), oldQ).sort((a,b)=>S(b.returnDate||b.returnConfirmedAt||b.updatedAt).localeCompare(S(a.returnDate||a.returnConfirmedAt||a.updatedAt))).slice(0,300);
+    main.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🔄 还箱确认 <span class="status-badge status-ready">${VERSION}</span></span></div>
+      <div class="cc46-note">统一规则：只有掏箱完成后生成的待还箱记录显示在这里；已经确认还箱的集装箱自动从待确认区排除。</div>
+      <div class="search-bar"><input id="retSearch" placeholder="批次 / 箱号 / 提单 / 地点" value="${esc(oldQ)}"><button class="btn btn-primary" onclick="renderReturnConfirm(document.getElementById('mainContent'))">查询</button><button class="btn" onclick="document.getElementById('retSearch').value='';renderReturnConfirm(document.getElementById('mainContent'))">重置</button></div>
+      <div class="section-label">待确认还箱（${pending.length} / 总待确认 ${unique.length}）</div><div id="cc461RetPending"></div><div class="section-divider"></div><div class="section-label">已确认还箱（${done.length}）</div><div id="cc461RetDone"></div></div>`;
+    const pendingBody=pending.map((r,i)=>{ const id=returnRecordId(r,i); return `<tr><td>${esc(r.batch||'-')}</td><td>${esc(r.containerNo||'-')}</td><td>${esc(r.blNo||'-')}</td><td>${esc(normLoc(r.location)||'-')}</td><td>${esc(fmtDateSafe(r.unpackDate||r.unloadFinishTime||r.createdAt))}</td><td><input type="date" id="retDate_${esc(id)}"></td><td><input type="file" id="retFile_${esc(id)}"></td><td><button class="btn btn-sm btn-success" onclick="cc461ConfirmReturn('${esc(id)}')">确认还箱</button></td></tr>`; }).join('');
+    const doneBody=done.map(r=>`<tr><td>${esc(r.batch||'-')}</td><td>${esc(r.containerNo||'-')}</td><td>${esc(r.blNo||'-')}</td><td>${esc(normLoc(r.location)||'-')}</td><td>${esc(fmtDateSafe(r.unpackDate||r.createdAt))}</td><td>${esc(fmtDateSafe(r.returnDate||r.returnConfirmedAt))}</td><td>${esc(r.proofFileName||r.proofName||'-')}</td><td>-</td></tr>`).join('');
+    document.getElementById('cc461RetPending').innerHTML=tableHTML(['批次','集装箱号','提单号','地点','掏箱时间','还箱日期','凭证','操作'], pendingBody, 'cc46-return-table');
+    document.getElementById('cc461RetDone').innerHTML=tableHTML(['批次','集装箱号','提单号','地点','掏箱时间','还箱日期','凭证','操作'], doneBody, 'cc46-return-table');
+  }
+
+  W.cc461ConfirmReturn=function(id){
+    const r=rows('returnRecords').find(x=>S(x.id)===S(id)); if(!r){ alert('未找到待还箱记录，请刷新后重试。'); return false; }
+    const date=S(document.getElementById('retDate_'+id)?.value); if(!date){ alert('请选择还箱日期'); return false; }
+    const file=document.getElementById('retFile_'+id)?.files?.[0]; const pos=captureView();
+    Object.assign(r,{type:'return',isReturnConfirmed:true,returnDate:date,returnConfirmedAt:nowLocal(),proofFileName:file?file.name:(r.proofFileName||''),updatedAt:nowIso(),cc46Touched:true});
+    rows('returnRecords').forEach(x=>{ if(x!==r && !x.isReturnConfirmed && S(x.type||'return_needed')==='return_needed' && ((S(x.containerId)&&S(x.containerId)===S(r.containerId)) || (SL(x.containerNo)&&SL(x.containerNo)===SL(r.containerNo)))){ x.type='return_duplicate_closed'; x.isReturnConfirmed=true; x.returnDate=date; x.supersededByReturnId=r.id; x.updatedAt=nowIso(); } });
+    rows('transportTasks').forEach(t=>{ if((S(r.containerId)&&S(t.containerId)===S(r.containerId)) || (SL(r.containerNo)&&SL(t.containerNo)===SL(r.containerNo))){ if(!['cancelled','archived'].includes(S(t.status))) { t.status='return_completed'; t.updatedAt=nowIso(); } } });
+    try{ if(typeof W.saveAndRenderContentKeepState==='function') W.saveAndRenderContentKeepState(); else { if(typeof W.saveData==='function') W.saveData(); renderReturnConfirmV461(mainEl()); } }catch(e){ console.warn('V46.1 return save skipped',e); renderReturnConfirmV461(mainEl()); }
+    restoreLater(pos); return true;
+  };
+
+  function activeDockRows(){
+    const idx=buildIndex();
+    return rows('transportTasks').filter(t=>{
+      if(!t || t.cancelled || ['cancelled','archived','completed','return_completed','closed'].includes(S(t.status))) return false;
+      const d=taskDest(t), r=taskStatusRank(t);
+      if(!['工厂','IRA库房'].includes(d)) return false;
+      if(r!==2 && r!==3) return false;
+      const cid=S(t.containerId), no=SL(t.containerNo); if(idx.confirmedReturnByCid.has(cid) || idx.confirmedReturnByNo.has(no)) return false;
+      return true;
+    }).sort((a,b)=>S(a.estimatedArrival||a.createdAt).localeCompare(S(b.estimatedArrival||b.createdAt)) || sortByBatchSeq(a,b));
+  }
+  function dockFilter(list){ const q=SL(document.getElementById('dockSearch')?.value), d=normLoc(document.getElementById('dockDock')?.value||''); return list.filter(t=>(!q||[t.batch,t.containerNo,t.containerSeq,t.seq,t.blNo,t.iraNo,t.truckPlate,taskDest(t),taskDock(t)].join(' ').toLowerCase().includes(q)) && (!d || taskDock(t)===d || taskDest(t)===d)); }
+  function taskRef(t){ const ref=btoa(unescape(encodeURIComponent(JSON.stringify({id:t.id,taskUid:t.taskUid,routeLegKey:t.routeLegKey,containerId:t.containerId,containerNo:t.containerNo,batch:t.batch,to:taskDest(t)})))).replace(/=+$/,''); W.__cc46Refs=W.__cc46Refs||{}; W.__cc46Refs[ref]=t; if(t.id!=null) W.__cc46Refs[String(t.id)]=t; return ref; }
+  function renderDockV461(container){
+    injectCss();
+    const main=container||mainEl(); if(!main) return; const oldQ=S(document.getElementById('dockSearch')?.value), oldDock=S(document.getElementById('dockDock')?.value); const pos=captureView();
+    const list=dockFilter(activeDockRows());
+    main.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📦 卸货口收货 <span class="status-badge status-ready">${VERSION}</span></span></div>
+      <div class="cc46-note">统一流程：确认到达卸货口/开始卸货 → 确认掏箱完成 → 自动进入待还箱。操作后保持当前滚动位置。</div>
+      <div class="search-bar"><input id="dockSearch" placeholder="批次 / 箱号 / 提单 / 序号" value="${esc(oldQ)}"><select id="dockDock"><option value="">全部卸货口</option><option>120B</option><option>132</option><option>140B</option><option>140C</option><option>IRA库房</option></select><button class="btn btn-primary" onclick="renderFactoryDockOnly(document.getElementById('mainContent'))">查询</button><button class="btn" onclick="document.getElementById('dockSearch').value='';document.getElementById('dockDock').value='';renderFactoryDockOnly(document.getElementById('mainContent'))">重置</button></div><div id="cc461DockTable"></div></div>`;
+    const sel=document.getElementById('dockDock'); if(sel) sel.value=oldDock;
+    const body=list.map(t=>{ const r=taskStatusRank(t), ref=taskRef(t); return `<tr><td>${esc(taskDest(t)||'-')}</td><td>${esc(taskDock(t)||'-')}</td><td><span class="status-badge ${r===3?'status-transport':'status-warning'}">${r===3?'卸货中':'厂内等待'}</span></td><td>${esc(t.containerSeq||t.seq||'-')}</td><td>${esc(t.batch||'-')}</td><td>${esc(t.containerNo||'-')}</td><td>${esc(t.blNo || (typeof W.getTaskBlText==='function'?W.getTaskBlText(t):'') || '-')}</td><td>${esc(t.truckPlate||'-')}</td><td>${esc(fmtDateTimeSafe(t.waitingAreaTime||t.gateReleaseTime))}</td><td>${esc(fmtDateTimeSafe(t.unloadStartTime))}</td><td>${r===2?`<button class="btn btn-sm btn-success" onclick="startUnloading('${ref}')">确认到达卸货口</button>`:`<button class="btn btn-sm btn-success" onclick="finishUnloading('${ref}')">确认掏箱完成</button>`}</td></tr>`; }).join('');
+    document.getElementById('cc461DockTable').innerHTML=`<div class="cc46-note">查询结果：${list.length} 条</div>`+tableHTML(['目的地','卸货口','状态','序号','批次','集装箱号','提单号','车牌','进入等待','开始卸货','操作'], body, 'cc46-dock-table');
+    restoreLater(pos);
+  }
+
+  // 操作后保持 mainContent 的滚动位置，不再跳回第一行
+  function wrapKeepView(fnName){
+    const old=W[fnName]; if(typeof old!=='function' || old.__cc461Wrapped) return;
+    const wrapped=function(){ const pos=captureView(); const r=old.apply(this, arguments); restoreLater(pos); return r; };
+    wrapped.__cc461Wrapped=true; W[fnName]=wrapped;
+    try{ (0,eval)(fnName + ' = window["' + fnName + '"]'); }catch(_){ }
+  }
+
+  injectCss();
+  install('renderContainers', renderContainersV461);
+  install('renderContainerTable', renderContainerTableV461);
+  install('clearContainerSearch', clearContainerSearchV461);
+  install('renderReturnConfirm', renderReturnConfirmV461);
+  install('renderFactoryDockOnly', renderDockV461);
+  install('renderDockMonitoring', renderDockV461);
+  ['confirmGateArrival','releaseFromGate','startUnloading','finishUnloading','doArrival','doUnpack'].forEach(wrapKeepView);
+  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V46.1'; }catch(_){ }
+  console.log(VERSION+' loaded: indexed basic data, fixed return query, compact notebook layout, keep-row operations.');
 })();
 </script>
 
