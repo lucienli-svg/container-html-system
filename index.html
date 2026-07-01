@@ -12305,7 +12305,7 @@ let main=document.getElementById('mainContent');
 /* ==================== V45.5 Stable Core：云端唯一数据源 + 原子分片保存 + 统一状态机 ==================== */
 (function(){
   'use strict';
-  const VERSION = 'V46.1 Notebook Stable';
+  const VERSION = 'V46.3 Safe Core';
   const BASE_ID = (typeof CLOUD_STATE_ID !== 'undefined' ? CLOUD_STATE_ID : 'container-monitoring-main');
   const CURRENT_MANIFEST_ID = BASE_ID + ':v455:manifest';
   const DAILY_PREFIX = BASE_ID + ':v455:daily:';
@@ -12506,7 +12506,7 @@ let main=document.getElementById('mainContent');
     if(!st) return null;
     applyStateV455(st);
     clearBusinessLocalV455();
-    if(source!=='v455') setTimeout(()=>queueSaveV455('migrate_'+source),300);
+    if(source!=='v455') { try{ window.__v463PendingMigrationSource = source; hint('已读取旧格式数据；V46.3不会自动迁移保存'); }catch(_){} }
     return st;
   }
 
@@ -12534,6 +12534,7 @@ let main=document.getElementById('mainContent');
     const sb=typeof initSupabaseClient==='function'?initSupabaseClient():null;
     if(!sb || (typeof cloudUser!=='undefined' && !cloudUser)) return false;
     let st=stateFromGlobalsV455();
+    if(window.__v463CanSave && !window.__v463CanSave(reason||'persistV455', st)) return false;
     if(isEmpty(st) && !window.__allowEmptyCloudOverwrite){ hint('已阻止空数据保存'); return false; }
     normalizeStateV455(false);
     /* 保存前核对云端最新版本，避免其他账号新增的批次被旧页面整包覆盖。 */
@@ -12887,11 +12888,11 @@ ${preview}
 </script>
 
 <script>
-/* ==================== V46.1 Notebook Stable：单一数据源 + 统一任务身份 + 统一状态机 + 数据体检 ==================== */
+/* ==================== V46.3 Safe Core：单一数据源 + 统一任务身份 + 统一状态机 + 数据体检 ==================== */
 (function(){
   'use strict';
 
-  const VERSION = 'V46.1 Notebook Stable';
+  const VERSION = 'V46.3 Safe Core';
   const UI_PREFIX = 'cms:v4513:ui:';
   const BUSINESS_LOCAL_KEYS = [
     'cc_containers','cc_blList','cc_containerBlMap','cc_transportTasks','cc_locationStock',
@@ -13101,7 +13102,7 @@ ${preview}
   const coreSaveQueue = window.queueSaveV455 || window.saveCloudState;
   let saveSerial = Promise.resolve(true);
   function queueSystemSave(reason){
-    prepareStateForSave();
+    if(window.__v463CanSave && !window.__v463CanSave(reason||'queueSystemSave')) return Promise.resolve(false);
     saveSerial = saveSerial.catch(()=>false).then(async()=>{
       hint('保存中…');
       const ok = typeof coreSaveQueue === 'function' ? await coreSaveQueue('v4513_'+(reason||'save')) : false;
@@ -13222,7 +13223,7 @@ ${preview}
     const snapshot=deepClone(getCloudStatePayload());const ui=captureUi();
     try{
       const result=mutator();if(result===false)return false;
-      prepareStateForSave();renderPreserving(ui);hint((successText||'操作已完成')+'，正在保存…');
+      renderPreserving(ui);hint((successText||'操作已完成')+'，正在保存…');
       const ok=await queueSystemSave(reason);
       if(!ok){if(typeof applyCloudState==='function')applyCloudState(snapshot);renderPreserving(ui);alert('云端保存失败，本次操作已撤销。');return false;}
       hint((successText||'操作已完成')+'，已保存');return true;
@@ -13386,7 +13387,7 @@ ${preview}
   window.downloadDataClinicReportV4513=function(){const r=window.__v4513LastReport||scanData();const blob=new Blob([JSON.stringify(r,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='CMS_data_diagnostic_'+dayPart(nowIso())+'.json';a.click();URL.revokeObjectURL(a.href);};
   function counts(st){const keys=['containers','blList','pickupPlans','transportTasks','returnRecords','productionPlans','productionRecords'];const out={};keys.forEach(k=>out[k]=A(st?.[k]).length);return out;}
   function checksum(text){let h=2166136261;for(let i=0;i<text.length;i++){h^=text.charCodeAt(i);h=Math.imul(h,16777619);}return (h>>>0).toString(16).padStart(8,'0');}
-  window.downloadDeploymentBackupV4513=function(){prepareStateForSave();const state=deepClone(getCloudStatePayload());const raw=JSON.stringify(state);const pack={backupMeta:{type:'deployment_backup',version:VERSION,createdAt:nowIso(),createdBy:cloudUser?.email||currentUser?.email||currentUser?.name||'',counts:counts(state),checksum:checksum(raw)},...state};const blob=new Blob([JSON.stringify(pack,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='CMS_backup_before_update_'+nowIso().replace(/[:.]/g,'-')+'.json';a.click();URL.revokeObjectURL(a.href);};
+  window.downloadDeploymentBackupV4513=function(){const state=deepClone(getCloudStatePayload());const raw=JSON.stringify(state);const pack={backupMeta:{type:'deployment_backup',version:VERSION,createdAt:nowIso(),createdBy:cloudUser?.email||currentUser?.email||currentUser?.name||'',counts:counts(state),checksum:checksum(raw)},...state};const blob=new Blob([JSON.stringify(pack,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='CMS_backup_before_update_'+nowIso().replace(/[:.]/g,'-')+'.json';a.click();URL.revokeObjectURL(a.href);};
 
   window.confirmRestoreJsonV433=async function(){
     const json=window.__pendingRestoreJsonV433;if(!json)return alert('请先选择并预览备份JSON。');
@@ -13396,7 +13397,7 @@ ${preview}
     if(!confirm('确认恢复该备份到云端？\n当前基础数据：'+before.containers+' → 备份：'+after.containers+'\n当前运输任务：'+before.transportTasks+' → 备份：'+after.transportTasks+'\n当前提箱计划：'+before.pickupPlans+' → 备份：'+after.pickupPlans))return;
     try{
       if(typeof applyCloudState!=='function')throw new Error('未找到数据恢复函数');
-      applyCloudState(state);prepareStateForSave();renderPreserving(captureUi());
+      applyCloudState(state);renderPreserving(captureUi());
       const ok=await queueSystemSave('restore_json_v4513');if(!ok)throw new Error('云端保存失败');
       if(typeof loadCloudState==='function')await loadCloudState();clearLegacyBusinessCache();
       currentMenu='dashboard';renderSidebar();renderContent();alert('数据已成功恢复并写入云端。');
@@ -13423,25 +13424,25 @@ ${preview}
   setTimeout(()=>{
     try{
       clearLegacyBusinessCache();const changed=ensureTaskIdentities();
-      if(changed)queueSystemSave('identity_migration');
+      if(changed){ window.__v463IdentityChangesPending=changed; hint('V46.3已检测到任务身份缺失，但不会自动修改或保存云端数据'); }
       const report=scanData();window.__v4513LastReport=report;
       if(report.counts.issues)hint('检测到 '+report.counts.issues+' 项数据异常，请打开“数据体检中心”检查');
     }catch(e){console.warn('V45.13 startup check skipped',e);}
   },2200);
 
-  try{document.title='Sistema Inteligente de Monitoramento de Contêineres V46.0';}catch(_){}
-  console.log('V46.1 Notebook Stable loaded: single cloud source, serial save queue, task identity, monotonic state machine, manual data clinic');
+  try{document.title='Sistema Inteligente de Monitoramento de Contêineres V46.3 Safe Core';}catch(_){}
+  console.log('V46.3 Safe Core loaded: single cloud source, serial save queue, task identity, monotonic state machine, manual data clinic');
 })();
 
 </script>
 
 <script>
-/* ==================== V46.1 Notebook Stable：统一业务流转核心 ====================
+/* ==================== V46.3 Safe Core：统一业务流转核心 ====================
    目标：停止补丁式修复按钮，把确认动作收敛到一套状态机。
    原则：页面只渲染当前状态与下一步动作；所有状态变更必须通过 cc46Transition。 */
 (function(){
   'use strict';
-  const VERSION = 'V46.1 Notebook Stable';
+  const VERSION = 'V46.3 Safe Core';
   const W = window;
   const refMap = W.__cc46Refs = Object.create(null);
 
@@ -13758,13 +13759,13 @@ ${preview}
     }catch(e){ console.warn('V46 menu patch skipped', e); }
   }
   patchMenus();
-  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V46.1 Notebook Stable'; }catch(_){ }
+  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V46.3 Safe Core'; }catch(_){ }
   console.log(VERSION+' loaded: unified flow templates, central transitions, no daily repair buttons.');
 })();
 </script>
 
 <script>
-/* ==================== V46.1 Notebook UI + Performance Stabilization ====================
+/* ==================== V46.3 Safe Core UI + Performance Stabilization ====================
    目的：不再增加修复按钮，先修复 V46.0 测试中的 3 个核心问题：
    1) 基础数据打开卡死：改为索引计算状态，避免每行反复全量扫描。
    2) 还箱确认查询失效：查询值先读取再渲染，按批次/箱号/提单/地点过滤待还箱和已还箱。
@@ -13772,7 +13773,7 @@ ${preview}
 */
 (function(){
   'use strict';
-  const VERSION = 'V46.1 Notebook Stable';
+  const VERSION = 'V46.3 Safe Core';
   const W = window;
 
   function A(v){ return Array.isArray(v) ? v : []; }
@@ -13817,7 +13818,7 @@ ${preview}
     const style=document.createElement('style');
     style.id='cc46-1-style';
     style.textContent=`
-      /* V46.1 14寸笔记本紧凑显示：所有 V46 表格横向不溢出，内容允许换行 */
+      /* V46.3 14寸笔记本紧凑显示：所有 V46 表格横向不溢出，内容允许换行 */
       #mainContent{overflow-x:hidden!important;}
       .card{padding:12px!important;margin-bottom:12px!important;border-radius:10px!important;}
       .card-header{min-height:auto!important;padding:10px 12px!important;margin-bottom:8px!important;gap:8px!important;}
@@ -13993,7 +13994,7 @@ ${preview}
     Object.assign(r,{type:'return',isReturnConfirmed:true,returnDate:date,returnConfirmedAt:nowLocal(),proofFileName:file?file.name:(r.proofFileName||''),updatedAt:nowIso(),cc46Touched:true});
     rows('returnRecords').forEach(x=>{ if(x!==r && !x.isReturnConfirmed && S(x.type||'return_needed')==='return_needed' && ((S(x.containerId)&&S(x.containerId)===S(r.containerId)) || (SL(x.containerNo)&&SL(x.containerNo)===SL(r.containerNo)))){ x.type='return_duplicate_closed'; x.isReturnConfirmed=true; x.returnDate=date; x.supersededByReturnId=r.id; x.updatedAt=nowIso(); } });
     rows('transportTasks').forEach(t=>{ if((S(r.containerId)&&S(t.containerId)===S(r.containerId)) || (SL(r.containerNo)&&SL(t.containerNo)===SL(r.containerNo))){ if(!['cancelled','archived'].includes(S(t.status))) { t.status='return_completed'; t.updatedAt=nowIso(); } } });
-    try{ if(typeof W.saveAndRenderContentKeepState==='function') W.saveAndRenderContentKeepState(); else { if(typeof W.saveData==='function') W.saveData(); renderReturnConfirmV461(mainEl()); } }catch(e){ console.warn('V46.1 return save skipped',e); renderReturnConfirmV461(mainEl()); }
+    try{ if(typeof W.saveAndRenderContentKeepState==='function') W.saveAndRenderContentKeepState(); else { if(typeof W.saveData==='function') W.saveData(); renderReturnConfirmV461(mainEl()); } }catch(e){ console.warn('V46.3 return save skipped',e); renderReturnConfirmV461(mainEl()); }
     restoreLater(pos); return true;
   };
 
@@ -14039,237 +14040,201 @@ ${preview}
   install('renderFactoryDockOnly', renderDockV461);
   install('renderDockMonitoring', renderDockV461);
   ['confirmGateArrival','releaseFromGate','startUnloading','finishUnloading','doArrival','doUnpack'].forEach(wrapKeepView);
-  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V46.1'; }catch(_){ }
+  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V46.3'; }catch(_){ }
   console.log(VERSION+' loaded: indexed basic data, fixed return query, compact notebook layout, keep-row operations.');
 })();
 </script>
 
 
 <script>
-/* ==================== V46.2 Lifecycle Integrity：统一流转完整性补强 ====================
-   目标：不增加日常修复按钮，而是在系统加载和关键页面渲染前自动保证业务链路完整。
-   重点：
-   1) 已掏箱/已卸货但缺待还箱记录 → 自动按统一规则生成待还箱记录。
-   2) 基础数据/库存显示已到工厂或 IRA，但缺门岗/卸货口任务 → 自动生成一条兼容任务进入卸货口流程。
-   3) 已确认还箱后，重复 pending 不再进入待确认区。
+/* ==================== V46.3 Safe Core：只读加载 + 显式操作保存 + 防清空保护 ====================
+   原则：
+   1) 打开页面、切换页面、扫描数据、状态计算均不得自动保存；
+   2) 云端数据未完整加载前禁止保存；
+   3) 本次保存导致基础数据/任务数据异常下降时禁止保存；
+   4) 正常业务按钮仍可保存：确认提箱/到门岗/卸货口/掏箱/还箱/导入/恢复。
 */
 (function(){
   'use strict';
-  const VERSION = 'V46.2 Lifecycle Integrity';
   const W = window;
-  const STATE = W.__cc462State = W.__cc462State || {saving:false,lastRun:0,lastChanged:0};
+  const VERSION = 'V46.3 Safe Core';
+  const A = v => Array.isArray(v) ? v : [];
+  const N = v => String(v == null ? '' : v).trim();
+  const nowIso = () => new Date().toISOString();
+  let cloudReady = false;
+  let baseline = null;
+  let lastActionAt = 0;
+  let lastActionText = '';
+  let saveInProgress = 0;
+  let lastBlockReason = '';
 
-  function S(v){ return String(v == null ? '' : v).trim(); }
-  function L(v){ return S(v).toLowerCase(); }
-  function A(v){ return Array.isArray(v) ? v : []; }
-  function rows(name){ try{ const v=(0,eval)(name); return Array.isArray(v) ? v : []; }catch(_){ return []; } }
-  function ids(){ try{ return (0,eval)('nextIds'); }catch(_){ return {}; } }
-  function nowIso(){ return new Date().toISOString(); }
-  function nowLocal(){ try{ return typeof nowLocalInput==='function' ? nowLocalInput() : new Date().toISOString().slice(0,16); }catch(_){ return new Date().toISOString().slice(0,16); } }
-  function day(v){ const s=S(v||nowIso()); return (s.includes('T') ? s.split('T')[0] : s.split(' ')[0]).replace(/\//g,'-'); }
-  function normLoc(v){
-    const raw=S(v); const s=raw.replace(/\s+/g,'').toLowerCase();
-    if(!s) return '';
-    if(s.includes('rioclaro') || s.includes('rio claro')) return 'Rio Claro';
-    if(s.includes('ira')) return 'IRA库房';
-    if(s.includes('rg')) return 'RG堆场';
-    if(s.includes('工厂') || s.includes('factory') || s.includes('fabrica') || s.includes('fábrica') || s.includes('gwm')) return '工厂';
-    if(s==='120b'||s==='132'||s==='140b'||s==='140c') return s.toUpperCase();
-    if(s.includes('港口') || s.includes('santos') || s.includes('porto')) return '港口';
-    return raw;
+  function hint(text){ try{ if(typeof W.showRealtimeSyncHint === 'function') W.showRealtimeSyncHint(text); }catch(_){} }
+  function getCounts(state){
+    const s = state || {
+      containers: W.containers,
+      pickupPlans: W.pickupPlans,
+      transportTasks: W.transportTasks,
+      returnRecords: W.returnRecords,
+      blList: W.blList,
+      containerBlMap: W.containerBlMap,
+      locationStock: W.locationStock,
+      productionPlans: W.productionPlans,
+      productionRecords: W.productionRecords
+    };
+    const c = {
+      containers: A(s.containers).length,
+      pickupPlans: A(s.pickupPlans).length,
+      transportTasks: A(s.transportTasks).length,
+      returnRecords: A(s.returnRecords).length,
+      blList: A(s.blList).length,
+      containerBlMap: A(s.containerBlMap).length,
+      locationStock: A(s.locationStock).length,
+      productionPlans: A(s.productionPlans).length,
+      productionRecords: A(s.productionRecords).length
+    };
+    c.total = c.containers + c.pickupPlans + c.transportTasks + c.returnRecords + c.blList + c.containerBlMap + c.locationStock + c.productionPlans + c.productionRecords;
+    return c;
   }
-  function nextId(kind){ const n=ids(); const k=kind||'task'; n[k]=Number(n[k]||1); return n[k]++; }
-  function cidOf(x){ return S(x && (x.containerId || x.id)); }
-  function noOf(x){ return S(x && x.containerNo); }
-  function batchOf(x){ return S(x && x.batch); }
-  function seqOf(x){ return S(x && (x.containerSeq || x.seq)); }
-  function destOf(t){ return normLoc(t && (t.to || t.destination || t.location || t.dest)); }
-  function originOf(t){ return normLoc(t && (t.from || t.origin || t.fromLocation)); }
-  function taskKey(t){ return cidOf(t) || L(noOf(t)); }
-  function containerBy(x){ const cid=cidOf(x), no=L(noOf(x)); return rows('containers').find(c=>cid && S(c.id)===cid) || rows('containers').find(c=>no && L(c.containerNo)===no) || null; }
-  function fillFromContainer(x){ const c=containerBy(x); if(!c) return x; x.containerId=cidOf(x)||S(c.id); x.containerNo=noOf(x)||S(c.containerNo); x.batch=batchOf(x)||S(c.batch); x.containerSeq=seqOf(x)||S(c.containerSeq||c.seq); return x; }
-  function blText(x){
-    if(S(x && x.blNo)) return S(x.blNo);
-    try{ if(typeof getTaskBlText==='function'){ const b=getTaskBlText(x); if(S(b)) return S(b); } }catch(_){ }
-    return '';
-  }
-  function iraText(x){
-    if(S(x && x.iraNo)) return S(x.iraNo);
-    try{ if(typeof getIraList==='function'){ const r=getIraList(cidOf(x)); if(S(r)) return S(r); } }catch(_){ }
-    return '';
-  }
-  function isCancelled(t){ return !!(t && (t.cancelled || ['cancelled','archived','closed'].includes(L(t.status)))); }
-  function isOpenTask(t){ return !!(t && !isCancelled(t) && !['return_completed','produced'].includes(L(t.status))); }
-  function isReturnConfirmed(r){ return !!(r && (r.type==='return' || r.isReturnConfirmed===true || r.returnDate || r.returnConfirmedAt)); }
-  function hasConfirmedReturn(x, loc){
-    const cid=cidOf(x), no=L(noOf(x)), l=normLoc(loc||x.location||destOf(x));
-    return rows('returnRecords').some(r=>isReturnConfirmed(r) && ((cid && S(r.containerId)===cid) || (no && L(r.containerNo)===no)) && (!l || !r.location || normLoc(r.location)===l));
-  }
-  function pendingReturn(x, loc){
-    const cid=cidOf(x), no=L(noOf(x)), l=normLoc(loc||x.location||destOf(x));
-    return rows('returnRecords').find(r=>r && L(r.type||'return_needed')==='return_needed' && !isReturnConfirmed(r) && ((cid && S(r.containerId)===cid) || (no && L(r.containerNo)===no)) && (!l || !r.location || normLoc(r.location)===l));
-  }
-  function taskIsUnstuffed(t){
-    const st=L(t && t.status), op=L(t && t.operationStatus);
-    return !!(t && (t.unloadFinishTime || t.unpackConfirmedAt || op==='unloaded' || st==='return_pending' || st==='completed'));
-  }
-  function taskRank(t){
-    if(!t) return 0;
-    if(taskIsUnstuffed(t)) return 4;
-    if(t.unloadStartTime || L(t.operationStatus)==='unloading') return 3;
-    if(t.waitingAreaTime || t.gateReleaseTime || L(t.operationStatus)==='inside_waiting') return 2;
-    if(t.gateArrivalTime || t.actualArrival || t.arrivalConfirmedAt || L(t.operationStatus)==='outside_parking' || L(t.status)==='arrived') return 1;
-    return 0;
-  }
-  function setStock(cid, loc, ts){
-    if(!cid || !loc) return false;
-    try{ if(typeof setLocationStock==='function'){ setLocationStock(cid, loc, ts||nowIso()); return true; } }catch(_){ }
-    const ls=rows('locationStock'); let r=ls.find(s=>S(s.containerId)===S(cid));
-    if(r){ if(normLoc(r.location)===loc) return false; r.location=loc; r.updatedAt=ts||nowIso(); r.isActive=true; return true; }
-    ls.push({id:nextId('stock'),containerId:cid,location:loc,isActive:true,updatedAt:ts||nowIso()}); return true;
-  }
-  function ensureReturnNeeded(src, loc, reason){
-    fillFromContainer(src); loc=normLoc(loc||destOf(src)||src.location);
-    if(!['工厂','IRA库房','Rio Claro'].includes(loc)) return false;
-    if(hasConfirmedReturn(src, loc)) return false;
-    const exist=pendingReturn(src, loc);
-    if(exist){
-      let changed=false;
-      ['containerId','containerNo','batch','containerSeq'].forEach(k=>{ if(!S(exist[k]) && S(src[k])){ exist[k]=src[k]; changed=true; } });
-      if(!S(exist.blNo) && blText(src)){ exist.blNo=blText(src); changed=true; }
-      if(!S(exist.iraNo) && iraText(src)){ exist.iraNo=iraText(src); changed=true; }
-      if(!S(exist.unpackDate)){ exist.unpackDate=day(src.unloadFinishTime||src.unpackConfirmedAt||nowIso()); changed=true; }
-      if(changed){ exist.updatedAt=nowIso(); exist.cc462Normalized=true; }
-      return changed;
-    }
-    rows('returnRecords').push({
-      id:nextId('returnRecord'), type:'return_needed', isReturnConfirmed:false,
-      containerId:cidOf(src), containerNo:noOf(src), containerSeq:seqOf(src), batch:batchOf(src),
-      blNo:blText(src), iraNo:iraText(src), location:loc,
-      unpackDate:day(src.unloadFinishTime||src.unpackConfirmedAt||src.actualArrival||nowIso()),
-      sourceTaskId:S(src.id), sourceTaskUid:S(src.taskUid), sourceRouteLegKey:S(src.routeLegKey),
-      createdAt:nowIso(), updatedAt:nowIso(), createdBy:VERSION, cc462Normalized:true, cc462Reason:reason||'unstuff_without_return_record'
-    });
+  function markCloudReady(source, state){
+    const c = getCounts(state);
+    if(c.total <= 0) return false;
+    baseline = c;
+    cloudReady = true;
+    try{ sessionStorage.setItem('cms_v463_baseline', JSON.stringify({source, at:nowIso(), counts:c})); }catch(_){}
+    hint('云端数据已完整加载，Safe Core保护已开启');
     return true;
   }
-  function closeDuplicatePendings(){
-    let changed=0; const rs=rows('returnRecords'); const confirmed=[];
-    rs.forEach(r=>{ if(isReturnConfirmed(r)) confirmed.push(r); });
-    rs.forEach(r=>{
-      if(!r || L(r.type||'return_needed')!=='return_needed' || isReturnConfirmed(r)) return;
-      if(confirmed.some(c=>((cidOf(c)&&cidOf(c)===cidOf(r)) || (noOf(c)&&L(noOf(c))===L(noOf(r)))) && (!r.location || !c.location || normLoc(r.location)===normLoc(c.location)))){
-        r.type='return_duplicate_closed'; r.closed=true; r.closedReason='confirmed_return_exists'; r.updatedAt=nowIso(); r.cc462Normalized=true; changed++;
-      }
-    });
-    const seen=new Set();
-    rs.forEach(r=>{
-      if(!r || L(r.type||'return_needed')!=='return_needed' || isReturnConfirmed(r)) return;
-      const k=[cidOf(r)||L(noOf(r)),normLoc(r.location),L(r.blNo)].join('|');
-      if(seen.has(k)){ r.type='return_duplicate_closed'; r.closed=true; r.closedReason='duplicate_pending_return'; r.updatedAt=nowIso(); r.cc462Normalized=true; changed++; }
-      else seen.add(k);
-    });
-    return changed;
+  function recentUserAction(){ return Date.now() - lastActionAt < 10 * 60 * 1000; }
+  function isExplicitReason(reason){
+    const r = N(reason).toLowerCase();
+    return /confirm|pickup|arrival|gate|release|start|finish|unload|unpack|return|import|restore|manual|save_and_render|savedata|queueSystemSave|persistV455|v4513_/i.test(r);
   }
-  function latestStockLoc(cid){
-    const list=rows('locationStock').filter(s=>S(s.containerId)===S(cid));
-    list.sort((a,b)=>S(b.updatedAt||b.createdAt).localeCompare(S(a.updatedAt||a.createdAt)));
-    return normLoc(list[0] && list[0].location);
+  function actionLabel(){ return lastActionText ? '（最近操作：'+lastActionText.slice(0,40)+'）' : ''; }
+  function block(msg){
+    lastBlockReason = msg;
+    console.warn('[V46.3 Safe Core] save blocked:', msg);
+    hint(msg);
+    return false;
   }
-  function inferContainerLoc(c){
-    return normLoc(c.currentLocation || c.currentNode || c.location || c.lastLocation || latestStockLoc(c.id));
+  function dangerDrop(cur, base){
+    if(!base || base.total <= 0) return '';
+    if(base.containers >= 20 && cur.containers === 0) return '本次保存的基础数据为0，已阻止覆盖云端';
+    if(base.containers >= 100 && cur.containers < Math.floor(base.containers * 0.70)) return '本次保存会导致基础数据下降超过30%，已阻止覆盖云端：'+base.containers+' → '+cur.containers;
+    if(base.total >= 300 && cur.total < Math.floor(base.total * 0.55)) return '本次保存会导致业务数据总量异常下降，已阻止覆盖云端：'+base.total+' → '+cur.total;
+    if(base.transportTasks >= 100 && cur.transportTasks < Math.floor(base.transportTasks * 0.35) && cur.containers < base.containers * 0.9) return '本次保存会导致运输任务异常下降，已阻止覆盖云端：'+base.transportTasks+' → '+cur.transportTasks;
+    if(base.returnRecords >= 100 && cur.returnRecords < Math.floor(base.returnRecords * 0.35) && cur.containers < base.containers * 0.9) return '本次保存会导致还箱记录异常下降，已阻止覆盖云端：'+base.returnRecords+' → '+cur.returnRecords;
+    return '';
   }
-  function textOfContainer(c){ return [c.status,c.transportStatus,c.lifecycleStatus,c.currentStatus,c.operationStatus,c.locationStatus,c.remark,c.notes].map(S).join(' '); }
-  function containerLooksUnstuffed(c){ return /掏箱完成|已掏箱|卸货完成|已卸货|待还箱|return_pending|unloaded/i.test(textOfContainer(c)); }
-  function activeTaskForContainer(c, loc){
-    const cid=S(c.id), no=L(c.containerNo), l=normLoc(loc);
-    return rows('transportTasks').find(t=>isOpenTask(t) && ((cid && S(t.containerId)===cid) || (no && L(t.containerNo)===no)) && (!l || destOf(t)===l));
-  }
-  function createLegacyReceivingTask(c, loc){
-    loc=normLoc(loc); if(!['工厂','IRA库房'].includes(loc)) return false;
-    if(hasConfirmedReturn(c,loc) || pendingReturn(c,loc) || activeTaskForContainer(c,loc)) return false;
-    const stTime=nowLocal();
-    const t={
-      id:nextId('task'), containerId:S(c.id), containerNo:S(c.containerNo), containerSeq:S(c.containerSeq||c.seq), batch:S(c.batch),
-      blNo:blText({containerId:c.id,containerNo:c.containerNo,batch:c.batch}), iraNo:iraText({containerId:c.id}),
-      from:'历史状态/基础数据', to:loc, carrier:'RG', status:'in_transit', operationStatus:'inside_waiting',
-      actualArrival:stTime, gateArrivalTime:stTime, gateReleaseTime:stTime, waitingAreaTime:stTime,
-      estimatedArrival:S(c.actualPickupTime||c.pickupTime||''), unloadingDock:loc==='IRA库房'?'IRA库房':(S(c.unloadingDock)||''),
-      source:'cc462_legacy_container_status', cc46Flow:'GATE_DOCK_RETURN', createdAt:nowIso(), updatedAt:nowIso(), createdBy:VERSION, cc462Normalized:true,
-      note:'由基础数据/库存显示已到达目的地但缺少业务任务时自动补齐，用于继续统一卸货口流程。'
-    };
-    rows('transportTasks').push(t); setStock(c.id,loc,nowIso()); return true;
-  }
-  function normalizeLifecycle(reason){
-    const now=Date.now(); if(now-STATE.lastRun<1200) return 0; STATE.lastRun=now;
-    let changed=0;
-    const tasks=rows('transportTasks');
-    tasks.forEach(t=>{
-      if(!t || isCancelled(t)) return;
-      fillFromContainer(t);
-      const d=destOf(t), o=originOf(t);
-      if(d==='IRA库房' && t.unloadingDock!=='IRA库房'){ t.unloadingDock='IRA库房'; t.cc46Flow='GATE_DOCK_RETURN'; t.updatedAt=nowIso(); changed++; }
-      if(d==='工厂' && !S(t.cc46Flow)) { t.cc46Flow='GATE_DOCK_RETURN'; t.updatedAt=nowIso(); changed++; }
-      if(d==='Rio Claro' && !S(t.cc46Flow)) { t.cc46Flow='DIRECT_UNSTUFF_RETURN'; t.updatedAt=nowIso(); changed++; }
-      if(['工厂','IRA库房','Rio Claro'].includes(d) && taskIsUnstuffed(t)){
-        t.status='return_pending'; t.operationStatus='unloaded'; setStock(cidOf(t),d,t.unloadFinishTime||t.unpackConfirmedAt||t.actualArrival||nowIso());
-        if(ensureReturnNeeded(t,d,'task_finished_without_return_record')) changed++;
-      }
-      if(['工厂','IRA库房'].includes(d) && (t.actualArrival||t.arrivalConfirmedAt) && taskRank(t)===1 && !S(t.operationStatus)){
-        t.operationStatus='outside_parking'; t.updatedAt=nowIso(); changed++;
-      }
-    });
-    rows('containers').forEach(c=>{
-      if(!c || c.isArchived || c.deleted) return;
-      const loc=inferContainerLoc(c);
-      if(['工厂','IRA库房','Rio Claro'].includes(loc) && containerLooksUnstuffed(c)){
-        if(ensureReturnNeeded(c,loc,'container_status_unstuffed_without_return_record')) changed++;
-      }else if(['工厂','IRA库房'].includes(loc)){
-        if(createLegacyReceivingTask(c,loc)) changed++;
-      }
-    });
-    changed += closeDuplicatePendings();
-    if(changed>0){
-      STATE.lastChanged=Date.now();
-      try{ console.log(VERSION+' normalized lifecycle changes:', changed, reason||''); }catch(_){ }
-      scheduleSave(reason||'normalizeLifecycle');
-    }
-    return changed;
-  }
-  function scheduleSave(reason){
-    if(STATE.saving) return;
-    STATE.saving=true;
-    setTimeout(()=>{
-      try{
-        if(typeof W.saveCloudState==='function') W.saveCloudState('cc462_'+reason);
-        else if(typeof W.saveData==='function') W.saveData();
-      }catch(e){ console.warn('V46.2 normalize save skipped',e); }
-      finally{ STATE.saving=false; }
-    }, 1500);
-  }
-  function wrapRender(name){
-    const old=W[name]; if(typeof old!=='function' || old.__cc462Wrapped) return;
-    const fn=function(){ normalizeLifecycle('before_'+name); return old.apply(this, arguments); };
-    fn.__cc462Wrapped=true; W[name]=fn; try{ (0,eval)(name+' = window["'+name+'"]'); }catch(_){ }
-  }
-  function wrapAction(name){
-    const old=W[name]; if(typeof old!=='function' || old.__cc462ActionWrapped) return;
-    const fn=function(){ const r=old.apply(this, arguments); setTimeout(()=>normalizeLifecycle('after_'+name),250); return r; };
-    fn.__cc462ActionWrapped=true; W[name]=fn; try{ (0,eval)(name+' = window["'+name+'"]'); }catch(_){ }
-  }
-  function wrapLoad(){
-    const old=W.loadCloudState; if(typeof old!=='function' || old.__cc462LoadWrapped) return;
-    const fn=async function(){ const r=await old.apply(this, arguments); setTimeout(()=>normalizeLifecycle('after_load_cloud'),800); return r; };
-    fn.__cc462LoadWrapped=true; W.loadCloudState=fn; try{ loadCloudState=W.loadCloudState; }catch(_){ }
-  }
-  W.cc462NormalizeLifecycle=normalizeLifecycle;
-  wrapLoad();
-  ['renderContainers','renderContainerTable','renderReturnConfirm','renderFactoryDockOnly','renderDockMonitoring','renderFactoryGateOnly','renderGateMonitoring','renderLocationConfirm'].forEach(wrapRender);
-  ['confirmPickupTask','confirmPickupTaskByKey','doArrival','doUnpack','startUnloading','finishUnloading','cc46ConfirmReturn','cc461ConfirmReturn'].forEach(wrapAction);
-  setTimeout(()=>normalizeLifecycle('startup'),2500);
-  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V46.2'; }catch(_){ }
-  console.log(VERSION+' loaded: lifecycle integrity enforced without adding daily repair buttons.');
-})();
 
+  W.__v463CanSave = function(reason, state){
+    const cur = getCounts(state);
+    if(!cloudReady){
+      if(cur.total > 0 && !baseline){ markCloudReady('late-current-state', state); }
+      else return block('数据尚未完整加载，已阻止保存，避免空数据覆盖云端');
+    }
+    const r = N(reason || 'save');
+    if(!recentUserAction() && !isExplicitReason(r)) return block('非用户明确业务操作触发的自动保存已被阻止 '+actionLabel());
+    const msg = dangerDrop(cur, baseline);
+    if(msg){
+      if(/restore|import/i.test(r) && recentUserAction()){
+        const ok = confirm(msg + '\n\n如果这是你主动执行的“恢复/导入覆盖”，可以继续。是否确认继续保存？');
+        if(!ok) return false;
+      }else{
+        return block(msg);
+      }
+    }
+    return true;
+  };
+
+  function afterSuccessfulSave(state){
+    markCloudReady('after-save', state || null);
+    try{ localStorage.removeItem('cc_dirty'); localStorage.removeItem('cc_dirtyError'); sessionStorage.removeItem('cms_v463_unsaved_warning'); }catch(_){}
+  }
+
+  document.addEventListener('pointerdown', function(e){
+    const el = e.target && e.target.closest && e.target.closest('button,.btn,input[type="button"],input[type="submit"],a[onclick]');
+    if(!el) return;
+    lastActionAt = Date.now();
+    lastActionText = N(el.innerText || el.value || el.getAttribute('title') || el.getAttribute('onclick') || '业务操作');
+  }, true);
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Enter' || e.key === ' '){ lastActionAt = Date.now(); lastActionText = '键盘确认操作'; }
+  }, true);
+
+  function wrapAsync(name){
+    const old = W[name];
+    if(typeof old !== 'function' || old.__v463Wrapped) return;
+    const wrapped = function(reason){
+      const r = reason || name;
+      if(!W.__v463CanSave(r)) return Promise.resolve(false);
+      saveInProgress++;
+      return Promise.resolve(old.apply(this, arguments)).then(ok=>{
+        if(ok !== false) afterSuccessfulSave();
+        return ok;
+      }).catch(err=>{ console.error('[V46.3] save failed', err); throw err; }).finally(()=>{ saveInProgress=Math.max(0, saveInProgress-1); });
+    };
+    wrapped.__v463Wrapped = true;
+    W[name] = wrapped;
+    try{ if(name === 'saveData') saveData = wrapped; if(name === 'saveCloudState') saveCloudState = wrapped; if(name === 'saveAndRenderContentKeepState') saveAndRenderContentKeepState = wrapped; }catch(_){}
+  }
+
+  function wrapLoad(name){
+    const old = W[name];
+    if(typeof old !== 'function' || old.__v463LoadWrapped) return;
+    const wrapped = async function(){
+      const ok = await old.apply(this, arguments);
+      if(ok !== false){ markCloudReady(name, null); }
+      return ok;
+    };
+    wrapped.__v463LoadWrapped = true;
+    W[name] = wrapped;
+    try{ if(name === 'loadCloudState') loadCloudState = wrapped; if(name === 'ensureCloudSession') ensureCloudSession = wrapped; }catch(_){}
+  }
+
+  // 覆盖保存入口：任何保存都必须先经过 V46.3 Safe Guard。
+  ['queueSaveV455','queueSystemSaveV4513','saveCloudState','saveData','saveAndRenderContentKeepState','queueCloudPersistV435'].forEach(wrapAsync);
+  wrapLoad('loadCloudState');
+  wrapLoad('ensureCloudSession');
+
+  // 兜底：如果页面已经完成加载但包装较晚执行，使用当前已加载数据作为基线。
+  setTimeout(()=>{ try{ if(!cloudReady && getCounts().total > 0) markCloudReady('delayed-current-state'); }catch(_){} }, 2500);
+  setTimeout(()=>{ try{ if(!cloudReady && getCounts().total > 0) markCloudReady('delayed-current-state-2'); }catch(_){} }, 6000);
+
+  // 页面关闭保护：只有真实保存中才提示，不再用旧 dirty 标记误报。
+  W.addEventListener('beforeunload', function(e){
+    if(saveInProgress > 0){ e.preventDefault(); e.returnValue='数据正在保存到云端，请稍候。'; return e.returnValue; }
+  });
+
+  // UI 标识与紧凑布局补强。
+  function updateBadges(){
+    try{
+      document.title = 'Sistema Inteligente de Monitoramento de Contêineres V46.3 Safe Core';
+      document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{
+        const t = N(el.textContent);
+        if(/V4[356]\.|Clean Core|Notebook Stable|Status Calibration/i.test(t)) el.textContent = 'V46.3 Safe Core';
+      });
+      const h = document.getElementById('realtimeSyncHint');
+      if(h && lastBlockReason && /保存|同步/.test(N(h.textContent))) h.title = lastBlockReason;
+    }catch(_){}
+  }
+  const style = document.createElement('style');
+  style.textContent = `
+    .v463-safe-note{font-size:12px;color:#606266;margin:6px 0 0 0}
+    .data-table{table-layout:fixed!important;width:100%!important;font-size:12px!important}
+    .data-table th,.data-table td{padding:6px 7px!important;line-height:1.25!important;white-space:normal!important;word-break:break-word!important;vertical-align:middle!important}
+    .btn{padding:6px 10px!important;font-size:12px!important;border-radius:7px!important}
+    input,select,textarea{font-size:12px!important;min-height:30px!important}
+    .card{padding:14px!important}.card-header{padding:10px 12px!important;margin-bottom:10px!important}.card-title{font-size:18px!important}
+    .table-wrapper{overflow-x:hidden!important;width:100%!important}
+    @media(max-width:1500px){.data-table{font-size:11px!important}.data-table th,.data-table td{padding:5px 5px!important}.btn{padding:5px 8px!important;font-size:11px!important}.card-title{font-size:17px!important}}
+  `;
+  document.head.appendChild(style);
+  updateBadges();
+  new MutationObserver(updateBadges).observe(document.documentElement,{childList:true,subtree:true});
+
+  W.__v463SafeCoreStatus = function(){ return {cloudReady, baseline, current:getCounts(), lastActionAt, lastActionText, saveInProgress, lastBlockReason}; };
+  console.log('V46.3 Safe Core loaded: no auto-save on page load, guarded generation save, explicit business actions only.');
+})();
 </script>
 </body>
 </html>
