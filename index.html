@@ -14651,6 +14651,177 @@ ${preview}
 })();
 </script>
 
+
+
+<script>
+/* ==================== V45.36 卸货口收货连续操作位置保持优化 ====================
+   修复：在“卸货口收货/IRA库房”连续点击“确认到达卸货口/开始卸货”或“确认掏箱完成”后，
+   页面重新渲染跳回第一行，导致连续操作不便。
+   方案：操作前记录当前筛选条件、滚动位置、被操作行；渲染后恢复筛选并把视图保持在原行附近。
+*/
+(function(){
+  'use strict';
+  const VERSION='V45.36 Dock Receiving Position Guard';
+  const S=v=>String(v==null?'':v).trim();
+  const U=v=>S(v).toUpperCase().replace(/[\s\-_/（）()]/g,'');
+  function isDockPage(){
+    try{return (typeof currentMenu!=='undefined' && currentMenu==='dockMonitoring') || !!document.getElementById('dockMonitorTable');}catch(_){return !!document.getElementById('dockMonitorTable');}
+  }
+  function val(id){const el=document.getElementById(id);return el?el.value:'';}
+  function setVal(id,v){const el=document.getElementById(id);if(el&&v!=null)el.value=v;}
+  function escSel(s){try{return CSS.escape(String(s));}catch(_){return String(s).replace(/['"\\]/g,'\\$&');}}
+  function taskPayloadFromRef(ref){
+    const raw=S(ref);
+    try{ if(window.__v4535TaskRefs && window.__v4535TaskRefs[raw]) return window.__v4535TaskRefs[raw]; }catch(_){ }
+    try{ if(window.__v4529TaskRefs && window.__v4529TaskRefs[raw]) return window.__v4529TaskRefs[raw]; }catch(_){ }
+    try{ if(window.__v453TaskKeys && window.__v453TaskKeys[raw]) return JSON.parse(decodeURIComponent(window.__v453TaskKeys[raw])); }catch(_){ }
+    try{ if(raw && raw[0]==='{') return JSON.parse(raw); }catch(_){ }
+    return {id:raw,taskUid:raw,routeLegKey:raw,containerNo:raw};
+  }
+  function getTransportRows(){
+    try{return Array.isArray(window.transportTasks)?window.transportTasks:(Array.isArray(transportTasks)?transportTasks:[]);}catch(_){return [];}
+  }
+  function findTaskByPayload(p){
+    const rows=getTransportRows(); if(!p) return null;
+    let m=[]; const set=fn=>{if(!m.length)m=rows.filter(fn);};
+    set(t=>S(t.taskUid)&&S(t.taskUid)===S(p.taskUid));
+    set(t=>S(t.routeLegKey)&&S(t.routeLegKey)===S(p.routeLegKey));
+    set(t=>S(t.id)&&S(t.id)===S(p.id));
+    set(t=>p.containerId!=null&&S(t.containerId)===S(p.containerId));
+    set(t=>S(p.containerNo)&&U(t.containerNo)===U(p.containerNo));
+    if(m.length>1&&p.batch){const f=m.filter(t=>U(t.batch)===U(p.batch)); if(f.length)m=f;}
+    return m[0]||null;
+  }
+  function rowInfoFromButton(btn){
+    const tr=btn&&btn.closest?btn.closest('tr'):null;
+    if(!tr) return {};
+    const cells=[...tr.children].map(td=>S(td.textContent));
+    return {
+      rowIndex:[...tr.parentNode.children].indexOf(tr),
+      rowTop:tr.getBoundingClientRect().top,
+      text:tr.textContent||'',
+      // 当前 V45.35 表头：目的地/卸货口/状态/序号/批次/集装箱号/车牌/进入等待/开始卸货/完成掏箱/操作
+      seq:cells[3]||'', batch:cells[4]||'', containerNo:cells[5]||'', dock:cells[1]||'', destination:cells[0]||''
+    };
+  }
+  function capture(ref,btn,kind){
+    if(!isDockPage()) return;
+    const p=taskPayloadFromRef(ref);
+    const t=findTaskByPayload(p)||{};
+    const ri=rowInfoFromButton(btn);
+    const wrapper=document.querySelector('#dockMonitorTable .table-wrapper')||document.querySelector('.table-wrapper');
+    window.__v4536DockPos={
+      ts:Date.now(), kind:kind||'', ref:S(ref), payload:p,
+      containerNo:S(t.containerNo||p.containerNo||ri.containerNo),
+      batch:S(t.batch||p.batch||ri.batch), seq:S(t.containerSeq||p.containerSeq||ri.seq),
+      dock:S((t.unloadingDock)||ri.dock), destination:S(t.to||p.to||ri.destination),
+      rowIndex:ri.rowIndex, rowTop:ri.rowTop,
+      docScroll:(document.scrollingElement||document.documentElement).scrollTop,
+      winScroll:window.scrollY||0,
+      wrapperScroll:wrapper?wrapper.scrollTop:0,
+      filters:{
+        date:val('dockMonitorDate'), dock:val('dockMonitorDock'), search:val('dockMonitorSearch')
+      }
+    };
+  }
+  function restoreFilters(state){
+    const f=state&&state.filters; if(!f) return;
+    setVal('dockMonitorDate',f.date);
+    setVal('dockMonitorDock',f.dock);
+    setVal('dockMonitorSearch',f.search);
+  }
+  function findRenderedRow(state){
+    const rows=[...document.querySelectorAll('#dockMonitorTable tbody tr')];
+    if(!rows.length) return null;
+    const cn=U(state.containerNo), batch=U(state.batch), seq=U(state.seq);
+    let row=null;
+    if(cn) row=rows.find(r=>U(r.textContent).includes(cn));
+    if(!row&&cn&&batch) row=rows.find(r=>U(r.textContent).includes(cn)&&U(r.textContent).includes(batch));
+    if(!row&&batch&&seq) row=rows.find(r=>U(r.textContent).includes(batch)&&U(r.textContent).includes(seq));
+    if(!row&&Number.isInteger(state.rowIndex)&&state.rowIndex>=0) row=rows[Math.min(state.rowIndex,rows.length-1)];
+    return row||null;
+  }
+  function restorePosition(){
+    const state=window.__v4536DockPos;
+    if(!state || Date.now()-state.ts>15000 || !isDockPage()) return;
+    restoreFilters(state);
+    const wrapper=document.querySelector('#dockMonitorTable .table-wrapper')||document.querySelector('.table-wrapper');
+    let restored=false;
+    const row=findRenderedRow(state);
+    if(row){
+      try{
+        // 尽量把同一行保持在操作前同一屏幕高度，避免跳回第一行。
+        const currentTop=row.getBoundingClientRect().top;
+        const delta=currentTop-state.rowTop;
+        if(Number.isFinite(delta) && Math.abs(delta)>2) window.scrollBy(0,delta);
+        row.style.outline='2px solid #409eff';
+        row.style.outlineOffset='-2px';
+        setTimeout(()=>{try{row.style.outline='';row.style.outlineOffset='';}catch(_){ }},1200);
+        restored=true;
+      }catch(_){ }
+    }
+    if(!restored){
+      try{(document.scrollingElement||document.documentElement).scrollTop=state.docScroll;}catch(_){ }
+      try{window.scrollTo(0,state.winScroll);}catch(_){ }
+    }
+    if(wrapper && state.wrapperScroll!=null){try{wrapper.scrollTop=state.wrapperScroll;}catch(_){ }}
+  }
+  function scheduleRestore(){[0,30,80,160,350,700,1200].forEach(ms=>setTimeout(restorePosition,ms));}
+
+  // 捕获点击按钮时的位置，覆盖内联 onclick 执行前记录。
+  document.addEventListener('click',function(e){
+    const btn=e.target&&e.target.closest?e.target.closest('button'):null;
+    if(!btn || !isDockPage()) return;
+    const txt=S(btn.textContent);
+    if(!(txt.includes('确认到达卸货口')||txt.includes('开始卸货')||txt.includes('确认掏箱完成'))) return;
+    const on=S(btn.getAttribute('onclick'));
+    const m=on.match(/(?:startUnloading|finishUnloading)\(['"]?([^'")]+)['"]?\)/);
+    capture(m&&m[1]||'',btn,txt.includes('掏箱')?'finish':'start');
+  },true);
+
+  // 保护渲染函数：保持日期/卸货口/搜索条件，并在渲染后恢复位置。
+  const oldRenderDock=window.renderFactoryDockOnly||window.renderDockMonitoring;
+  if(typeof oldRenderDock==='function'){
+    window.renderFactoryDockOnly=function(container){
+      let state=window.__v4536DockPos;
+      if(isDockPage() && (!state || Date.now()-state.ts>15000)){
+        state={filters:{date:val('dockMonitorDate'),dock:val('dockMonitorDock'),search:val('dockMonitorSearch')}};
+      }
+      const r=oldRenderDock.apply(this,arguments);
+      restoreFilters(state);
+      scheduleRestore();
+      return r;
+    };
+    window.renderDockMonitoring=window.renderFactoryDockOnly;
+    try{globalThis.renderFactoryDockOnly=window.renderFactoryDockOnly;globalThis.renderDockMonitoring=window.renderDockMonitoring;}catch(_){ }
+  }
+
+  // 保护操作函数：操作前记录，操作后多次恢复，防止保存/重绘导致位置丢失。
+  function wrapAction(name,kind){
+    const old=window[name];
+    if(typeof old!=='function' || old.__v4536Wrapped) return;
+    const wrapped=function(ref){
+      try{ if(isDockPage() && (!window.__v4536DockPos || window.__v4536DockPos.ref!==S(ref))) capture(ref,null,kind); }catch(_){ }
+      const ret=old.apply(this,arguments);
+      try{
+        if(ret && typeof ret.then==='function') ret.then(scheduleRestore).catch(scheduleRestore);
+        scheduleRestore();
+      }catch(_){ }
+      return ret;
+    };
+    wrapped.__v4536Wrapped=true;
+    window[name]=wrapped;
+  }
+  wrapAction('startUnloading','start');
+  wrapAction('finishUnloading','finish');
+  wrapAction('startUnloadingByKeyV453','start');
+  wrapAction('finishUnloadingByKeyV453','finish');
+
+  try{document.title='Sistema Inteligente de Monitoramento de Contêineres V45.36';}catch(_){ }
+  console.log(VERSION+' loaded');
+})();
+</script>
+
 </body></html>';
     w.document.open();
     w.document.write(html);
@@ -15644,6 +15815,177 @@ ${preview}
   window.clearLocationConfirmSearch=function(){['arrivalSearchBatch','arrivalSearchContainer','arrivalSearchSeq'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});renderLocationConfirm4535(document.getElementById('mainContent'));};
   try{ globalThis.renderFactoryGateOnly=renderGate; globalThis.renderGateMonitoring=renderGate; globalThis.renderFactoryDockOnly=renderDock; globalThis.renderDockMonitoring=renderDock; globalThis.renderLocationConfirm=renderLocationConfirm4535; }catch(_){ }
   try{document.title='Sistema Inteligente de Monitoramento de Contêineres V45.35';}catch(_){ }
+  console.log(VERSION+' loaded');
+})();
+</script>
+
+
+
+<script>
+/* ==================== V45.36 卸货口收货连续操作位置保持优化 ====================
+   修复：在“卸货口收货/IRA库房”连续点击“确认到达卸货口/开始卸货”或“确认掏箱完成”后，
+   页面重新渲染跳回第一行，导致连续操作不便。
+   方案：操作前记录当前筛选条件、滚动位置、被操作行；渲染后恢复筛选并把视图保持在原行附近。
+*/
+(function(){
+  'use strict';
+  const VERSION='V45.36 Dock Receiving Position Guard';
+  const S=v=>String(v==null?'':v).trim();
+  const U=v=>S(v).toUpperCase().replace(/[\s\-_/（）()]/g,'');
+  function isDockPage(){
+    try{return (typeof currentMenu!=='undefined' && currentMenu==='dockMonitoring') || !!document.getElementById('dockMonitorTable');}catch(_){return !!document.getElementById('dockMonitorTable');}
+  }
+  function val(id){const el=document.getElementById(id);return el?el.value:'';}
+  function setVal(id,v){const el=document.getElementById(id);if(el&&v!=null)el.value=v;}
+  function escSel(s){try{return CSS.escape(String(s));}catch(_){return String(s).replace(/['"\\]/g,'\\$&');}}
+  function taskPayloadFromRef(ref){
+    const raw=S(ref);
+    try{ if(window.__v4535TaskRefs && window.__v4535TaskRefs[raw]) return window.__v4535TaskRefs[raw]; }catch(_){ }
+    try{ if(window.__v4529TaskRefs && window.__v4529TaskRefs[raw]) return window.__v4529TaskRefs[raw]; }catch(_){ }
+    try{ if(window.__v453TaskKeys && window.__v453TaskKeys[raw]) return JSON.parse(decodeURIComponent(window.__v453TaskKeys[raw])); }catch(_){ }
+    try{ if(raw && raw[0]==='{') return JSON.parse(raw); }catch(_){ }
+    return {id:raw,taskUid:raw,routeLegKey:raw,containerNo:raw};
+  }
+  function getTransportRows(){
+    try{return Array.isArray(window.transportTasks)?window.transportTasks:(Array.isArray(transportTasks)?transportTasks:[]);}catch(_){return [];}
+  }
+  function findTaskByPayload(p){
+    const rows=getTransportRows(); if(!p) return null;
+    let m=[]; const set=fn=>{if(!m.length)m=rows.filter(fn);};
+    set(t=>S(t.taskUid)&&S(t.taskUid)===S(p.taskUid));
+    set(t=>S(t.routeLegKey)&&S(t.routeLegKey)===S(p.routeLegKey));
+    set(t=>S(t.id)&&S(t.id)===S(p.id));
+    set(t=>p.containerId!=null&&S(t.containerId)===S(p.containerId));
+    set(t=>S(p.containerNo)&&U(t.containerNo)===U(p.containerNo));
+    if(m.length>1&&p.batch){const f=m.filter(t=>U(t.batch)===U(p.batch)); if(f.length)m=f;}
+    return m[0]||null;
+  }
+  function rowInfoFromButton(btn){
+    const tr=btn&&btn.closest?btn.closest('tr'):null;
+    if(!tr) return {};
+    const cells=[...tr.children].map(td=>S(td.textContent));
+    return {
+      rowIndex:[...tr.parentNode.children].indexOf(tr),
+      rowTop:tr.getBoundingClientRect().top,
+      text:tr.textContent||'',
+      // 当前 V45.35 表头：目的地/卸货口/状态/序号/批次/集装箱号/车牌/进入等待/开始卸货/完成掏箱/操作
+      seq:cells[3]||'', batch:cells[4]||'', containerNo:cells[5]||'', dock:cells[1]||'', destination:cells[0]||''
+    };
+  }
+  function capture(ref,btn,kind){
+    if(!isDockPage()) return;
+    const p=taskPayloadFromRef(ref);
+    const t=findTaskByPayload(p)||{};
+    const ri=rowInfoFromButton(btn);
+    const wrapper=document.querySelector('#dockMonitorTable .table-wrapper')||document.querySelector('.table-wrapper');
+    window.__v4536DockPos={
+      ts:Date.now(), kind:kind||'', ref:S(ref), payload:p,
+      containerNo:S(t.containerNo||p.containerNo||ri.containerNo),
+      batch:S(t.batch||p.batch||ri.batch), seq:S(t.containerSeq||p.containerSeq||ri.seq),
+      dock:S((t.unloadingDock)||ri.dock), destination:S(t.to||p.to||ri.destination),
+      rowIndex:ri.rowIndex, rowTop:ri.rowTop,
+      docScroll:(document.scrollingElement||document.documentElement).scrollTop,
+      winScroll:window.scrollY||0,
+      wrapperScroll:wrapper?wrapper.scrollTop:0,
+      filters:{
+        date:val('dockMonitorDate'), dock:val('dockMonitorDock'), search:val('dockMonitorSearch')
+      }
+    };
+  }
+  function restoreFilters(state){
+    const f=state&&state.filters; if(!f) return;
+    setVal('dockMonitorDate',f.date);
+    setVal('dockMonitorDock',f.dock);
+    setVal('dockMonitorSearch',f.search);
+  }
+  function findRenderedRow(state){
+    const rows=[...document.querySelectorAll('#dockMonitorTable tbody tr')];
+    if(!rows.length) return null;
+    const cn=U(state.containerNo), batch=U(state.batch), seq=U(state.seq);
+    let row=null;
+    if(cn) row=rows.find(r=>U(r.textContent).includes(cn));
+    if(!row&&cn&&batch) row=rows.find(r=>U(r.textContent).includes(cn)&&U(r.textContent).includes(batch));
+    if(!row&&batch&&seq) row=rows.find(r=>U(r.textContent).includes(batch)&&U(r.textContent).includes(seq));
+    if(!row&&Number.isInteger(state.rowIndex)&&state.rowIndex>=0) row=rows[Math.min(state.rowIndex,rows.length-1)];
+    return row||null;
+  }
+  function restorePosition(){
+    const state=window.__v4536DockPos;
+    if(!state || Date.now()-state.ts>15000 || !isDockPage()) return;
+    restoreFilters(state);
+    const wrapper=document.querySelector('#dockMonitorTable .table-wrapper')||document.querySelector('.table-wrapper');
+    let restored=false;
+    const row=findRenderedRow(state);
+    if(row){
+      try{
+        // 尽量把同一行保持在操作前同一屏幕高度，避免跳回第一行。
+        const currentTop=row.getBoundingClientRect().top;
+        const delta=currentTop-state.rowTop;
+        if(Number.isFinite(delta) && Math.abs(delta)>2) window.scrollBy(0,delta);
+        row.style.outline='2px solid #409eff';
+        row.style.outlineOffset='-2px';
+        setTimeout(()=>{try{row.style.outline='';row.style.outlineOffset='';}catch(_){ }},1200);
+        restored=true;
+      }catch(_){ }
+    }
+    if(!restored){
+      try{(document.scrollingElement||document.documentElement).scrollTop=state.docScroll;}catch(_){ }
+      try{window.scrollTo(0,state.winScroll);}catch(_){ }
+    }
+    if(wrapper && state.wrapperScroll!=null){try{wrapper.scrollTop=state.wrapperScroll;}catch(_){ }}
+  }
+  function scheduleRestore(){[0,30,80,160,350,700,1200].forEach(ms=>setTimeout(restorePosition,ms));}
+
+  // 捕获点击按钮时的位置，覆盖内联 onclick 执行前记录。
+  document.addEventListener('click',function(e){
+    const btn=e.target&&e.target.closest?e.target.closest('button'):null;
+    if(!btn || !isDockPage()) return;
+    const txt=S(btn.textContent);
+    if(!(txt.includes('确认到达卸货口')||txt.includes('开始卸货')||txt.includes('确认掏箱完成'))) return;
+    const on=S(btn.getAttribute('onclick'));
+    const m=on.match(/(?:startUnloading|finishUnloading)\(['"]?([^'")]+)['"]?\)/);
+    capture(m&&m[1]||'',btn,txt.includes('掏箱')?'finish':'start');
+  },true);
+
+  // 保护渲染函数：保持日期/卸货口/搜索条件，并在渲染后恢复位置。
+  const oldRenderDock=window.renderFactoryDockOnly||window.renderDockMonitoring;
+  if(typeof oldRenderDock==='function'){
+    window.renderFactoryDockOnly=function(container){
+      let state=window.__v4536DockPos;
+      if(isDockPage() && (!state || Date.now()-state.ts>15000)){
+        state={filters:{date:val('dockMonitorDate'),dock:val('dockMonitorDock'),search:val('dockMonitorSearch')}};
+      }
+      const r=oldRenderDock.apply(this,arguments);
+      restoreFilters(state);
+      scheduleRestore();
+      return r;
+    };
+    window.renderDockMonitoring=window.renderFactoryDockOnly;
+    try{globalThis.renderFactoryDockOnly=window.renderFactoryDockOnly;globalThis.renderDockMonitoring=window.renderDockMonitoring;}catch(_){ }
+  }
+
+  // 保护操作函数：操作前记录，操作后多次恢复，防止保存/重绘导致位置丢失。
+  function wrapAction(name,kind){
+    const old=window[name];
+    if(typeof old!=='function' || old.__v4536Wrapped) return;
+    const wrapped=function(ref){
+      try{ if(isDockPage() && (!window.__v4536DockPos || window.__v4536DockPos.ref!==S(ref))) capture(ref,null,kind); }catch(_){ }
+      const ret=old.apply(this,arguments);
+      try{
+        if(ret && typeof ret.then==='function') ret.then(scheduleRestore).catch(scheduleRestore);
+        scheduleRestore();
+      }catch(_){ }
+      return ret;
+    };
+    wrapped.__v4536Wrapped=true;
+    window[name]=wrapped;
+  }
+  wrapAction('startUnloading','start');
+  wrapAction('finishUnloading','finish');
+  wrapAction('startUnloadingByKeyV453','start');
+  wrapAction('finishUnloadingByKeyV453','finish');
+
+  try{document.title='Sistema Inteligente de Monitoramento de Contêineres V45.36';}catch(_){ }
   console.log(VERSION+' loaded');
 })();
 </script>
@@ -18355,6 +18697,177 @@ ${preview}
   window.clearLocationConfirmSearch=function(){['arrivalSearchBatch','arrivalSearchContainer','arrivalSearchSeq'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});renderLocationConfirm4535(document.getElementById('mainContent'));};
   try{ globalThis.renderFactoryGateOnly=renderGate; globalThis.renderGateMonitoring=renderGate; globalThis.renderFactoryDockOnly=renderDock; globalThis.renderDockMonitoring=renderDock; globalThis.renderLocationConfirm=renderLocationConfirm4535; }catch(_){ }
   try{document.title='Sistema Inteligente de Monitoramento de Contêineres V45.35';}catch(_){ }
+  console.log(VERSION+' loaded');
+})();
+</script>
+
+
+
+<script>
+/* ==================== V45.36 卸货口收货连续操作位置保持优化 ====================
+   修复：在“卸货口收货/IRA库房”连续点击“确认到达卸货口/开始卸货”或“确认掏箱完成”后，
+   页面重新渲染跳回第一行，导致连续操作不便。
+   方案：操作前记录当前筛选条件、滚动位置、被操作行；渲染后恢复筛选并把视图保持在原行附近。
+*/
+(function(){
+  'use strict';
+  const VERSION='V45.36 Dock Receiving Position Guard';
+  const S=v=>String(v==null?'':v).trim();
+  const U=v=>S(v).toUpperCase().replace(/[\s\-_/（）()]/g,'');
+  function isDockPage(){
+    try{return (typeof currentMenu!=='undefined' && currentMenu==='dockMonitoring') || !!document.getElementById('dockMonitorTable');}catch(_){return !!document.getElementById('dockMonitorTable');}
+  }
+  function val(id){const el=document.getElementById(id);return el?el.value:'';}
+  function setVal(id,v){const el=document.getElementById(id);if(el&&v!=null)el.value=v;}
+  function escSel(s){try{return CSS.escape(String(s));}catch(_){return String(s).replace(/['"\\]/g,'\\$&');}}
+  function taskPayloadFromRef(ref){
+    const raw=S(ref);
+    try{ if(window.__v4535TaskRefs && window.__v4535TaskRefs[raw]) return window.__v4535TaskRefs[raw]; }catch(_){ }
+    try{ if(window.__v4529TaskRefs && window.__v4529TaskRefs[raw]) return window.__v4529TaskRefs[raw]; }catch(_){ }
+    try{ if(window.__v453TaskKeys && window.__v453TaskKeys[raw]) return JSON.parse(decodeURIComponent(window.__v453TaskKeys[raw])); }catch(_){ }
+    try{ if(raw && raw[0]==='{') return JSON.parse(raw); }catch(_){ }
+    return {id:raw,taskUid:raw,routeLegKey:raw,containerNo:raw};
+  }
+  function getTransportRows(){
+    try{return Array.isArray(window.transportTasks)?window.transportTasks:(Array.isArray(transportTasks)?transportTasks:[]);}catch(_){return [];}
+  }
+  function findTaskByPayload(p){
+    const rows=getTransportRows(); if(!p) return null;
+    let m=[]; const set=fn=>{if(!m.length)m=rows.filter(fn);};
+    set(t=>S(t.taskUid)&&S(t.taskUid)===S(p.taskUid));
+    set(t=>S(t.routeLegKey)&&S(t.routeLegKey)===S(p.routeLegKey));
+    set(t=>S(t.id)&&S(t.id)===S(p.id));
+    set(t=>p.containerId!=null&&S(t.containerId)===S(p.containerId));
+    set(t=>S(p.containerNo)&&U(t.containerNo)===U(p.containerNo));
+    if(m.length>1&&p.batch){const f=m.filter(t=>U(t.batch)===U(p.batch)); if(f.length)m=f;}
+    return m[0]||null;
+  }
+  function rowInfoFromButton(btn){
+    const tr=btn&&btn.closest?btn.closest('tr'):null;
+    if(!tr) return {};
+    const cells=[...tr.children].map(td=>S(td.textContent));
+    return {
+      rowIndex:[...tr.parentNode.children].indexOf(tr),
+      rowTop:tr.getBoundingClientRect().top,
+      text:tr.textContent||'',
+      // 当前 V45.35 表头：目的地/卸货口/状态/序号/批次/集装箱号/车牌/进入等待/开始卸货/完成掏箱/操作
+      seq:cells[3]||'', batch:cells[4]||'', containerNo:cells[5]||'', dock:cells[1]||'', destination:cells[0]||''
+    };
+  }
+  function capture(ref,btn,kind){
+    if(!isDockPage()) return;
+    const p=taskPayloadFromRef(ref);
+    const t=findTaskByPayload(p)||{};
+    const ri=rowInfoFromButton(btn);
+    const wrapper=document.querySelector('#dockMonitorTable .table-wrapper')||document.querySelector('.table-wrapper');
+    window.__v4536DockPos={
+      ts:Date.now(), kind:kind||'', ref:S(ref), payload:p,
+      containerNo:S(t.containerNo||p.containerNo||ri.containerNo),
+      batch:S(t.batch||p.batch||ri.batch), seq:S(t.containerSeq||p.containerSeq||ri.seq),
+      dock:S((t.unloadingDock)||ri.dock), destination:S(t.to||p.to||ri.destination),
+      rowIndex:ri.rowIndex, rowTop:ri.rowTop,
+      docScroll:(document.scrollingElement||document.documentElement).scrollTop,
+      winScroll:window.scrollY||0,
+      wrapperScroll:wrapper?wrapper.scrollTop:0,
+      filters:{
+        date:val('dockMonitorDate'), dock:val('dockMonitorDock'), search:val('dockMonitorSearch')
+      }
+    };
+  }
+  function restoreFilters(state){
+    const f=state&&state.filters; if(!f) return;
+    setVal('dockMonitorDate',f.date);
+    setVal('dockMonitorDock',f.dock);
+    setVal('dockMonitorSearch',f.search);
+  }
+  function findRenderedRow(state){
+    const rows=[...document.querySelectorAll('#dockMonitorTable tbody tr')];
+    if(!rows.length) return null;
+    const cn=U(state.containerNo), batch=U(state.batch), seq=U(state.seq);
+    let row=null;
+    if(cn) row=rows.find(r=>U(r.textContent).includes(cn));
+    if(!row&&cn&&batch) row=rows.find(r=>U(r.textContent).includes(cn)&&U(r.textContent).includes(batch));
+    if(!row&&batch&&seq) row=rows.find(r=>U(r.textContent).includes(batch)&&U(r.textContent).includes(seq));
+    if(!row&&Number.isInteger(state.rowIndex)&&state.rowIndex>=0) row=rows[Math.min(state.rowIndex,rows.length-1)];
+    return row||null;
+  }
+  function restorePosition(){
+    const state=window.__v4536DockPos;
+    if(!state || Date.now()-state.ts>15000 || !isDockPage()) return;
+    restoreFilters(state);
+    const wrapper=document.querySelector('#dockMonitorTable .table-wrapper')||document.querySelector('.table-wrapper');
+    let restored=false;
+    const row=findRenderedRow(state);
+    if(row){
+      try{
+        // 尽量把同一行保持在操作前同一屏幕高度，避免跳回第一行。
+        const currentTop=row.getBoundingClientRect().top;
+        const delta=currentTop-state.rowTop;
+        if(Number.isFinite(delta) && Math.abs(delta)>2) window.scrollBy(0,delta);
+        row.style.outline='2px solid #409eff';
+        row.style.outlineOffset='-2px';
+        setTimeout(()=>{try{row.style.outline='';row.style.outlineOffset='';}catch(_){ }},1200);
+        restored=true;
+      }catch(_){ }
+    }
+    if(!restored){
+      try{(document.scrollingElement||document.documentElement).scrollTop=state.docScroll;}catch(_){ }
+      try{window.scrollTo(0,state.winScroll);}catch(_){ }
+    }
+    if(wrapper && state.wrapperScroll!=null){try{wrapper.scrollTop=state.wrapperScroll;}catch(_){ }}
+  }
+  function scheduleRestore(){[0,30,80,160,350,700,1200].forEach(ms=>setTimeout(restorePosition,ms));}
+
+  // 捕获点击按钮时的位置，覆盖内联 onclick 执行前记录。
+  document.addEventListener('click',function(e){
+    const btn=e.target&&e.target.closest?e.target.closest('button'):null;
+    if(!btn || !isDockPage()) return;
+    const txt=S(btn.textContent);
+    if(!(txt.includes('确认到达卸货口')||txt.includes('开始卸货')||txt.includes('确认掏箱完成'))) return;
+    const on=S(btn.getAttribute('onclick'));
+    const m=on.match(/(?:startUnloading|finishUnloading)\(['"]?([^'")]+)['"]?\)/);
+    capture(m&&m[1]||'',btn,txt.includes('掏箱')?'finish':'start');
+  },true);
+
+  // 保护渲染函数：保持日期/卸货口/搜索条件，并在渲染后恢复位置。
+  const oldRenderDock=window.renderFactoryDockOnly||window.renderDockMonitoring;
+  if(typeof oldRenderDock==='function'){
+    window.renderFactoryDockOnly=function(container){
+      let state=window.__v4536DockPos;
+      if(isDockPage() && (!state || Date.now()-state.ts>15000)){
+        state={filters:{date:val('dockMonitorDate'),dock:val('dockMonitorDock'),search:val('dockMonitorSearch')}};
+      }
+      const r=oldRenderDock.apply(this,arguments);
+      restoreFilters(state);
+      scheduleRestore();
+      return r;
+    };
+    window.renderDockMonitoring=window.renderFactoryDockOnly;
+    try{globalThis.renderFactoryDockOnly=window.renderFactoryDockOnly;globalThis.renderDockMonitoring=window.renderDockMonitoring;}catch(_){ }
+  }
+
+  // 保护操作函数：操作前记录，操作后多次恢复，防止保存/重绘导致位置丢失。
+  function wrapAction(name,kind){
+    const old=window[name];
+    if(typeof old!=='function' || old.__v4536Wrapped) return;
+    const wrapped=function(ref){
+      try{ if(isDockPage() && (!window.__v4536DockPos || window.__v4536DockPos.ref!==S(ref))) capture(ref,null,kind); }catch(_){ }
+      const ret=old.apply(this,arguments);
+      try{
+        if(ret && typeof ret.then==='function') ret.then(scheduleRestore).catch(scheduleRestore);
+        scheduleRestore();
+      }catch(_){ }
+      return ret;
+    };
+    wrapped.__v4536Wrapped=true;
+    window[name]=wrapped;
+  }
+  wrapAction('startUnloading','start');
+  wrapAction('finishUnloading','finish');
+  wrapAction('startUnloadingByKeyV453','start');
+  wrapAction('finishUnloadingByKeyV453','finish');
+
+  try{document.title='Sistema Inteligente de Monitoramento de Contêineres V45.36';}catch(_){ }
   console.log(VERSION+' loaded');
 })();
 </script>
