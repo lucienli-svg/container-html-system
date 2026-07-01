@@ -13789,14 +13789,14 @@ ${preview}
     if(!w)return;
     const html='<!doctype html><html><head><meta charset="utf-8"><title>'+esc(t.containerNo||'')+'</title><style>body{font-family:Arial;padding:20px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f3f4f6}</style></head><body><h2>'+esc(t.containerNo||'')+' · '+tr('操作日志','Registro de operações','Operation log')+'</h2><table><thead><tr><th>'+tr('时间','Data/hora','Time')+'</th><th>'+tr('操作人','Usuário','Operator')+'</th><th>'+tr('操作','Ação','Action')+'</th><th>'+tr('状态变化','Alteração de status','Status change')+'</th><th>'+tr('原因','Motivo','Reason')+'</th></tr></thead><tbody>'+rows+'</tbody></table>
 <script>
-/* ==================== V45.31 还箱确认页面卡死修复 ====================
+/* ==================== V45.32 还箱确认页面卡死修复 ====================
    修复：V45.30 在 renderReturnConfirm() 渲染时自动执行 repairReturnLinksV4530(false)，
    repair 完成后又调用 renderContent()，导致进入“渲染 → 自动修复 → 保存/重渲染 → 再修复”的循环，页面卡死。
-   V45.31 调整为：进入还箱确认页面只读渲染；只有用户点击“修复待还箱链路”时才执行修复。
+   V45.32 调整为：进入还箱确认页面只读渲染；只有用户点击“修复待还箱链路”时才执行修复。
 */
 (function(){
   'use strict';
-  const VERSION='V45.31 Return Page Freeze Fix';
+  const VERSION='V45.32 Return Page Freeze Fix';
   const A=v=>Array.isArray(v)?v:[];
   const S=v=>String(v==null?'':v).trim();
   function esc(v){return S(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
@@ -13884,6 +13884,311 @@ ${preview}
     safeRenderReturnList(pendingRows);
     safeRenderCompletedReturnList(completedRows);
   };
+  console.log(VERSION+' loaded');
+})();
+</script>
+
+
+<script>
+/* ==================== V45.32 还箱重复记录与性能优化 ====================
+   修复：同一集装箱已存在“已确认还箱”记录时，历史/重复的 return_needed 仍显示在“待确认还箱”。
+   原因：旧逻辑按 returnRecords 单条记录渲染，不按集装箱+地点做逻辑去重；确认还箱时也没有关闭同箱号的重复待还箱记录。
+   优化：还箱页建立一次索引，避免每条 returnRecord 反复扫描 containers / transportTasks / BL，提升页面流畅度。
+*/
+(function(){
+  'use strict';
+  const VERSION='V45.32 Return De-duplication and Performance';
+  const A=v=>Array.isArray(v)?v:[];
+  const S=v=>String(v==null?'':v).trim();
+  const U=v=>S(v).toUpperCase().replace(/[\s\-_/（）()\.]/g,'');
+  const now=()=>new Date().toISOString();
+  function esc(v){return S(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+  function locKey(v){
+    const x=U(v);
+    if(x.includes('RIOCLARO')) return 'RIOCLARO';
+    if(x.includes('IRA')) return 'IRA';
+    if(x.includes('RG')) return 'RG';
+    if(x.includes('工厂')||x.includes('FABRICA')||x.includes('FÁBRICA')||x==='GWM') return 'FACTORY';
+    if(x.includes('港口')||x.includes('PORTO')||x.includes('SANTOS')) return 'PORT';
+    return x||'UNKNOWN';
+  }
+  function taskDest(t){return S(t && (t.to || t.destination || t.dest));}
+  function taskOrigin(t){return S(t && (t.from || t.origin || t.sourceLocation || ''));}
+  function recType(r){return S(r && r.type);}
+  function isReturnRow(r){const t=recType(r); return t==='return_needed' || t==='return';}
+  function isConfirmed(r){return !!(r && (r.isReturnConfirmed || recType(r)==='return'));}
+  function taskTime(t){return Date.parse(t?.updatedAt||t?.unpackConfirmedAt||t?.unloadFinishTime||t?.actualArrival||t?.createdAt||0)||0;}
+  function canSeeCarrier(carrier){
+    try{ if(!carrier || carrier==='-') return true; if(typeof window.canViewCarrier==='function') return !!window.canViewCarrier(carrier); }catch(_){ }
+    return true;
+  }
+  function makeIndexes(){
+    const cons=A(window.containers||containers);
+    const tasks=A(window.transportTasks||transportTasks);
+    const contById=new Map(), contByNo=new Map();
+    cons.forEach(c=>{ if(c){ if(c.id!=null) contById.set(S(c.id),c); if(c.containerNo) contByNo.set(U(c.containerNo),c); } });
+    const tasksByCid=new Map(), tasksByNo=new Map();
+    tasks.forEach(t=>{
+      if(!t || t.cancelled || t.status==='cancelled') return;
+      if(t.containerId!=null){ const k=S(t.containerId); if(!tasksByCid.has(k)) tasksByCid.set(k,[]); tasksByCid.get(k).push(t); }
+      if(t.containerNo){ const k=U(t.containerNo); if(!tasksByNo.has(k)) tasksByNo.set(k,[]); tasksByNo.get(k).push(t); }
+    });
+    tasksByCid.forEach(v=>v.sort((a,b)=>taskTime(b)-taskTime(a)));
+    tasksByNo.forEach(v=>v.sort((a,b)=>taskTime(b)-taskTime(a)));
+    const blMapByCid=new Map();
+    try{
+      A(window.containerBlMap||containerBlMap).forEach(m=>{ if(!m) return; const k=S(m.containerId); if(!k) return; if(!blMapByCid.has(k)) blMapByCid.set(k,[]); blMapByCid.get(k).push(m.blNo); });
+    }catch(_){ }
+    return {contById,contByNo,tasksByCid,tasksByNo,blMapByCid};
+  }
+  function findTaskForReturnFast(r,idx){
+    let list=[];
+    if(r && r.containerId!=null) list=list.concat(idx.tasksByCid.get(S(r.containerId))||[]);
+    const no=U(r?.containerNo || idx.contById.get(S(r?.containerId))?.containerNo || '');
+    if(no) list=list.concat(idx.tasksByNo.get(no)||[]);
+    const seen=new Set(); list=list.filter(t=>{const k=S(t.id||t.taskUid||t.routeLegKey||Math.random()); if(seen.has(k)) return false; seen.add(k); return true;});
+    if(!list.length) return null;
+    let m=[];
+    if(r.sourceTaskUid) m=list.filter(t=>S(t.taskUid)===S(r.sourceTaskUid));
+    if(!m.length && r.sourceTaskId) m=list.filter(t=>S(t.id)===S(r.sourceTaskId));
+    if(!m.length && r.routeLegKey) m=list.filter(t=>S(t.routeLegKey)===S(r.routeLegKey));
+    if(!m.length && r.location) m=list.filter(t=>locKey(taskDest(t))===locKey(r.location));
+    if(!m.length) m=list;
+    m.sort((a,b)=>taskTime(b)-taskTime(a));
+    return m[0]||null;
+  }
+  function containerForRecord(r,idx,task){
+    return idx.contById.get(S(r?.containerId)) || idx.contByNo.get(U(r?.containerNo || task?.containerNo || '')) || null;
+  }
+  function getNo(r,idx,task,c){return S(r?.containerNo || task?.containerNo || c?.containerNo || '');}
+  function getLoc(r,task){return S(r?.location || taskDest(task) || '');}
+  function logicalKey(r,idx,task,c){
+    const no=getNo(r,idx,task,c);
+    const cid=S(r?.containerId || c?.id || task?.containerId || '');
+    const base=no ? ('NO:'+U(no)) : ('CID:'+cid);
+    return base+'|LOC:'+locKey(getLoc(r,task));
+  }
+  function blTextFor(r,idx){
+    try{ if(typeof window.getContainerBlTextById==='function') return window.getContainerBlTextById(r.containerId)||'-'; }catch(_){ }
+    const vals=idx.blMapByCid.get(S(r?.containerId))||[];
+    return vals.length?vals.join(','):'-';
+  }
+  function inferCarrier(r,task,c){
+    if(r?.carrier) return r.carrier;
+    if(task?.carrier) return task.carrier;
+    try{
+      const p=A(window.pickupPlans||pickupPlans).slice().reverse().find(p=>S(p.containerId)===S(r?.containerId)||U(p.containerNo)===U(c?.containerNo));
+      return p?.carrier || '-';
+    }catch(_){ return '-'; }
+  }
+  function closeDuplicatePendingReturns(ref,doDelete){
+    const idx=makeIndexes();
+    const task=findTaskForReturnFast(ref,idx);
+    const c=containerForRecord(ref,idx,task);
+    const key=logicalKey(ref,idx,task,c);
+    let closed=0;
+    A(window.returnRecords||returnRecords).forEach((r,i)=>{
+      if(!r || r===ref || r.deletedAt || recType(r)!=='return_needed' || isConfirmed(r)) return;
+      const t=findTaskForReturnFast(r,idx), cc=containerForRecord(r,idx,t);
+      if(logicalKey(r,idx,t,cc)!==key) return;
+      r.closedByConfirmedReturn=true;
+      r.closedAt=now();
+      r.updatedAt=now();
+      if(doDelete!==false) r.deletedAt=now();
+      closed++;
+    });
+    return closed;
+  }
+  function countHiddenDuplicates(){
+    const idx=makeIndexes();
+    const confirmedKeys=new Set();
+    A(window.returnRecords||returnRecords).forEach(r=>{
+      if(!r || r.deletedAt || !isReturnRow(r) || !isConfirmed(r)) return;
+      const t=findTaskForReturnFast(r,idx), c=containerForRecord(r,idx,t);
+      confirmedKeys.add(logicalKey(r,idx,t,c));
+    });
+    let n=0;
+    const pendingSeen=new Set();
+    A(window.returnRecords||returnRecords).forEach(r=>{
+      if(!r || r.deletedAt || !isReturnRow(r) || isConfirmed(r)) return;
+      const t=findTaskForReturnFast(r,idx), c=containerForRecord(r,idx,t), k=logicalKey(r,idx,t,c);
+      if(confirmedKeys.has(k) || pendingSeen.has(k)) n++;
+      else pendingSeen.add(k);
+    });
+    return n;
+  }
+
+  window.buildReturnRows = function(onlyConfirmed){
+    const idx=makeIndexes();
+    const confirmedKeys=new Set();
+    A(window.returnRecords||returnRecords).forEach(r=>{
+      if(!r || r.deletedAt || !isReturnRow(r) || !isConfirmed(r)) return;
+      const task=findTaskForReturnFast(r,idx), c=containerForRecord(r,idx,task);
+      confirmedKeys.add(logicalKey(r,idx,task,c));
+    });
+    const seen=new Set();
+    const out=[];
+    A(window.returnRecords||returnRecords).forEach((r,returnIndex)=>{
+      if(!r || r.deletedAt || !isReturnRow(r)) return;
+      try{ if(typeof window.isProducedCompletedContainerId==='function' && window.isProducedCompletedContainerId(r.containerId)) return; }catch(_){ }
+      const confirmed=isConfirmed(r);
+      if(onlyConfirmed!==confirmed) return;
+      const task=findTaskForReturnFast(r,idx), c=containerForRecord(r,idx,task), key=logicalKey(r,idx,task,c);
+      // 关键修复：同箱号+地点已确认还箱时，不再把旧的待还箱记录显示在待确认列表。
+      if(!confirmed && confirmedKeys.has(key)) return;
+      // 同一集装箱同一地点存在多条待还箱/已还箱记录时，页面只显示一条，避免重复操作。
+      const viewKey=(confirmed?'DONE|':'PENDING|')+key;
+      if(seen.has(viewKey)) return;
+      seen.add(viewKey);
+      const carrier=inferCarrier(r,task,c);
+      if(!canSeeCarrier(carrier)) return;
+      out.push({
+        ...r,
+        returnIndex,
+        containerNo:getNo(r,idx,task,c),
+        batch:S(r.batch || task?.batch || c?.batch || ''),
+        containerSeq:S(r.containerSeq || task?.containerSeq || c?.containerSeq || ''),
+        blText:blTextFor(r,idx),
+        carrier,
+        location:getLoc(r,task),
+        _logicKey:key
+      });
+    });
+    return out.sort((a,b)=>S(a.batch).localeCompare(S(b.batch),'zh-CN',{numeric:true}) || S(a.containerSeq).localeCompare(S(b.containerSeq),'zh-CN',{numeric:true}) || S(a.containerNo).localeCompare(S(b.containerNo),'zh-CN',{numeric:true}));
+  };
+
+  function saveReturnFix(reason){
+    try{
+      const fn=window.queueSystemSaveV4513||window.queueSaveV455||window.saveCloudStateV45||window.saveCloudStateV44||window.saveCloudState;
+      if(typeof fn==='function') return fn(reason||'v4532_return_fix');
+    }catch(e){ console.warn('cloud save queue failed',e); }
+    try{ if(typeof window.saveData==='function') return window.saveData(); }catch(e){ console.warn('saveData failed',e); }
+  }
+
+  const oldRenderList=window.renderReturnList;
+  const oldRenderCompleted=window.renderCompletedReturnList;
+  function renderRows(targetId,headers,rows,completed){
+    const box=document.getElementById(targetId); if(!box) return;
+    if(!rows.length){ box.innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">'+(completed?'暂无已还箱记录':'暂无待还箱任务')+'</div></div>'; return; }
+    if(typeof window.renderTable==='function'){
+      window.renderTable(targetId,headers,rows,(r)=>{
+        const tr=document.createElement('tr');
+        tr.innerHTML= completed ?
+          `<td>${esc(r.batch||'')}</td><td>${esc(r.containerNo||'')}</td><td title="${esc(r.blText||'-')}">${esc(r.blText||'-')}</td><td>${esc(r.location||'')}</td><td>${typeof fmtDate==='function'?fmtDate(r.unpackDate):esc(r.unpackDate)}</td><td>${typeof fmtDate==='function'?fmtDate(r.returnDate):esc(r.returnDate)}</td><td>${r.proofUploaded ? esc(r.proofName || '已上传') : '-'}</td><td><button class="btn btn-sm btn-warning" onclick="editReturnRecord(${r.returnIndex})">编辑</button></td>` :
+          `<td>${esc(r.batch||'')}</td><td>${esc(r.containerNo||'')}</td><td title="${esc(r.blText||'-')}">${esc(r.blText||'-')}</td><td>${esc(r.location||'')}</td><td>${typeof fmtDate==='function'?fmtDate(r.unpackDate):esc(r.unpackDate)}</td><td><input type="date" id="retDate_${r.returnIndex}" class="form-control" style="width:125px;"></td><td><input type="file" id="proof_${r.returnIndex}" class="form-control" style="width:120px;" accept="image/*,.pdf"></td><td><button class="btn btn-sm btn-primary" onclick="doReturnByIndex(${r.returnIndex})">确认还箱</button></td>`;
+        return tr;
+      });
+      return;
+    }
+    box.innerHTML='<div class="table-wrapper"><table class="data-table"><tbody>'+rows.map(r=>`<tr><td>${esc(r.batch)}</td><td>${esc(r.containerNo)}</td><td>${esc(r.location)}</td></tr>`).join('')+'</tbody></table></div>';
+  }
+  window.renderReturnList=function(list){
+    let rows=A(list);
+    try{ if(typeof window.filterReturnRows==='function') rows=window.filterReturnRows(rows); }catch(_){ }
+    return renderRows('returnList',['批次','集装箱号','提单号','地点','掏箱时间','还箱日期','凭证','操作'],rows,false);
+  };
+  window.renderCompletedReturnList=function(list){
+    let rows=A(list);
+    try{ if(typeof window.filterReturnRows==='function') rows=window.filterReturnRows(rows); }catch(_){ }
+    return renderRows('completedReturnList',['批次','集装箱号','提单号','地点','掏箱时间','还箱日期','凭证','操作'],rows,true);
+  };
+  window.filterReturnList=function(){
+    window.renderReturnList(window.buildReturnRows(false));
+    window.renderCompletedReturnList(window.buildReturnRows(true));
+  };
+  window.resetReturnFilter=function(){
+    const el=document.getElementById('returnSearch'); if(el) el.value='';
+    window.filterReturnList();
+  };
+
+  window.cleanupDuplicatePendingReturnsV4532=async function(){
+    const before=countHiddenDuplicates();
+    if(!before){ alert('没有发现重复的待确认还箱记录。'); return; }
+    if(!confirm(`发现 ${before} 条重复/已被已还箱记录覆盖的待确认还箱记录。\n是否将它们关闭并从待确认列表移除？\n不会删除已确认还箱记录。`)) return;
+    const idx=makeIndexes();
+    const confirmedKeys=new Set();
+    A(window.returnRecords||returnRecords).forEach(r=>{
+      if(!r || r.deletedAt || !isReturnRow(r) || !isConfirmed(r)) return;
+      const t=findTaskForReturnFast(r,idx), c=containerForRecord(r,idx,t);
+      confirmedKeys.add(logicalKey(r,idx,t,c));
+    });
+    const pendingSeen=new Set();
+    let closed=0;
+    A(window.returnRecords||returnRecords).forEach(r=>{
+      if(!r || r.deletedAt || !isReturnRow(r) || isConfirmed(r)) return;
+      const t=findTaskForReturnFast(r,idx), c=containerForRecord(r,idx,t), k=logicalKey(r,idx,t,c);
+      if(confirmedKeys.has(k) || pendingSeen.has(k)){
+        r.deletedAt=now(); r.closedByDuplicateCleanup=true; r.updatedAt=now(); closed++;
+      }else pendingSeen.add(k);
+    });
+    await saveReturnFix('v4532_cleanup_duplicate_return_pending');
+    try{ window.filterReturnList(); }catch(_){ }
+    alert(`已关闭重复待确认还箱记录 ${closed} 条。`);
+  };
+
+  const oldDoReturn=window.doReturnByIndex;
+  window.doReturnByIndex=function(returnIndex){
+    const record=A(window.returnRecords||returnRecords)[returnIndex];
+    if(!record || record.deletedAt || isConfirmed(record) || recType(record)!=='return_needed'){
+      alert('未找到待还箱记录，可能已经确认过，请刷新页面后再试。');
+      return;
+    }
+    const retDateEl=document.getElementById(`retDate_${returnIndex}`);
+    const proofEl=document.getElementById(`proof_${returnIndex}`);
+    const retDate=retDateEl ? retDateEl.value : '';
+    const file=proofEl && proofEl.files ? proofEl.files[0] : null;
+    if(!retDate){ alert('请填写还箱日期'); return; }
+    if(!file && !confirm('未上传还箱凭证，是否继续确认还箱？')) return;
+    record.returnDate=(typeof fmtDate==='function')?fmtDate(retDate):retDate;
+    record.isReturnConfirmed=true;
+    record.type='return';
+    record.proofUploaded=!!file;
+    record.proofName=file ? file.name : (record.proofName||'');
+    record.updatedAt=now();
+    if(record.proof) delete record.proof;
+    const closed=closeDuplicatePendingReturns(record,true);
+    try{
+      saveReturnFix('v4532_return_confirm');
+      window.filterReturnList();
+      alert('还箱确认成功' + (closed?`，并关闭重复待确认记录 ${closed} 条。`:''));
+    }catch(e){
+      console.error(e);
+      alert('保存失败：'+(e.message||e));
+    }
+  };
+
+  window.renderReturnConfirm=function(container){
+    if(!container) return;
+    const pendingRows=window.buildReturnRows(false);
+    const completedRows=window.buildReturnRows(true);
+    const adminText=(typeof isAdminUser==='function'&&isAdminUser())?'（Admin：RG+JSL全部）':'';
+    const hidden=countHiddenDuplicates();
+    container.innerHTML=`
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">🔄 还箱确认${adminText}</span>
+          <div>
+            <button class="btn btn-sm btn-warning" onclick="manualRepairReturnLinksV4531 && manualRepairReturnLinksV4531()">🔧 修复待还箱链路</button>
+            <button class="btn btn-sm btn-danger" onclick="cleanupDuplicatePendingReturnsV4532()">🧹 清理重复待还箱</button>
+          </div>
+        </div>
+        <div class="search-bar">
+          <input type="text" id="returnSearch" placeholder="集装箱号 / 提单号" style="width:250px;">
+          <button class="btn btn-primary" onclick="filterReturnList()">查询</button>
+          <button class="btn" onclick="resetReturnFilter()">重置</button>
+          <span style="font-size:12px;color:#909399;">V45.32：已确认还箱的箱号不会再显示在待确认；${hidden?`检测到 ${hidden} 条重复待确认记录，可点击清理。`:'当前未检测到重复待确认记录。'}</span>
+        </div>
+        <div class="section-label">📋 待确认还箱</div>
+        <div id="returnList"></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">✅ 已确认还箱</span><button class="btn btn-sm" id="btnCompletedReturn" onclick="toggleHistorySection('completedReturnBody','btnCompletedReturn')">展开查看</button></div>
+        <div id="completedReturnBody" style="display:none;"><div id="completedReturnList"></div></div>
+      </div>`;
+    window.renderReturnList(pendingRows);
+    window.renderCompletedReturnList(completedRows);
+  };
+  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V45.32'; }catch(_){ }
   console.log(VERSION+' loaded');
 })();
 </script>
@@ -14328,14 +14633,14 @@ ${preview}
 
 
 <script>
-/* ==================== V45.31 还箱确认页面卡死修复 ====================
+/* ==================== V45.32 还箱确认页面卡死修复 ====================
    修复：V45.30 在 renderReturnConfirm() 渲染时自动执行 repairReturnLinksV4530(false)，
    repair 完成后又调用 renderContent()，导致进入“渲染 → 自动修复 → 保存/重渲染 → 再修复”的循环，页面卡死。
-   V45.31 调整为：进入还箱确认页面只读渲染；只有用户点击“修复待还箱链路”时才执行修复。
+   V45.32 调整为：进入还箱确认页面只读渲染；只有用户点击“修复待还箱链路”时才执行修复。
 */
 (function(){
   'use strict';
-  const VERSION='V45.31 Return Page Freeze Fix';
+  const VERSION='V45.32 Return Page Freeze Fix';
   const A=v=>Array.isArray(v)?v:[];
   const S=v=>String(v==null?'':v).trim();
   function esc(v){return S(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
@@ -16358,14 +16663,14 @@ ${preview}
 </script>
 
 <script>
-/* ==================== V45.31 还箱确认页面卡死修复 ====================
+/* ==================== V45.32 还箱确认页面卡死修复 ====================
    修复：V45.30 在 renderReturnConfirm() 渲染时自动执行 repairReturnLinksV4530(false)，
    repair 完成后又调用 renderContent()，导致进入“渲染 → 自动修复 → 保存/重渲染 → 再修复”的循环，页面卡死。
-   V45.31 调整为：进入还箱确认页面只读渲染；只有用户点击“修复待还箱链路”时才执行修复。
+   V45.32 调整为：进入还箱确认页面只读渲染；只有用户点击“修复待还箱链路”时才执行修复。
 */
 (function(){
   'use strict';
-  const VERSION='V45.31 Return Page Freeze Fix';
+  const VERSION='V45.32 Return Page Freeze Fix';
   const A=v=>Array.isArray(v)?v:[];
   const S=v=>String(v==null?'':v).trim();
   function esc(v){return S(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
