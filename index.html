@@ -13787,7 +13787,16 @@ ${preview}
     const rows=list.map(x=>'<tr><td>'+esc(fmt(x.time))+'</td><td>'+esc(x.operator||'-')+'</td><td>'+esc(x.action)+'</td><td>'+esc(x.beforeStatus)+' → '+esc(x.afterStatus)+'</td><td>'+esc(x.reason||'-')+'</td></tr>').join('') || '<tr><td colspan="5">'+tr('暂无操作日志','Nenhum registro de operação','No operation logs')+'</td></tr>';
     const w=window.open('','_blank','width=900,height=620');
     if(!w)return;
-    const html=['<!doctype html>','<html><head><meta charset="utf-8"><title>',esc(t.containerNo||''),'</title><style>body{font-family:Arial;padding:20px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f3f4f6}</style></head><body><h2>',esc(t.containerNo||''),' · ',tr('操作日志','Registro de operações','Operation log'),'</h2><table><thead><tr><th>',tr('时间','Data/hora','Time'),'</th><th>',tr('操作人','Usuário','Operator'),'</th><th>',tr('操作','Ação','Action'),'</th><th>',tr('状态变化','Alteração de status','Status change'),'</th><th>',tr('原因','Motivo','Reason'),'</th></tr></thead><tbody>',rows,'</tbody></table>
+    const html='<!doctype html><html><head><meta charset="utf-8"><title>'+esc(t.containerNo||'')+'</title><style>body{font-family:Arial;padding:20px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f3f4f6}</style></head><body><h2>'+esc(t.containerNo||'')+' · '+tr('操作日志','Registro de operações','Operation log')+'</h2><table><thead><tr><th>'+tr('时间','Data/hora','Time')+'</th><th>'+tr('操作人','Usuário','Operator')+'</th><th>'+tr('操作','Ação','Action')+'</th><th>'+tr('状态变化','Alteração de status','Status change')+'</th><th>'+tr('原因','Motivo','Reason')+'</th></tr></thead><tbody>'+rows+'</tbody></table></body></html>';
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  };
+
+  console.log(VERSION+' loaded');
+})();
+
+</script>
 
 <script>
 /* ==================== V45.25 Cloud-only business data guard ====================
@@ -15780,7 +15789,370 @@ ${preview}
 
   console.log(VERSION + ' loaded');
 })();
+
+/* ==================== V45.29 Rio Claro 到货+掏箱合并流程 ====================
+   业务调整：目的地为 Rio Claro 的集装箱，在运输公司确认提箱后，不再先点击“确认到达”再点击“确认掏箱”。
+   到货确认页面直接显示“确认掏箱”按钮；点击后系统自动完成“到达Rio Claro + 掏箱确认”两个动作。
+*/
+(function(){
+  const VERSION='V45.29 Rio Claro Direct Unpack';
+  function A(v){return Array.isArray(v)?v:[];}
+  function S(v){return String(v==null?'':v).trim();}
+  function U(v){return S(v).toUpperCase().replace(/\s+/g,'');}
+  function nowIso(){return new Date().toISOString();}
+  function dayPart(v){return S(v).split('T')[0].split(' ')[0]||'';}
+  function isRioClaroDest(v){const x=U(v);return x==='RIOCLARO'||x==='RIOCLARO库房'||x==='ARMAZEMRIOCLARO'||x==='WAREHOUSERIOCLARO';}
+  function isFactoryDest(v){const x=U(v);return x==='工厂'||x==='FABRICA'||x==='FÁBRICA'||x==='GWM';}
+  function taskDest(t){return S(t&& (t.to || t.destination || t.dest));}
+  function taskOrigin(t){return S(t&& (t.from || t.origin || t.sourceLocation || '港口')) || '港口';}
+  function taskSeq(t){
+    if(typeof getTaskContainerSeq==='function') return getTaskContainerSeq(t)||'';
+    const c=A(containers).find(x=>S(x.id)===S(t.containerId)||U(x.containerNo)===U(t.containerNo));
+    return S(t.containerSeq || t.seq || c?.containerSeq || '');
+  }
+  function eta(t){return S(t&& (t.estimatedArrival || t.arrivalDate || t.planArrivalTime));}
+  function fmt(v){try{return typeof fmtDateTime==='function'?fmtDateTime(v):(v||'-');}catch(_){return v||'-';}}
+  function esc(v){return S(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+  function parseJson(x){try{return JSON.parse(x);}catch(_){return null;}}
+  function decodeRef(ref){
+    if(ref&&typeof ref==='object') return ref;
+    const raw=S(ref); const mapped=window.__v4529TaskRefs?.[raw] || window.__v453TaskKeys?.[raw];
+    for(const v of [mapped, raw].filter(Boolean)){
+      if(v&&typeof v==='object') return v;
+      const s=S(v); let obj=parseJson(s); if(obj) return obj;
+      try{obj=parseJson(decodeURIComponent(s)); if(obj) return obj;}catch(_){ }
+      try{let b=s.replace(/-/g,'+').replace(/_/g,'/'); while(b.length%4)b+='='; obj=parseJson(decodeURIComponent(escape(atob(b)))); if(obj)return obj;}catch(_){ }
+    }
+    return {id:raw, taskUid:raw, routeLegKey:raw};
+  }
+  function resolveTask(ref, preferredStatuses){
+    const key=decodeRef(ref); let list=A(transportTasks).filter(t=>t && !t.cancelled && t.status!=='cancelled' && !t.archivedAt);
+    let matches=[];
+    if(key.taskUid) matches=list.filter(t=>S(t.taskUid)===S(key.taskUid));
+    if(!matches.length && key.routeLegKey) matches=list.filter(t=>S(t.routeLegKey)===S(key.routeLegKey));
+    if(!matches.length && key.id!==undefined && key.id!==null && S(key.id)!=='') matches=list.filter(t=>S(t.id)===S(key.id));
+    if(!matches.length && key.containerNo) matches=list.filter(t=>U(t.containerNo)===U(key.containerNo));
+    if(!matches.length && key.containerId!==undefined && key.containerId!==null && S(key.containerId)!=='') matches=list.filter(t=>S(t.containerId)===S(key.containerId));
+    if(matches.length>1 && key.batch){const f=matches.filter(t=>U(t.batch)===U(key.batch)); if(f.length) matches=f;}
+    if(matches.length>1 && (key.to||key.destination)){const d=key.to||key.destination; const f=matches.filter(t=>U(taskDest(t))===U(d)); if(f.length) matches=f;}
+    const preferred=A(preferredStatuses);
+    if(matches.length>1 && preferred.length){const f=matches.filter(t=>preferred.includes(S(t.status))); if(f.length) matches=f;}
+    matches.sort((a,b)=>{
+      const ap = S(a.status)==='in_transit'?1:S(a.status)==='arrived'?2:0;
+      const bp = S(b.status)==='in_transit'?1:S(b.status)==='arrived'?2:0;
+      if(bp!==ap) return bp-ap;
+      return Date.parse(b.updatedAt||b.createdAt||0)-Date.parse(a.updatedAt||a.createdAt||0);
+    });
+    return matches[0]||null;
+  }
+  function registerTask(t){
+    window.__v4529TaskRefs = window.__v4529TaskRefs || {};
+    const key='rc_'+(t.taskUid || t.routeLegKey || t.id || (S(t.containerNo)+'_'+Math.random().toString(36).slice(2)));
+    window.__v4529TaskRefs[key]={id:t.id,taskUid:t.taskUid,routeLegKey:t.routeLegKey,containerId:t.containerId,containerNo:t.containerNo,batch:t.batch,to:taskDest(t)};
+    return key;
+  }
+  function setLoc(containerId,loc,ts){
+    try{ if(typeof setLocationStock==='function') return setLocationStock(containerId,loc,ts||nowIso()); }catch(_){ }
+    try{ if(typeof addStock==='function') return addStock(containerId,loc); }catch(_){ }
+    if(typeof locationStock!=='undefined'){
+      const r=A(locationStock).find(x=>S(x.containerId)===S(containerId));
+      if(r){r.location=loc;r.updatedAt=ts||nowIso();}
+      else locationStock.push({containerId,location:loc,updatedAt:ts||nowIso()});
+    }
+  }
+  function hasUnpackRecord(t){
+    const loc=taskDest(t);
+    return A(returnRecords).some(r=>S(r.containerId)===S(t.containerId)&&U(r.location)===U(loc)&&!r.deletedAt&&(r.type==='unpack'||r.type==='return_needed'||r.type==='return'||r.isReturnConfirmed));
+  }
+  function needReturnFor(t){
+    try{ if(typeof needsReturn==='function') return !!needsReturn(t.containerId,taskDest(t),taskOrigin(t)); }catch(_){ }
+    const loc=U(taskDest(t)), from=U(taskOrigin(t));
+    return (loc==='RIOCLARO'||loc==='IRA库房'||loc==='工厂') && (from==='港口'||from==='RG堆场');
+  }
+  async function saveAndRefresh(message){
+    try{
+      if(typeof saveAndRenderContentKeepState==='function') await saveAndRenderContentKeepState();
+      else if(typeof saveData==='function') await saveData();
+      else if(typeof queueSaveV455==='function') await queueSaveV455('v4529_rioclaro_direct_unpack');
+    }catch(e){console.error(e); alert('保存失败：'+(e.message||e)); return false;}
+    if(message){try{ if(typeof showRealtimeSyncHint==='function') showRealtimeSyncHint(message); else console.log(message); }catch(_){ }}
+    return true;
+  }
+  window.confirmRioClaroUnpackV4529 = async function(ref){
+    const t=resolveTask(ref,['in_transit','arrived']);
+    if(!t) return alert('未找到当前Rio Claro运输任务，请刷新后重试。');
+    if(!isRioClaroDest(taskDest(t))) return alert('该功能仅用于目的地为 Rio Claro 的任务。');
+    if(isFactoryDest(taskDest(t))) return alert('工厂任务必须走门岗和卸货口流程。');
+    if(hasUnpackRecord(t)) return alert('该集装箱已完成掏箱。');
+    const ts=nowIso(); const loc=taskDest(t) || 'Rio Claro';
+    t.status = needReturnFor(t) ? 'return_pending' : 'completed';
+    t.actualArrival = t.actualArrival || ts;
+    t.arrivalConfirmedAt = t.arrivalConfirmedAt || ts;
+    t.arrivalConfirmedBy = t.arrivalConfirmedBy || (currentUser?.name || currentUser?.email || cloudUser?.email || '');
+    t.unpackConfirmedAt = t.unpackConfirmedAt || ts;
+    t.unpackConfirmedBy = t.unpackConfirmedBy || (currentUser?.name || currentUser?.email || cloudUser?.email || '');
+    t.updatedAt = ts;
+    const need=needReturnFor(t);
+    returnRecords.push({
+      id:'ret_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+      containerId:t.containerId,
+      location:loc,
+      type:need?'return_needed':'unpack',
+      unpackDate:dayPart(ts),
+      isReturnConfirmed:!need,
+      fromLocation:taskOrigin(t),
+      sourceTaskUid:t.taskUid || '',
+      createdAt:ts,
+      updatedAt:ts,
+      note:'V45.29 Rio Claro 到达+掏箱合并确认'
+    });
+    setLoc(t.containerId, loc, ts);
+    await saveAndRefresh('已确认 Rio Claro 到达并掏箱');
+  };
+
+  function filterTasksForLocationConfirm(list){
+    const batch=S(document.getElementById('arrivalSearchBatch')?.value).toLowerCase();
+    const no=S(document.getElementById('arrivalSearchContainer')?.value).toLowerCase();
+    const seq=S(document.getElementById('arrivalSearchSeq')?.value).toLowerCase();
+    return A(list).filter(t=>{
+      const s=S(taskSeq(t)).toLowerCase();
+      return (!batch||S(t.batch).toLowerCase().includes(batch)) && (!no||S(t.containerNo).toLowerCase().includes(no)) && (!seq||s.includes(seq));
+    }).sort((a,b)=>{
+      const da=Date.parse(eta(a)||'9999-12-31'), db=Date.parse(eta(b)||'9999-12-31');
+      if(da!==db) return da-db;
+      const bc=S(a.batch).localeCompare(S(b.batch),'zh-CN',{numeric:true}); if(bc) return bc;
+      return parseInt(taskSeq(a)||'999999',10)-parseInt(taskSeq(b)||'999999',10);
+    });
+  }
+  function visibleArrivalTask(t){
+    if(!t || t.cancelled || t.status==='cancelled' || t.archivedAt) return false;
+    if(isFactoryDest(taskDest(t))) return false;
+    try{ if(typeof isTaskVisibleForArrivalConfirm==='function' && !isTaskVisibleForArrivalConfirm(t)) return false; }catch(_){ }
+    try{ if(typeof isOperationalVisibleTask==='function' && !isOperationalVisibleTask(t)) return false; }catch(_){ }
+    return true;
+  }
+  function tableHtml(headers,rows){
+    return '<div class="table-wrapper"><table class="data-table"><thead><tr>'+headers.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>'+rows.join('')+'</tbody></table></div>';
+  }
+  window.renderLocationConfirm = renderLocationConfirm = function(container){
+    if(!container) return;
+    const rawInTransit=A(transportTasks).filter(t=>S(t.status)==='in_transit'&&visibleArrivalTask(t));
+    const rawArrived=A(transportTasks).filter(t=>S(t.status)==='arrived'&&visibleArrivalTask(t));
+    const directRio=rawInTransit.filter(t=>isRioClaroDest(taskDest(t))&&!hasUnpackRecord(t));
+    const arriving=filterTasksForLocationConfirm(rawInTransit.filter(t=>!isRioClaroDest(taskDest(t))));
+    const pendingUnpack=filterTasksForLocationConfirm(rawArrived.filter(t=>(isRioClaroDest(taskDest(t))||U(taskDest(t))==='IRA库房')&&!hasUnpackRecord(t)).concat(directRio));
+    const completedUnpack=filterTasksForLocationConfirm(A(transportTasks).filter(t=>visibleArrivalTask(t)&&hasUnpackRecord(t)));
+    const f={rawBatch:S(document.getElementById('arrivalSearchBatch')?.value),rawContainerNo:S(document.getElementById('arrivalSearchContainer')?.value),rawSeq:S(document.getElementById('arrivalSearchSeq')?.value)};
+    let html=`<div class="card"><div class="card-header"><span class="card-title">✅ 在途运输 - 到货/掏箱确认</span></div>
+      <div class="search-bar">
+        <input type="text" id="arrivalSearchBatch" placeholder="批次号" value="${esc(f.rawBatch)}" oninput="refreshLocationConfirmSearch()">
+        <input type="text" id="arrivalSearchContainer" placeholder="集装箱号" value="${esc(f.rawContainerNo)}" oninput="refreshLocationConfirmSearch()">
+        <input type="text" id="arrivalSearchSeq" placeholder="集装箱序号" value="${esc(f.rawSeq)}" oninput="refreshLocationConfirmSearch()">
+        <button class="btn btn-primary" onclick="refreshLocationConfirmSearch()">查询</button>
+        <button class="btn" onclick="clearLocationConfirmSearch()">重置</button>
+        <span style="font-size:12px;color:#909399;">Rio Claro 已合并为直接确认掏箱；RG/IRA按原流程处理。</span>
+      </div>`;
+    html += arriving.length ? '<div id="arrivingTableV4529"></div>' : '<div style="padding:20px;text-align:center">暂无待确认到达任务</div>';
+    html += `</div><div class="card"><div class="card-header"><span class="card-title">📦 待确认掏箱（${pendingUnpack.length}）</span></div>`;
+    html += pendingUnpack.length ? '<div id="pendingUnpackTableV4529"></div>' : '<div style="padding:20px;text-align:center">暂无待确认掏箱</div>';
+    html += `</div><div class="card"><div class="card-header"><span class="card-title">✅ 已掏箱 / 已完成（${completedUnpack.length}）</span><button class="btn btn-sm" id="btnCompletedUnpack" onclick="toggleHistorySection('completedUnpackBodyV4529','btnCompletedUnpack')">展开查看</button></div><div id="completedUnpackBodyV4529" style="display:none;">`;
+    html += completedUnpack.length ? '<div id="completedUnpackTableV4529"></div>' : '<div style="padding:20px;text-align:center">暂无已掏箱记录</div>';
+    html += '</div></div>';
+    container.innerHTML=html;
+    if(arriving.length){
+      const rows=arriving.map(t=>{const key=registerTask(t);return `<tr><td><span class="sequence-badge">${esc(taskSeq(t)||'-')}</span></td><td>${esc(t.batch||'-')}</td><td>${esc(t.containerNo||'-')}</td><td>${esc(taskOrigin(t)||'-')}</td><td>${esc(taskDest(t)||'-')}</td><td>${esc(fmt(eta(t)))}</td><td><button class="btn btn-sm btn-success" onclick="doArrival('${key}')">确认到达</button></td></tr>`;});
+      document.getElementById('arrivingTableV4529').innerHTML=tableHtml(['序号','批次','集装箱号','出发地','目的地','预计到达','操作'],rows);
+    }
+    if(pendingUnpack.length){
+      const rows=pendingUnpack.map(t=>{const key=registerTask(t);const rio=isRioClaroDest(taskDest(t));const arrivalText=t.actualArrival?fmt(t.actualArrival):(rio?'确认掏箱时自动记录': '-');return `<tr><td><span class="sequence-badge">${esc(taskSeq(t)||'-')}</span></td><td>${esc(t.batch||'-')}</td><td>${esc(t.containerNo||'-')}</td><td>${esc(taskOrigin(t)||'-')}</td><td>${esc(taskDest(t)||'-')}</td><td>${esc(fmt(eta(t)))}</td><td>${esc(arrivalText)}</td><td><button class="btn btn-sm btn-warning" onclick="confirmRioClaroUnpackV4529('${key}')">确认掏箱</button></td></tr>`;});
+      document.getElementById('pendingUnpackTableV4529').innerHTML=tableHtml(['序号','批次','集装箱号','出发地','目的地','预计到达','到达时间','操作'],rows);
+    }
+    if(completedUnpack.length){
+      const rows=completedUnpack.map(t=>{const rec=A(returnRecords).find(r=>S(r.containerId)===S(t.containerId)&&U(r.location)===U(taskDest(t))&&!r.deletedAt);let status='已完成';let cls='status-ready';if(rec&&rec.type==='return_needed'&&!rec.isReturnConfirmed){status='待还箱';cls='status-return-pending';}return `<tr><td><span class="sequence-badge">${esc(taskSeq(t)||'-')}</span></td><td>${esc(t.batch||'-')}</td><td>${esc(t.containerNo||'-')}</td><td>${esc(taskDest(t)||'-')}</td><td>${esc(fmt(t.actualArrival||t.arrivalConfirmedAt||''))}</td><td><span class="status-badge ${cls}">${esc(status)}</span></td></tr>`;});
+      document.getElementById('completedUnpackTableV4529').innerHTML=tableHtml(['序号','批次','集装箱号','目的地','到达时间','掏箱/还箱状态'],rows);
+    }
+    try{ if(typeof applyLanguage==='function') applyLanguage(); }catch(_){ }
+  };
+  const oldDoArrivalV4529 = window.doArrival;
+  window.doArrival = window.confirmArrivalOnly = function(ref){
+    const t=resolveTask(ref,['in_transit','arrived']);
+    if(t && isRioClaroDest(taskDest(t))) return window.confirmRioClaroUnpackV4529(ref);
+    if(typeof oldDoArrivalV4529==='function') return oldDoArrivalV4529.apply(this,arguments);
+    return alert('未找到当前运输任务，请刷新后重试。');
+  };
+  console.log(VERSION+' loaded');
+})();
+
 </script>
 
+
+
+<script>
+/* ==================== V45.30 还箱确认断链修复 ====================
+   修复：基础数据显示“待还箱”，但还箱确认列表找不到任务。
+   原因：旧还箱列表要求 returnRecord 必须精确匹配 transportTask.to，且必须能找到对应任务；
+   Rio Claro 直连掏箱、历史任务归档、目的地名称差异或任务被归档时，会导致 returnRecord 存在但列表过滤掉。
+*/
+(function(){
+  'use strict';
+  const VERSION='V45.30 Return Confirmation Link Repair';
+  const A=v=>Array.isArray(v)?v:[];
+  const S=v=>String(v==null?'':v).trim();
+  const U=v=>S(v).toUpperCase().replace(/[\s\-_/（）()]/g,'');
+  const nowIso=()=>new Date().toISOString();
+  function locKey(v){
+    const x=U(v);
+    if(x.includes('RIOCLARO')) return 'RIOCLARO';
+    if(x.includes('IRA')) return 'IRA';
+    if(x.includes('RG')) return 'RG';
+    if(x.includes('工厂')||x.includes('FABRICA')||x.includes('FÁBRICA')||x==='GWM') return 'FACTORY';
+    if(x.includes('港口')||x.includes('PORTO')) return 'PORT';
+    return x;
+  }
+  function sameLoc(a,b){return locKey(a)===locKey(b);}
+  function taskDest(t){return S(t && (t.to || t.destination || t.dest));}
+  function taskOrigin(t){return S(t && (t.from || t.origin || t.sourceLocation || ''));}
+  function taskTime(t){return Date.parse(t?.updatedAt||t?.unpackConfirmedAt||t?.unloadFinishTime||t?.actualArrival||t?.createdAt||0)||0;}
+  function cById(id){return A(window.containers||containers).find(c=>S(c.id)===S(id));}
+  function findTaskForReturn(r){
+    const tasks=A(window.transportTasks||transportTasks).filter(t=>t && S(t.containerId)===S(r.containerId));
+    if(!tasks.length) return null;
+    let m=[];
+    if(r.sourceTaskUid) m=tasks.filter(t=>S(t.taskUid)===S(r.sourceTaskUid));
+    if(!m.length && r.sourceTaskId) m=tasks.filter(t=>S(t.id)===S(r.sourceTaskId));
+    if(!m.length && r.routeLegKey) m=tasks.filter(t=>S(t.routeLegKey)===S(r.routeLegKey));
+    if(!m.length && r.location) m=tasks.filter(t=>sameLoc(taskDest(t),r.location));
+    if(!m.length) m=tasks.filter(t=>['return_pending','completed','arrived','in_transit'].includes(S(t.status)) || t.actualArrival || t.unpackConfirmedAt || t.unloadFinishTime);
+    if(!m.length) m=tasks;
+    m.sort((a,b)=>taskTime(b)-taskTime(a));
+    return m[0]||null;
+  }
+  function inferCarrier(r,task,c){
+    if(r.carrier) return r.carrier;
+    if(task&&task.carrier) return task.carrier;
+    const p=A(window.pickupPlans||pickupPlans).slice().reverse().find(p=>S(p.containerId)===S(r.containerId)||U(p.containerNo)===U(c?.containerNo));
+    return p?.carrier || '-';
+  }
+  function canSeeCarrier(carrier){
+    try{
+      if(!carrier || carrier==='-') return true;
+      if(typeof window.canViewCarrier==='function') return !!window.canViewCarrier(carrier);
+    }catch(_){ }
+    return true;
+  }
+  function shouldCreateReturnFromTask(t){
+    if(!t || !t.containerId) return false;
+    const dest=taskDest(t);
+    const origin=taskOrigin(t);
+    const fromOk=['港口','RG堆场','PORTO','Pátio RG','PATIO RG'].some(x=>sameLoc(origin,x));
+    const destOk=['Rio Claro','IRA库房','工厂'].some(x=>sameLoc(dest,x));
+    if(!fromOk || !destOk) return false;
+    if(!(['return_pending','completed'].includes(S(t.status)) || t.unpackConfirmedAt || t.unloadFinishTime)) return false;
+    return !A(window.returnRecords||returnRecords).some(r=>S(r.containerId)===S(t.containerId)&&['return_needed','return'].includes(S(r.type))&&!r.deletedAt);
+  }
+  window.repairReturnLinksV4530 = async function(showAlert=true){
+    let created=0, enriched=0;
+    const rows=A(window.returnRecords||returnRecords);
+    A(window.transportTasks||transportTasks).forEach(t=>{
+      if(!shouldCreateReturnFromTask(t)) return;
+      const ts=t.unpackConfirmedAt||t.unloadFinishTime||t.actualArrival||nowIso();
+      rows.push({
+        id:'return_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+        containerId:t.containerId,
+        containerNo:t.containerNo||'',
+        batch:t.batch||'',
+        containerSeq:t.containerSeq||'',
+        location:taskDest(t)||'Rio Claro',
+        type:'return_needed',
+        unpackDate:S(ts).slice(0,10),
+        isReturnConfirmed:false,
+        fromLocation:taskOrigin(t),
+        carrier:t.carrier||'',
+        sourceTaskUid:t.taskUid||'',
+        sourceTaskId:t.id,
+        routeLegKey:t.routeLegKey||'',
+        createdAt:nowIso(),
+        updatedAt:nowIso(),
+        note:'V45.30 自动补建待还箱记录'
+      });
+      created++;
+    });
+    rows.forEach(r=>{
+      if(!['return_needed','return'].includes(S(r.type))) return;
+      const task=findTaskForReturn(r), c=cById(r.containerId);
+      let changed=false;
+      if(task){
+        if(!r.sourceTaskUid && task.taskUid){r.sourceTaskUid=task.taskUid; changed=true;}
+        if(!r.sourceTaskId && task.id!=null){r.sourceTaskId=task.id; changed=true;}
+        if(!r.routeLegKey && task.routeLegKey){r.routeLegKey=task.routeLegKey; changed=true;}
+        if(!r.carrier && task.carrier){r.carrier=task.carrier; changed=true;}
+        if(!r.location && taskDest(task)){r.location=taskDest(task); changed=true;}
+      }
+      if(c){
+        if(!r.containerNo && c.containerNo){r.containerNo=c.containerNo; changed=true;}
+        if(!r.batch && c.batch){r.batch=c.batch; changed=true;}
+        if(!r.containerSeq && c.containerSeq){r.containerSeq=c.containerSeq; changed=true;}
+      }
+      if(changed){r.updatedAt=nowIso(); enriched++;}
+    });
+    if(created||enriched){
+      try{
+        const fn=window.queueSystemSaveV4513||window.queueSaveV455||window.saveCloudState;
+        if(typeof fn==='function') await fn('v4530_repair_return_links');
+      }catch(e){console.error(e); if(showAlert) alert('修复已完成但保存失败：'+(e.message||e)); return {created,enriched,saved:false};}
+    }
+    if(showAlert) alert(`还箱链路检查完成：补建待还箱记录 ${created} 条，补充关联信息 ${enriched} 条。`);
+    try{ if(typeof window.renderContent==='function') window.renderContent(); }catch(_){ }
+    return {created,enriched,saved:true};
+  };
+
+  function buildReturnRowsV4530(onlyConfirmed){
+    const out=[];
+    A(window.returnRecords||returnRecords).forEach((r,idx)=>{
+      if(!['return_needed','return'].includes(S(r.type))) return;
+      if(r.deletedAt) return;
+      try{ if(typeof window.isProducedCompletedContainerId==='function' && window.isProducedCompletedContainerId(r.containerId)) return; }catch(_){ }
+      const isConfirmed=!!r.isReturnConfirmed || S(r.type)==='return';
+      if(onlyConfirmed!==isConfirmed) return;
+      const task=findTaskForReturn(r);
+      const c=cById(r.containerId);
+      const carrier=inferCarrier(r,task,c);
+      if(!canSeeCarrier(carrier)) return;
+      let blText='-';
+      try{ if(typeof window.getContainerBlTextById==='function') blText=window.getContainerBlTextById(r.containerId)||'-'; }catch(_){ }
+      out.push({
+        ...r,
+        returnIndex:idx,
+        containerNo:r.containerNo || task?.containerNo || c?.containerNo || '',
+        batch:r.batch || task?.batch || c?.batch || '',
+        containerSeq:r.containerSeq || task?.containerSeq || c?.containerSeq || '',
+        blText,
+        carrier,
+        location:r.location || taskDest(task) || '',
+        _taskFound:!!task
+      });
+    });
+    return out.sort((a,b)=>S(a.batch).localeCompare(S(b.batch),'zh-CN',{numeric:true}) || S(a.containerSeq).localeCompare(S(b.containerSeq),'zh-CN',{numeric:true}) || S(a.containerNo).localeCompare(S(b.containerNo)));
+  }
+
+  const oldRenderReturnConfirm=window.renderReturnConfirm;
+  window.buildReturnRows = buildReturnRowsV4530;
+  window.renderReturnConfirm = renderReturnConfirm = function(container){
+    try{ window.repairReturnLinksV4530(false); }catch(e){console.warn('V45.30 return auto repair skipped',e);}
+    const pendingRows=buildReturnRowsV4530(false), completedRows=buildReturnRowsV4530(true);
+    let html=`
+      <div class="card">
+        <div class="card-header"><span class="card-title">🔄 还箱确认${typeof isAdminUser==='function'&&isAdminUser()?'（Admin：RG+JSL全部）':''}</span><button class="btn btn-sm btn-warning" onclick="repairReturnLinksV4530(true)">🔧 修复待还箱链路</button></div>
+        <div class="search-bar"><input type="text" id="returnSearch" placeholder="集装箱号 / 提单号" style="width:250px;"><button class="btn btn-primary" onclick="filterReturnList()">查询</button><button class="btn" onclick="resetReturnFilter()">重置</button><span style="font-size:12px;color:#909399;">若基础数据显示待还箱但列表缺失，请点击“修复待还箱链路”。</span></div>
+        <div class="section-label">📋 待确认还箱</div><div id="returnList"></div>
+      </div>
+      <div class="card"><div class="card-header"><span class="card-title">✅ 已确认还箱</span><button class="btn btn-sm" id="btnCompletedReturn" onclick="toggleHistorySection('completedReturnBody','btnCompletedReturn')">展开查看</button></div><div id="completedReturnBody" style="display:none;"><div id="completedReturnList"></div></div></div>`;
+    container.innerHTML=html;
+    try{ window.renderReturnList(pendingRows); window.renderCompletedReturnList(completedRows); }catch(e){console.error(e); if(typeof oldRenderReturnConfirm==='function') return oldRenderReturnConfirm.apply(this,arguments);}
+  };
+
+  console.log(VERSION+' loaded');
+})();
+</script>
 </body>
 </html>
