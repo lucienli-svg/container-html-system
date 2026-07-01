@@ -16762,5 +16762,228 @@ ${preview}
 })();
 </script>
 
+
+<script>
+/* ==================== V45.33 Return Confirm De-dup Live Patch ====================
+   目标：真正作用在运行页面，而不是备份导出字符串中。
+   修复：同一个集装箱已经存在已确认还箱记录时，旧的 return_needed 仍显示在待确认还箱。
+   原因：V45.32 的去重补丁有一段被历史导出HTML字符串包住，实际运行页最后又被 V45.32 Freeze Fix 覆盖，导致未生效。
+============================================================================ */
+(function(){
+  'use strict';
+  const VERSION='V45.33 Return Confirm De-dup Live Patch';
+  const A=v=>Array.isArray(v)?v:[];
+  const S=v=>String(v==null?'':v).trim();
+  const U=v=>S(v).toUpperCase().replace(/[\s\-_/（）()\.]/g,'');
+  const now=()=>new Date().toISOString();
+  function esc(v){return S(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+  function locKey(v){
+    const x=U(v);
+    if(x.includes('RIOCLARO')||x.includes('RIO')) return 'RIOCLARO';
+    if(x.includes('IRA')) return 'IRA';
+    if(x.includes('RG')) return 'RG';
+    if(x.includes('GWM')||x.includes('FABRICA')||x.includes('FÁBRICA')||x.includes('工厂')) return 'FACTORY';
+    if(x.includes('PORTO')||x.includes('PORT')||x.includes('SANTOS')||x.includes('港口')) return 'PORT';
+    return x;
+  }
+  function retArr(){return A(window.returnRecords || (typeof returnRecords!=='undefined'?returnRecords:[]));}
+  function taskArr(){return A(window.transportTasks || (typeof transportTasks!=='undefined'?transportTasks:[]));}
+  function contArr(){return A(window.containers || (typeof containers!=='undefined'?containers:[]));}
+  function recType(r){return S(r&&r.type);}
+  function isReturnRow(r){const t=recType(r); return t==='return_needed'||t==='return'||r?.isReturnConfirmed;}
+  function isConfirmed(r){return !!(r&&(r.isReturnConfirmed || recType(r)==='return' || r.returnDate));}
+  function makeIdx(){
+    const idx={cById:new Map(), cByNo:new Map(), tasksByCid:new Map(), tasksByNo:new Map()};
+    contArr().forEach(c=>{ if(c&&c.id!=null) idx.cById.set(S(c.id),c); const no=U(c?.containerNo||c?.container||c?.cntr); if(no&&!idx.cByNo.has(no)) idx.cByNo.set(no,c); });
+    taskArr().forEach(t=>{
+      if(!t) return;
+      const cid=S(t.containerId); if(cid){ if(!idx.tasksByCid.has(cid)) idx.tasksByCid.set(cid,[]); idx.tasksByCid.get(cid).push(t); }
+      const no=U(t.containerNo||t.container||t.cntr); if(no){ if(!idx.tasksByNo.has(no)) idx.tasksByNo.set(no,[]); idx.tasksByNo.get(no).push(t); }
+    });
+    function sortTasks(list){return A(list).sort((a,b)=>(Date.parse(b.updatedAt||b.returnConfirmedAt||b.unpackConfirmedAt||b.actualArrival||b.createdAt||0)||0)-(Date.parse(a.updatedAt||a.returnConfirmedAt||a.unpackConfirmedAt||a.actualArrival||a.createdAt||0)||0));}
+    idx.tasksByCid.forEach((v,k)=>idx.tasksByCid.set(k,sortTasks(v)));
+    idx.tasksByNo.forEach((v,k)=>idx.tasksByNo.set(k,sortTasks(v)));
+    return idx;
+  }
+  function getTask(r,idx){
+    if(!r) return null;
+    let list=[];
+    const cid=S(r.containerId);
+    if(cid) list=idx.tasksByCid.get(cid)||[];
+    if(!list.length){ const no=U(r.containerNo); if(no) list=idx.tasksByNo.get(no)||[]; }
+    if(!list.length) return null;
+    if(r.sourceTaskUid){ const m=list.find(t=>S(t.taskUid)===S(r.sourceTaskUid)); if(m) return m; }
+    if(r.sourceTaskId){ const m=list.find(t=>S(t.id)===S(r.sourceTaskId)); if(m) return m; }
+    if(r.routeLegKey){ const m=list.find(t=>S(t.routeLegKey)===S(r.routeLegKey)); if(m) return m; }
+    return list[0]||null;
+  }
+  function getCont(r,idx,t){
+    if(r?.containerId && idx.cById.has(S(r.containerId))) return idx.cById.get(S(r.containerId));
+    const no=U(r?.containerNo || t?.containerNo);
+    return no ? (idx.cByNo.get(no)||null) : null;
+  }
+  function getNo(r,idx,t,c){return S(r?.containerNo || t?.containerNo || c?.containerNo || '');}
+  function getBatch(r,t,c){return S(r?.batch || t?.batch || c?.batch || '');}
+  function getSeq(r,t,c){return S(r?.containerSeq || r?.seq || t?.containerSeq || t?.seq || c?.containerSeq || c?.seq || '');}
+  function getLoc(r,t){return S(r?.location || t?.to || t?.destination || t?.dest || '');}
+  function getBl(r){
+    try{ if(typeof window.getContainerBlTextById==='function' && r?.containerId) return S(window.getContainerBlTextById(r.containerId)); }catch(_){ }
+    return S(r?.blText || r?.blNo || r?.billNo || r?.bl || '');
+  }
+  function inferCarrier(r,t,c){
+    if(r?.carrier) return S(r.carrier);
+    if(t?.carrier) return S(t.carrier);
+    try{
+      const no=U(getNo(r,{},t,c));
+      const cid=S(r?.containerId);
+      const p=A(window.pickupPlans || (typeof pickupPlans!=='undefined'?pickupPlans:[])).slice().reverse().find(p=>S(p.containerId)===cid || U(p.containerNo)===no);
+      return S(p?.carrier || '-');
+    }catch(_){ return '-'; }
+  }
+  function canSeeCarrier(carrier){
+    try{ if(!carrier||carrier==='-') return true; if(typeof window.canViewCarrier==='function') return !!window.canViewCarrier(carrier); }catch(_){ }
+    return true;
+  }
+  function keysFor(r,idx,t,c){
+    const keys=[];
+    const cid=S(r?.containerId);
+    const no=U(getNo(r,idx,t,c));
+    const bl=U(getBl(r));
+    const loc=locKey(getLoc(r,t));
+    const batch=U(getBatch(r,t,c));
+    if(cid) keys.push('CID|'+cid);
+    if(no&&bl) keys.push('NO_BL|'+no+'|'+bl);
+    if(no&&loc&&batch) keys.push('NO_LOC_BATCH|'+no+'|'+loc+'|'+batch);
+    if(no&&loc) keys.push('NO_LOC|'+no+'|'+loc);
+    if(no&&batch) keys.push('NO_BATCH|'+no+'|'+batch);
+    return keys;
+  }
+  function buildConfirmedSet(idx){
+    const set=new Set();
+    retArr().forEach(r=>{
+      if(!r||r.deletedAt||!isReturnRow(r)||!isConfirmed(r)) return;
+      const t=getTask(r,idx), c=getCont(r,idx,t);
+      keysFor(r,idx,t,c).forEach(k=>set.add(k));
+    });
+    return set;
+  }
+  function hasConfirmedMatch(r,idx,set){
+    const t=getTask(r,idx), c=getCont(r,idx,t);
+    return keysFor(r,idx,t,c).some(k=>set.has(k));
+  }
+  function buildReturnRowsV4533(onlyConfirmed){
+    const idx=makeIdx();
+    const confirmedSet=buildConfirmedSet(idx);
+    const seen=new Set();
+    const out=[];
+    retArr().forEach((r,returnIndex)=>{
+      if(!r||r.deletedAt||!isReturnRow(r)) return;
+      try{ if(typeof window.isProducedCompletedContainerId==='function' && window.isProducedCompletedContainerId(r.containerId)) return; }catch(_){ }
+      const confirmed=isConfirmed(r);
+      if(!!onlyConfirmed!==confirmed) return;
+      const t=getTask(r,idx), c=getCont(r,idx,t);
+      if(!confirmed && hasConfirmedMatch(r,idx,confirmedSet)) return;
+      const k=(confirmed?'DONE|':'PENDING|')+(keysFor(r,idx,t,c)[0]||('ROW|'+returnIndex));
+      if(seen.has(k)) return; seen.add(k);
+      const carrier=inferCarrier(r,t,c);
+      if(!canSeeCarrier(carrier)) return;
+      out.push({
+        ...r,
+        returnIndex,
+        containerNo:getNo(r,idx,t,c),
+        batch:getBatch(r,t,c),
+        containerSeq:getSeq(r,t,c),
+        blText:getBl(r)||'-',
+        location:getLoc(r,t),
+        carrier,
+        _v4533Keys:keysFor(r,idx,t,c)
+      });
+    });
+    return out.sort((a,b)=>S(a.batch).localeCompare(S(b.batch),'zh-CN',{numeric:true})||S(a.containerSeq).localeCompare(S(b.containerSeq),'zh-CN',{numeric:true})||S(a.containerNo).localeCompare(S(b.containerNo),'zh-CN',{numeric:true}));
+  }
+  function filterRows(rows){
+    const q=U(document.getElementById('returnSearch')?.value||'');
+    if(!q) return rows;
+    return A(rows).filter(r=>U(r.containerNo).includes(q)||U(r.blText).includes(q)||U(r.batch).includes(q)||U(r.containerSeq).includes(q));
+  }
+  function renderRows(targetId,rows,completed){
+    const box=document.getElementById(targetId); if(!box) return;
+    rows=filterRows(A(rows));
+    if(!rows.length){box.innerHTML='<div class="table-wrapper"><div style="padding:20px;text-align:center">'+(completed?'暂无已还箱记录':'暂无待还箱任务')+'</div></div>';return;}
+    if(typeof window.renderTable==='function'){
+      window.renderTable(targetId,['批次','集装箱号','提单号','地点','掏箱时间','还箱日期','凭证','操作'],rows,(r)=>{
+        const tr=document.createElement('tr');
+        tr.innerHTML=completed ?
+          `<td>${esc(r.batch)}</td><td>${esc(r.containerNo)}</td><td title="${esc(r.blText)}">${esc(r.blText)}</td><td>${esc(r.location)}</td><td>${typeof fmtDate==='function'?fmtDate(r.unpackDate):esc(r.unpackDate)}</td><td>${typeof fmtDate==='function'?fmtDate(r.returnDate):esc(r.returnDate)}</td><td>${r.proofUploaded?esc(r.proofName||'已上传'):'-'}</td><td><button class="btn btn-sm btn-warning" onclick="editReturnRecord(${r.returnIndex})">编辑</button></td>` :
+          `<td>${esc(r.batch)}</td><td>${esc(r.containerNo)}</td><td title="${esc(r.blText)}">${esc(r.blText)}</td><td>${esc(r.location)}</td><td>${typeof fmtDate==='function'?fmtDate(r.unpackDate):esc(r.unpackDate)}</td><td><input type="date" id="retDate_${r.returnIndex}" class="form-control" style="width:125px;"></td><td><input type="file" id="proof_${r.returnIndex}" class="form-control" style="width:120px;" accept="image/*,.pdf"></td><td><button class="btn btn-sm btn-primary" onclick="doReturnByIndex(${r.returnIndex})">确认还箱</button></td>`;
+        return tr;
+      });
+    }else{
+      box.innerHTML='<div class="table-wrapper"><table class="data-table"><tbody>'+rows.map(r=>`<tr><td>${esc(r.batch)}</td><td>${esc(r.containerNo)}</td><td>${esc(r.blText)}</td><td>${esc(r.location)}</td></tr>`).join('')+'</tbody></table></div>';
+    }
+  }
+  function countHidden(){
+    const idx=makeIdx(), set=buildConfirmedSet(idx); let n=0;
+    retArr().forEach(r=>{ if(r&&!r.deletedAt&&isReturnRow(r)&&!isConfirmed(r)&&hasConfirmedMatch(r,idx,set)) n++; });
+    return n;
+  }
+  async function saveFix(reason){
+    const fn=window.queueSystemSaveV4513||window.queueSaveV455||window.saveCloudStateV45||window.saveCloudStateV44||window.saveCloudState||window.saveData;
+    if(typeof fn==='function') return await fn(reason||'v4533_return_dedup');
+  }
+  window.buildReturnRows=function(onlyConfirmed){return buildReturnRowsV4533(!!onlyConfirmed);};
+  window.renderReturnList=function(list){return renderRows('returnList',list,false);};
+  window.renderCompletedReturnList=function(list){return renderRows('completedReturnList',list,true);};
+  window.filterReturnList=function(){window.renderReturnList(window.buildReturnRows(false)); window.renderCompletedReturnList(window.buildReturnRows(true));};
+  window.resetReturnFilter=function(){const el=document.getElementById('returnSearch'); if(el) el.value=''; window.filterReturnList();};
+  window.cleanupDuplicatePendingReturnsV4533=async function(){
+    const idx=makeIdx(), set=buildConfirmedSet(idx); let closed=0;
+    retArr().forEach(r=>{
+      if(!r||r.deletedAt||!isReturnRow(r)||isConfirmed(r)) return;
+      if(hasConfirmedMatch(r,idx,set)){ r.deletedAt=now(); r.closedByConfirmedReturn=true; r.closedByV4533=true; r.updatedAt=now(); closed++; }
+    });
+    if(!closed){ alert('没有发现已确认还箱覆盖的待确认记录。'); return; }
+    try{ await saveFix('v4533_cleanup_confirmed_pending_returns'); }catch(e){ console.error(e); alert('已清理但保存失败：'+(e.message||e)); return; }
+    try{ window.filterReturnList(); }catch(_){ }
+    alert('已关闭重复待确认还箱记录 '+closed+' 条，不会删除已确认还箱记录。');
+  };
+  window.diagnoseReturnDuplicateV4533=function(boxNo){
+    const q=U(boxNo||''); const idx=makeIdx();
+    const rows=retArr().map((r,i)=>{const t=getTask(r,idx),c=getCont(r,idx,t);return {i,type:r?.type,isReturnConfirmed:r?.isReturnConfirmed,deletedAt:r?.deletedAt,containerId:r?.containerId,containerNo:getNo(r,idx,t,c),batch:getBatch(r,t,c),loc:getLoc(r,t),bl:getBl(r),keys:keysFor(r,idx,t,c),returnDate:r?.returnDate,unpackDate:r?.unpackDate};}).filter(x=>!q||U(x.containerNo).includes(q)||U(x.bl).includes(q));
+    console.table(rows); return rows;
+  };
+  window.renderReturnConfirm=function(container){
+    if(!container) return;
+    const adminText=(typeof isAdminUser==='function'&&isAdminUser())?'（Admin：RG+JSL全部）':'';
+    const hidden=countHidden();
+    container.innerHTML=`
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">🔄 还箱确认${adminText}</span>
+          <div>
+            <button class="btn btn-sm btn-warning" onclick="manualRepairReturnLinksV4531&&manualRepairReturnLinksV4531()">🔧 修复待还箱链路</button>
+            <button class="btn btn-sm btn-danger" onclick="cleanupDuplicatePendingReturnsV4533()">🧹 清理已还箱重复待确认</button>
+          </div>
+        </div>
+        <div class="search-bar">
+          <input type="text" id="returnSearch" placeholder="集装箱号 / 提单号" style="width:250px;">
+          <button class="btn btn-primary" onclick="filterReturnList()">查询</button>
+          <button class="btn" onclick="resetReturnFilter()">重置</button>
+          <span style="font-size:12px;color:#909399;">V45.33：按 集装箱ID/箱号+提单/箱号+地点+批次 去重；${hidden?`检测到 ${hidden} 条已还箱重复待确认，可点击清理。`:'当前未检测到已还箱重复待确认。'}</span>
+        </div>
+        <div class="section-label">📋 待确认还箱</div><div id="returnList"></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">✅ 已确认还箱</span><button class="btn btn-sm" id="btnCompletedReturn" onclick="toggleHistorySection('completedReturnBody','btnCompletedReturn')">展开查看</button></div>
+        <div id="completedReturnBody" style="display:none;"><div id="completedReturnList"></div></div>
+      </div>`;
+    window.renderReturnList(window.buildReturnRows(false));
+    window.renderCompletedReturnList(window.buildReturnRows(true));
+  };
+  try{document.title='Sistema Inteligente de Monitoramento de Contêineres V45.33';}catch(_){ }
+  console.log(VERSION+' loaded');
+})();
+</script>
+
 </body>
 </html>
