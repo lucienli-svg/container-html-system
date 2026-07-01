@@ -14044,5 +14044,232 @@ ${preview}
 })();
 </script>
 
+
+<script>
+/* ==================== V46.2 Lifecycle Integrity：统一流转完整性补强 ====================
+   目标：不增加日常修复按钮，而是在系统加载和关键页面渲染前自动保证业务链路完整。
+   重点：
+   1) 已掏箱/已卸货但缺待还箱记录 → 自动按统一规则生成待还箱记录。
+   2) 基础数据/库存显示已到工厂或 IRA，但缺门岗/卸货口任务 → 自动生成一条兼容任务进入卸货口流程。
+   3) 已确认还箱后，重复 pending 不再进入待确认区。
+*/
+(function(){
+  'use strict';
+  const VERSION = 'V46.2 Lifecycle Integrity';
+  const W = window;
+  const STATE = W.__cc462State = W.__cc462State || {saving:false,lastRun:0,lastChanged:0};
+
+  function S(v){ return String(v == null ? '' : v).trim(); }
+  function L(v){ return S(v).toLowerCase(); }
+  function A(v){ return Array.isArray(v) ? v : []; }
+  function rows(name){ try{ const v=(0,eval)(name); return Array.isArray(v) ? v : []; }catch(_){ return []; } }
+  function ids(){ try{ return (0,eval)('nextIds'); }catch(_){ return {}; } }
+  function nowIso(){ return new Date().toISOString(); }
+  function nowLocal(){ try{ return typeof nowLocalInput==='function' ? nowLocalInput() : new Date().toISOString().slice(0,16); }catch(_){ return new Date().toISOString().slice(0,16); } }
+  function day(v){ const s=S(v||nowIso()); return (s.includes('T') ? s.split('T')[0] : s.split(' ')[0]).replace(/\//g,'-'); }
+  function normLoc(v){
+    const raw=S(v); const s=raw.replace(/\s+/g,'').toLowerCase();
+    if(!s) return '';
+    if(s.includes('rioclaro') || s.includes('rio claro')) return 'Rio Claro';
+    if(s.includes('ira')) return 'IRA库房';
+    if(s.includes('rg')) return 'RG堆场';
+    if(s.includes('工厂') || s.includes('factory') || s.includes('fabrica') || s.includes('fábrica') || s.includes('gwm')) return '工厂';
+    if(s==='120b'||s==='132'||s==='140b'||s==='140c') return s.toUpperCase();
+    if(s.includes('港口') || s.includes('santos') || s.includes('porto')) return '港口';
+    return raw;
+  }
+  function nextId(kind){ const n=ids(); const k=kind||'task'; n[k]=Number(n[k]||1); return n[k]++; }
+  function cidOf(x){ return S(x && (x.containerId || x.id)); }
+  function noOf(x){ return S(x && x.containerNo); }
+  function batchOf(x){ return S(x && x.batch); }
+  function seqOf(x){ return S(x && (x.containerSeq || x.seq)); }
+  function destOf(t){ return normLoc(t && (t.to || t.destination || t.location || t.dest)); }
+  function originOf(t){ return normLoc(t && (t.from || t.origin || t.fromLocation)); }
+  function taskKey(t){ return cidOf(t) || L(noOf(t)); }
+  function containerBy(x){ const cid=cidOf(x), no=L(noOf(x)); return rows('containers').find(c=>cid && S(c.id)===cid) || rows('containers').find(c=>no && L(c.containerNo)===no) || null; }
+  function fillFromContainer(x){ const c=containerBy(x); if(!c) return x; x.containerId=cidOf(x)||S(c.id); x.containerNo=noOf(x)||S(c.containerNo); x.batch=batchOf(x)||S(c.batch); x.containerSeq=seqOf(x)||S(c.containerSeq||c.seq); return x; }
+  function blText(x){
+    if(S(x && x.blNo)) return S(x.blNo);
+    try{ if(typeof getTaskBlText==='function'){ const b=getTaskBlText(x); if(S(b)) return S(b); } }catch(_){ }
+    return '';
+  }
+  function iraText(x){
+    if(S(x && x.iraNo)) return S(x.iraNo);
+    try{ if(typeof getIraList==='function'){ const r=getIraList(cidOf(x)); if(S(r)) return S(r); } }catch(_){ }
+    return '';
+  }
+  function isCancelled(t){ return !!(t && (t.cancelled || ['cancelled','archived','closed'].includes(L(t.status)))); }
+  function isOpenTask(t){ return !!(t && !isCancelled(t) && !['return_completed','produced'].includes(L(t.status))); }
+  function isReturnConfirmed(r){ return !!(r && (r.type==='return' || r.isReturnConfirmed===true || r.returnDate || r.returnConfirmedAt)); }
+  function hasConfirmedReturn(x, loc){
+    const cid=cidOf(x), no=L(noOf(x)), l=normLoc(loc||x.location||destOf(x));
+    return rows('returnRecords').some(r=>isReturnConfirmed(r) && ((cid && S(r.containerId)===cid) || (no && L(r.containerNo)===no)) && (!l || !r.location || normLoc(r.location)===l));
+  }
+  function pendingReturn(x, loc){
+    const cid=cidOf(x), no=L(noOf(x)), l=normLoc(loc||x.location||destOf(x));
+    return rows('returnRecords').find(r=>r && L(r.type||'return_needed')==='return_needed' && !isReturnConfirmed(r) && ((cid && S(r.containerId)===cid) || (no && L(r.containerNo)===no)) && (!l || !r.location || normLoc(r.location)===l));
+  }
+  function taskIsUnstuffed(t){
+    const st=L(t && t.status), op=L(t && t.operationStatus);
+    return !!(t && (t.unloadFinishTime || t.unpackConfirmedAt || op==='unloaded' || st==='return_pending' || st==='completed'));
+  }
+  function taskRank(t){
+    if(!t) return 0;
+    if(taskIsUnstuffed(t)) return 4;
+    if(t.unloadStartTime || L(t.operationStatus)==='unloading') return 3;
+    if(t.waitingAreaTime || t.gateReleaseTime || L(t.operationStatus)==='inside_waiting') return 2;
+    if(t.gateArrivalTime || t.actualArrival || t.arrivalConfirmedAt || L(t.operationStatus)==='outside_parking' || L(t.status)==='arrived') return 1;
+    return 0;
+  }
+  function setStock(cid, loc, ts){
+    if(!cid || !loc) return false;
+    try{ if(typeof setLocationStock==='function'){ setLocationStock(cid, loc, ts||nowIso()); return true; } }catch(_){ }
+    const ls=rows('locationStock'); let r=ls.find(s=>S(s.containerId)===S(cid));
+    if(r){ if(normLoc(r.location)===loc) return false; r.location=loc; r.updatedAt=ts||nowIso(); r.isActive=true; return true; }
+    ls.push({id:nextId('stock'),containerId:cid,location:loc,isActive:true,updatedAt:ts||nowIso()}); return true;
+  }
+  function ensureReturnNeeded(src, loc, reason){
+    fillFromContainer(src); loc=normLoc(loc||destOf(src)||src.location);
+    if(!['工厂','IRA库房','Rio Claro'].includes(loc)) return false;
+    if(hasConfirmedReturn(src, loc)) return false;
+    const exist=pendingReturn(src, loc);
+    if(exist){
+      let changed=false;
+      ['containerId','containerNo','batch','containerSeq'].forEach(k=>{ if(!S(exist[k]) && S(src[k])){ exist[k]=src[k]; changed=true; } });
+      if(!S(exist.blNo) && blText(src)){ exist.blNo=blText(src); changed=true; }
+      if(!S(exist.iraNo) && iraText(src)){ exist.iraNo=iraText(src); changed=true; }
+      if(!S(exist.unpackDate)){ exist.unpackDate=day(src.unloadFinishTime||src.unpackConfirmedAt||nowIso()); changed=true; }
+      if(changed){ exist.updatedAt=nowIso(); exist.cc462Normalized=true; }
+      return changed;
+    }
+    rows('returnRecords').push({
+      id:nextId('returnRecord'), type:'return_needed', isReturnConfirmed:false,
+      containerId:cidOf(src), containerNo:noOf(src), containerSeq:seqOf(src), batch:batchOf(src),
+      blNo:blText(src), iraNo:iraText(src), location:loc,
+      unpackDate:day(src.unloadFinishTime||src.unpackConfirmedAt||src.actualArrival||nowIso()),
+      sourceTaskId:S(src.id), sourceTaskUid:S(src.taskUid), sourceRouteLegKey:S(src.routeLegKey),
+      createdAt:nowIso(), updatedAt:nowIso(), createdBy:VERSION, cc462Normalized:true, cc462Reason:reason||'unstuff_without_return_record'
+    });
+    return true;
+  }
+  function closeDuplicatePendings(){
+    let changed=0; const rs=rows('returnRecords'); const confirmed=[];
+    rs.forEach(r=>{ if(isReturnConfirmed(r)) confirmed.push(r); });
+    rs.forEach(r=>{
+      if(!r || L(r.type||'return_needed')!=='return_needed' || isReturnConfirmed(r)) return;
+      if(confirmed.some(c=>((cidOf(c)&&cidOf(c)===cidOf(r)) || (noOf(c)&&L(noOf(c))===L(noOf(r)))) && (!r.location || !c.location || normLoc(r.location)===normLoc(c.location)))){
+        r.type='return_duplicate_closed'; r.closed=true; r.closedReason='confirmed_return_exists'; r.updatedAt=nowIso(); r.cc462Normalized=true; changed++;
+      }
+    });
+    const seen=new Set();
+    rs.forEach(r=>{
+      if(!r || L(r.type||'return_needed')!=='return_needed' || isReturnConfirmed(r)) return;
+      const k=[cidOf(r)||L(noOf(r)),normLoc(r.location),L(r.blNo)].join('|');
+      if(seen.has(k)){ r.type='return_duplicate_closed'; r.closed=true; r.closedReason='duplicate_pending_return'; r.updatedAt=nowIso(); r.cc462Normalized=true; changed++; }
+      else seen.add(k);
+    });
+    return changed;
+  }
+  function latestStockLoc(cid){
+    const list=rows('locationStock').filter(s=>S(s.containerId)===S(cid));
+    list.sort((a,b)=>S(b.updatedAt||b.createdAt).localeCompare(S(a.updatedAt||a.createdAt)));
+    return normLoc(list[0] && list[0].location);
+  }
+  function inferContainerLoc(c){
+    return normLoc(c.currentLocation || c.currentNode || c.location || c.lastLocation || latestStockLoc(c.id));
+  }
+  function textOfContainer(c){ return [c.status,c.transportStatus,c.lifecycleStatus,c.currentStatus,c.operationStatus,c.locationStatus,c.remark,c.notes].map(S).join(' '); }
+  function containerLooksUnstuffed(c){ return /掏箱完成|已掏箱|卸货完成|已卸货|待还箱|return_pending|unloaded/i.test(textOfContainer(c)); }
+  function activeTaskForContainer(c, loc){
+    const cid=S(c.id), no=L(c.containerNo), l=normLoc(loc);
+    return rows('transportTasks').find(t=>isOpenTask(t) && ((cid && S(t.containerId)===cid) || (no && L(t.containerNo)===no)) && (!l || destOf(t)===l));
+  }
+  function createLegacyReceivingTask(c, loc){
+    loc=normLoc(loc); if(!['工厂','IRA库房'].includes(loc)) return false;
+    if(hasConfirmedReturn(c,loc) || pendingReturn(c,loc) || activeTaskForContainer(c,loc)) return false;
+    const stTime=nowLocal();
+    const t={
+      id:nextId('task'), containerId:S(c.id), containerNo:S(c.containerNo), containerSeq:S(c.containerSeq||c.seq), batch:S(c.batch),
+      blNo:blText({containerId:c.id,containerNo:c.containerNo,batch:c.batch}), iraNo:iraText({containerId:c.id}),
+      from:'历史状态/基础数据', to:loc, carrier:'RG', status:'in_transit', operationStatus:'inside_waiting',
+      actualArrival:stTime, gateArrivalTime:stTime, gateReleaseTime:stTime, waitingAreaTime:stTime,
+      estimatedArrival:S(c.actualPickupTime||c.pickupTime||''), unloadingDock:loc==='IRA库房'?'IRA库房':(S(c.unloadingDock)||''),
+      source:'cc462_legacy_container_status', cc46Flow:'GATE_DOCK_RETURN', createdAt:nowIso(), updatedAt:nowIso(), createdBy:VERSION, cc462Normalized:true,
+      note:'由基础数据/库存显示已到达目的地但缺少业务任务时自动补齐，用于继续统一卸货口流程。'
+    };
+    rows('transportTasks').push(t); setStock(c.id,loc,nowIso()); return true;
+  }
+  function normalizeLifecycle(reason){
+    const now=Date.now(); if(now-STATE.lastRun<1200) return 0; STATE.lastRun=now;
+    let changed=0;
+    const tasks=rows('transportTasks');
+    tasks.forEach(t=>{
+      if(!t || isCancelled(t)) return;
+      fillFromContainer(t);
+      const d=destOf(t), o=originOf(t);
+      if(d==='IRA库房' && t.unloadingDock!=='IRA库房'){ t.unloadingDock='IRA库房'; t.cc46Flow='GATE_DOCK_RETURN'; t.updatedAt=nowIso(); changed++; }
+      if(d==='工厂' && !S(t.cc46Flow)) { t.cc46Flow='GATE_DOCK_RETURN'; t.updatedAt=nowIso(); changed++; }
+      if(d==='Rio Claro' && !S(t.cc46Flow)) { t.cc46Flow='DIRECT_UNSTUFF_RETURN'; t.updatedAt=nowIso(); changed++; }
+      if(['工厂','IRA库房','Rio Claro'].includes(d) && taskIsUnstuffed(t)){
+        t.status='return_pending'; t.operationStatus='unloaded'; setStock(cidOf(t),d,t.unloadFinishTime||t.unpackConfirmedAt||t.actualArrival||nowIso());
+        if(ensureReturnNeeded(t,d,'task_finished_without_return_record')) changed++;
+      }
+      if(['工厂','IRA库房'].includes(d) && (t.actualArrival||t.arrivalConfirmedAt) && taskRank(t)===1 && !S(t.operationStatus)){
+        t.operationStatus='outside_parking'; t.updatedAt=nowIso(); changed++;
+      }
+    });
+    rows('containers').forEach(c=>{
+      if(!c || c.isArchived || c.deleted) return;
+      const loc=inferContainerLoc(c);
+      if(['工厂','IRA库房','Rio Claro'].includes(loc) && containerLooksUnstuffed(c)){
+        if(ensureReturnNeeded(c,loc,'container_status_unstuffed_without_return_record')) changed++;
+      }else if(['工厂','IRA库房'].includes(loc)){
+        if(createLegacyReceivingTask(c,loc)) changed++;
+      }
+    });
+    changed += closeDuplicatePendings();
+    if(changed>0){
+      STATE.lastChanged=Date.now();
+      try{ console.log(VERSION+' normalized lifecycle changes:', changed, reason||''); }catch(_){ }
+      scheduleSave(reason||'normalizeLifecycle');
+    }
+    return changed;
+  }
+  function scheduleSave(reason){
+    if(STATE.saving) return;
+    STATE.saving=true;
+    setTimeout(()=>{
+      try{
+        if(typeof W.saveCloudState==='function') W.saveCloudState('cc462_'+reason);
+        else if(typeof W.saveData==='function') W.saveData();
+      }catch(e){ console.warn('V46.2 normalize save skipped',e); }
+      finally{ STATE.saving=false; }
+    }, 1500);
+  }
+  function wrapRender(name){
+    const old=W[name]; if(typeof old!=='function' || old.__cc462Wrapped) return;
+    const fn=function(){ normalizeLifecycle('before_'+name); return old.apply(this, arguments); };
+    fn.__cc462Wrapped=true; W[name]=fn; try{ (0,eval)(name+' = window["'+name+'"]'); }catch(_){ }
+  }
+  function wrapAction(name){
+    const old=W[name]; if(typeof old!=='function' || old.__cc462ActionWrapped) return;
+    const fn=function(){ const r=old.apply(this, arguments); setTimeout(()=>normalizeLifecycle('after_'+name),250); return r; };
+    fn.__cc462ActionWrapped=true; W[name]=fn; try{ (0,eval)(name+' = window["'+name+'"]'); }catch(_){ }
+  }
+  function wrapLoad(){
+    const old=W.loadCloudState; if(typeof old!=='function' || old.__cc462LoadWrapped) return;
+    const fn=async function(){ const r=await old.apply(this, arguments); setTimeout(()=>normalizeLifecycle('after_load_cloud'),800); return r; };
+    fn.__cc462LoadWrapped=true; W.loadCloudState=fn; try{ loadCloudState=W.loadCloudState; }catch(_){ }
+  }
+  W.cc462NormalizeLifecycle=normalizeLifecycle;
+  wrapLoad();
+  ['renderContainers','renderContainerTable','renderReturnConfirm','renderFactoryDockOnly','renderDockMonitoring','renderFactoryGateOnly','renderGateMonitoring','renderLocationConfirm'].forEach(wrapRender);
+  ['confirmPickupTask','confirmPickupTaskByKey','doArrival','doUnpack','startUnloading','finishUnloading','cc46ConfirmReturn','cc461ConfirmReturn'].forEach(wrapAction);
+  setTimeout(()=>normalizeLifecycle('startup'),2500);
+  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V46.2'; }catch(_){ }
+  console.log(VERSION+' loaded: lifecycle integrity enforced without adding daily repair buttons.');
+})();
+
+</script>
 </body>
 </html>
