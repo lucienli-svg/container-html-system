@@ -13787,7 +13787,108 @@ ${preview}
     const rows=list.map(x=>'<tr><td>'+esc(fmt(x.time))+'</td><td>'+esc(x.operator||'-')+'</td><td>'+esc(x.action)+'</td><td>'+esc(x.beforeStatus)+' → '+esc(x.afterStatus)+'</td><td>'+esc(x.reason||'-')+'</td></tr>').join('') || '<tr><td colspan="5">'+tr('暂无操作日志','Nenhum registro de operação','No operation logs')+'</td></tr>';
     const w=window.open('','_blank','width=900,height=620');
     if(!w)return;
-    const html='<!doctype html><html><head><meta charset="utf-8"><title>'+esc(t.containerNo||'')+'</title><style>body{font-family:Arial;padding:20px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f3f4f6}</style></head><body><h2>'+esc(t.containerNo||'')+' · '+tr('操作日志','Registro de operações','Operation log')+'</h2><table><thead><tr><th>'+tr('时间','Data/hora','Time')+'</th><th>'+tr('操作人','Usuário','Operator')+'</th><th>'+tr('操作','Ação','Action')+'</th><th>'+tr('状态变化','Alteração de status','Status change')+'</th><th>'+tr('原因','Motivo','Reason')+'</th></tr></thead><tbody>'+rows+'</tbody></table></body></html>';
+    const html='<!doctype html><html><head><meta charset="utf-8"><title>'+esc(t.containerNo||'')+'</title><style>body{font-family:Arial;padding:20px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f3f4f6}</style></head><body><h2>'+esc(t.containerNo||'')+' · '+tr('操作日志','Registro de operações','Operation log')+'</h2><table><thead><tr><th>'+tr('时间','Data/hora','Time')+'</th><th>'+tr('操作人','Usuário','Operator')+'</th><th>'+tr('操作','Ação','Action')+'</th><th>'+tr('状态变化','Alteração de status','Status change')+'</th><th>'+tr('原因','Motivo','Reason')+'</th></tr></thead><tbody>'+rows+'</tbody></table>
+<script>
+/* ==================== V45.31 还箱确认页面卡死修复 ====================
+   修复：V45.30 在 renderReturnConfirm() 渲染时自动执行 repairReturnLinksV4530(false)，
+   repair 完成后又调用 renderContent()，导致进入“渲染 → 自动修复 → 保存/重渲染 → 再修复”的循环，页面卡死。
+   V45.31 调整为：进入还箱确认页面只读渲染；只有用户点击“修复待还箱链路”时才执行修复。
+*/
+(function(){
+  'use strict';
+  const VERSION='V45.31 Return Page Freeze Fix';
+  const A=v=>Array.isArray(v)?v:[];
+  const S=v=>String(v==null?'':v).trim();
+  function esc(v){return S(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+  function safeBuildReturnRows(confirmed){
+    try{
+      if(typeof window.buildReturnRows==='function') return window.buildReturnRows(confirmed) || [];
+    }catch(e){console.warn('buildReturnRows failed',e);}
+    const rows=A(window.returnRecords||returnRecords).filter(r=>{
+      if(!r || r.deletedAt) return false;
+      const type=S(r.type);
+      if(type!=='return_needed' && type!=='return') return false;
+      const isConfirmed=!!r.isReturnConfirmed || type==='return';
+      return confirmed ? isConfirmed : !isConfirmed;
+    });
+    return rows;
+  }
+  function safeRenderReturnList(rows){
+    try{
+      if(typeof window.renderReturnList==='function') return window.renderReturnList(rows);
+    }catch(e){console.error(e);}
+    const box=document.getElementById('returnList');
+    if(!box) return;
+    if(!rows.length){box.innerHTML='<div class="empty-state">暂无待确认还箱记录</div>';return;}
+    box.innerHTML='<div class="table-wrapper"><table class="data-table"><thead><tr><th>批次</th><th>序号</th><th>集装箱号</th><th>位置</th><th>状态</th></tr></thead><tbody>'+rows.map(r=>`<tr><td>${esc(r.batch||'-')}</td><td>${esc(r.containerSeq||'-')}</td><td>${esc(r.containerNo||'-')}</td><td>${esc(r.location||'-')}</td><td><span class="status-badge status-warning">待还箱</span></td></tr>`).join('')+'</tbody></table></div>';
+  }
+  function safeRenderCompletedReturnList(rows){
+    try{
+      if(typeof window.renderCompletedReturnList==='function') return window.renderCompletedReturnList(rows);
+    }catch(e){console.error(e);}
+    const box=document.getElementById('completedReturnList');
+    if(!box) return;
+    if(!rows.length){box.innerHTML='<div class="empty-state">暂无已确认还箱记录</div>';return;}
+    box.innerHTML='<div class="table-wrapper"><table class="data-table"><thead><tr><th>批次</th><th>序号</th><th>集装箱号</th><th>位置</th><th>状态</th></tr></thead><tbody>'+rows.map(r=>`<tr><td>${esc(r.batch||'-')}</td><td>${esc(r.containerSeq||'-')}</td><td>${esc(r.containerNo||'-')}</td><td>${esc(r.location||'-')}</td><td><span class="status-badge status-success">已还箱</span></td></tr>`).join('')+'</tbody></table></div>';
+  }
+
+  // 手动修复按钮：只在点击时运行，防止进入页面自动触发保存和重渲染循环。
+  window.manualRepairReturnLinksV4531 = async function(){
+    if(window.__returnRepairRunningV4531){
+      alert('还箱链路修复正在执行，请稍等。');
+      return;
+    }
+    if(!confirm('确认执行“修复待还箱链路”？\n系统会扫描已掏箱但缺少待还箱记录的任务，并补齐关联信息。')) return;
+    window.__returnRepairRunningV4531=true;
+    try{
+      if(typeof window.showRealtimeSyncHint==='function') window.showRealtimeSyncHint('正在修复待还箱链路...');
+      if(typeof window.repairReturnLinksV4530==='function'){
+        await window.repairReturnLinksV4530(true);
+      }else{
+        alert('未找到修复函数，请确认系统版本。');
+      }
+    }catch(e){
+      console.error(e);
+      alert('修复待还箱链路失败：'+(e.message||e));
+    }finally{
+      window.__returnRepairRunningV4531=false;
+      try{ if(typeof window.renderContent==='function') window.renderContent(); }catch(_){ }
+    }
+  };
+
+  // 覆盖还箱确认页面：只渲染，不自动 repair，不自动 save。
+  window.renderReturnConfirm = renderReturnConfirm = function(container){
+    if(!container) return;
+    const pendingRows=safeBuildReturnRows(false);
+    const completedRows=safeBuildReturnRows(true);
+    const adminText=(typeof isAdminUser==='function'&&isAdminUser())?'（Admin：RG+JSL全部）':'';
+    container.innerHTML=`
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">🔄 还箱确认${adminText}</span>
+          <button class="btn btn-sm btn-warning" onclick="manualRepairReturnLinksV4531()">🔧 修复待还箱链路</button>
+        </div>
+        <div class="search-bar">
+          <input type="text" id="returnSearch" placeholder="集装箱号 / 提单号" style="width:250px;">
+          <button class="btn btn-primary" onclick="filterReturnList()">查询</button>
+          <button class="btn" onclick="resetReturnFilter()">重置</button>
+          <span style="font-size:12px;color:#909399;">进入页面不会自动修复或保存；如基础数据显示待还箱但列表缺失，请手动点击“修复待还箱链路”。</span>
+        </div>
+        <div class="section-label">📋 待确认还箱</div>
+        <div id="returnList"></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">✅ 已确认还箱</span><button class="btn btn-sm" id="btnCompletedReturn" onclick="toggleHistorySection('completedReturnBody','btnCompletedReturn')">展开查看</button></div>
+        <div id="completedReturnBody" style="display:none;"><div id="completedReturnList"></div></div>
+      </div>`;
+    safeRenderReturnList(pendingRows);
+    safeRenderCompletedReturnList(completedRows);
+  };
+  console.log(VERSION+' loaded');
+})();
+</script>
+
+</body></html>';
     w.document.open();
     w.document.write(html);
     w.document.close();
@@ -14221,6 +14322,107 @@ ${preview}
   window.addEventListener('beforeunload',function(e){if(!hasRealUnsavedWork()){markSavedClean();try{e.stopImmediatePropagation();}catch(_){} try{delete e.returnValue;}catch(_){} return undefined;}try{if(typeof window.forceSyncNowV4528==='function')window.forceSyncNowV4528();}catch(_){} e.preventDefault();e.returnValue='系统仍有未同步数据，请等待顶部显示“已保存到云端”后再关闭。';return e.returnValue;},true);
   setInterval(cleanupIfSafe,3000);setTimeout(cleanupIfSafe,1500);setTimeout(cleanupIfSafe,6000);
   window.clearFalseUnsavedWarningV4528=function(){markSavedClean();setHint('已保存到云端');alert('已清除本地误提示标记。此操作不会删除云端业务数据。');};
+  console.log(VERSION+' loaded');
+})();
+</script>
+
+
+<script>
+/* ==================== V45.31 还箱确认页面卡死修复 ====================
+   修复：V45.30 在 renderReturnConfirm() 渲染时自动执行 repairReturnLinksV4530(false)，
+   repair 完成后又调用 renderContent()，导致进入“渲染 → 自动修复 → 保存/重渲染 → 再修复”的循环，页面卡死。
+   V45.31 调整为：进入还箱确认页面只读渲染；只有用户点击“修复待还箱链路”时才执行修复。
+*/
+(function(){
+  'use strict';
+  const VERSION='V45.31 Return Page Freeze Fix';
+  const A=v=>Array.isArray(v)?v:[];
+  const S=v=>String(v==null?'':v).trim();
+  function esc(v){return S(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+  function safeBuildReturnRows(confirmed){
+    try{
+      if(typeof window.buildReturnRows==='function') return window.buildReturnRows(confirmed) || [];
+    }catch(e){console.warn('buildReturnRows failed',e);}
+    const rows=A(window.returnRecords||returnRecords).filter(r=>{
+      if(!r || r.deletedAt) return false;
+      const type=S(r.type);
+      if(type!=='return_needed' && type!=='return') return false;
+      const isConfirmed=!!r.isReturnConfirmed || type==='return';
+      return confirmed ? isConfirmed : !isConfirmed;
+    });
+    return rows;
+  }
+  function safeRenderReturnList(rows){
+    try{
+      if(typeof window.renderReturnList==='function') return window.renderReturnList(rows);
+    }catch(e){console.error(e);}
+    const box=document.getElementById('returnList');
+    if(!box) return;
+    if(!rows.length){box.innerHTML='<div class="empty-state">暂无待确认还箱记录</div>';return;}
+    box.innerHTML='<div class="table-wrapper"><table class="data-table"><thead><tr><th>批次</th><th>序号</th><th>集装箱号</th><th>位置</th><th>状态</th></tr></thead><tbody>'+rows.map(r=>`<tr><td>${esc(r.batch||'-')}</td><td>${esc(r.containerSeq||'-')}</td><td>${esc(r.containerNo||'-')}</td><td>${esc(r.location||'-')}</td><td><span class="status-badge status-warning">待还箱</span></td></tr>`).join('')+'</tbody></table></div>';
+  }
+  function safeRenderCompletedReturnList(rows){
+    try{
+      if(typeof window.renderCompletedReturnList==='function') return window.renderCompletedReturnList(rows);
+    }catch(e){console.error(e);}
+    const box=document.getElementById('completedReturnList');
+    if(!box) return;
+    if(!rows.length){box.innerHTML='<div class="empty-state">暂无已确认还箱记录</div>';return;}
+    box.innerHTML='<div class="table-wrapper"><table class="data-table"><thead><tr><th>批次</th><th>序号</th><th>集装箱号</th><th>位置</th><th>状态</th></tr></thead><tbody>'+rows.map(r=>`<tr><td>${esc(r.batch||'-')}</td><td>${esc(r.containerSeq||'-')}</td><td>${esc(r.containerNo||'-')}</td><td>${esc(r.location||'-')}</td><td><span class="status-badge status-success">已还箱</span></td></tr>`).join('')+'</tbody></table></div>';
+  }
+
+  // 手动修复按钮：只在点击时运行，防止进入页面自动触发保存和重渲染循环。
+  window.manualRepairReturnLinksV4531 = async function(){
+    if(window.__returnRepairRunningV4531){
+      alert('还箱链路修复正在执行，请稍等。');
+      return;
+    }
+    if(!confirm('确认执行“修复待还箱链路”？\n系统会扫描已掏箱但缺少待还箱记录的任务，并补齐关联信息。')) return;
+    window.__returnRepairRunningV4531=true;
+    try{
+      if(typeof window.showRealtimeSyncHint==='function') window.showRealtimeSyncHint('正在修复待还箱链路...');
+      if(typeof window.repairReturnLinksV4530==='function'){
+        await window.repairReturnLinksV4530(true);
+      }else{
+        alert('未找到修复函数，请确认系统版本。');
+      }
+    }catch(e){
+      console.error(e);
+      alert('修复待还箱链路失败：'+(e.message||e));
+    }finally{
+      window.__returnRepairRunningV4531=false;
+      try{ if(typeof window.renderContent==='function') window.renderContent(); }catch(_){ }
+    }
+  };
+
+  // 覆盖还箱确认页面：只渲染，不自动 repair，不自动 save。
+  window.renderReturnConfirm = renderReturnConfirm = function(container){
+    if(!container) return;
+    const pendingRows=safeBuildReturnRows(false);
+    const completedRows=safeBuildReturnRows(true);
+    const adminText=(typeof isAdminUser==='function'&&isAdminUser())?'（Admin：RG+JSL全部）':'';
+    container.innerHTML=`
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">🔄 还箱确认${adminText}</span>
+          <button class="btn btn-sm btn-warning" onclick="manualRepairReturnLinksV4531()">🔧 修复待还箱链路</button>
+        </div>
+        <div class="search-bar">
+          <input type="text" id="returnSearch" placeholder="集装箱号 / 提单号" style="width:250px;">
+          <button class="btn btn-primary" onclick="filterReturnList()">查询</button>
+          <button class="btn" onclick="resetReturnFilter()">重置</button>
+          <span style="font-size:12px;color:#909399;">进入页面不会自动修复或保存；如基础数据显示待还箱但列表缺失，请手动点击“修复待还箱链路”。</span>
+        </div>
+        <div class="section-label">📋 待确认还箱</div>
+        <div id="returnList"></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">✅ 已确认还箱</span><button class="btn btn-sm" id="btnCompletedReturn" onclick="toggleHistorySection('completedReturnBody','btnCompletedReturn')">展开查看</button></div>
+        <div id="completedReturnBody" style="display:none;"><div id="completedReturnList"></div></div>
+      </div>`;
+    safeRenderReturnList(pendingRows);
+    safeRenderCompletedReturnList(completedRows);
+  };
   console.log(VERSION+' loaded');
 })();
 </script>
@@ -16154,5 +16356,106 @@ ${preview}
   console.log(VERSION+' loaded');
 })();
 </script>
+
+<script>
+/* ==================== V45.31 还箱确认页面卡死修复 ====================
+   修复：V45.30 在 renderReturnConfirm() 渲染时自动执行 repairReturnLinksV4530(false)，
+   repair 完成后又调用 renderContent()，导致进入“渲染 → 自动修复 → 保存/重渲染 → 再修复”的循环，页面卡死。
+   V45.31 调整为：进入还箱确认页面只读渲染；只有用户点击“修复待还箱链路”时才执行修复。
+*/
+(function(){
+  'use strict';
+  const VERSION='V45.31 Return Page Freeze Fix';
+  const A=v=>Array.isArray(v)?v:[];
+  const S=v=>String(v==null?'':v).trim();
+  function esc(v){return S(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+  function safeBuildReturnRows(confirmed){
+    try{
+      if(typeof window.buildReturnRows==='function') return window.buildReturnRows(confirmed) || [];
+    }catch(e){console.warn('buildReturnRows failed',e);}
+    const rows=A(window.returnRecords||returnRecords).filter(r=>{
+      if(!r || r.deletedAt) return false;
+      const type=S(r.type);
+      if(type!=='return_needed' && type!=='return') return false;
+      const isConfirmed=!!r.isReturnConfirmed || type==='return';
+      return confirmed ? isConfirmed : !isConfirmed;
+    });
+    return rows;
+  }
+  function safeRenderReturnList(rows){
+    try{
+      if(typeof window.renderReturnList==='function') return window.renderReturnList(rows);
+    }catch(e){console.error(e);}
+    const box=document.getElementById('returnList');
+    if(!box) return;
+    if(!rows.length){box.innerHTML='<div class="empty-state">暂无待确认还箱记录</div>';return;}
+    box.innerHTML='<div class="table-wrapper"><table class="data-table"><thead><tr><th>批次</th><th>序号</th><th>集装箱号</th><th>位置</th><th>状态</th></tr></thead><tbody>'+rows.map(r=>`<tr><td>${esc(r.batch||'-')}</td><td>${esc(r.containerSeq||'-')}</td><td>${esc(r.containerNo||'-')}</td><td>${esc(r.location||'-')}</td><td><span class="status-badge status-warning">待还箱</span></td></tr>`).join('')+'</tbody></table></div>';
+  }
+  function safeRenderCompletedReturnList(rows){
+    try{
+      if(typeof window.renderCompletedReturnList==='function') return window.renderCompletedReturnList(rows);
+    }catch(e){console.error(e);}
+    const box=document.getElementById('completedReturnList');
+    if(!box) return;
+    if(!rows.length){box.innerHTML='<div class="empty-state">暂无已确认还箱记录</div>';return;}
+    box.innerHTML='<div class="table-wrapper"><table class="data-table"><thead><tr><th>批次</th><th>序号</th><th>集装箱号</th><th>位置</th><th>状态</th></tr></thead><tbody>'+rows.map(r=>`<tr><td>${esc(r.batch||'-')}</td><td>${esc(r.containerSeq||'-')}</td><td>${esc(r.containerNo||'-')}</td><td>${esc(r.location||'-')}</td><td><span class="status-badge status-success">已还箱</span></td></tr>`).join('')+'</tbody></table></div>';
+  }
+
+  // 手动修复按钮：只在点击时运行，防止进入页面自动触发保存和重渲染循环。
+  window.manualRepairReturnLinksV4531 = async function(){
+    if(window.__returnRepairRunningV4531){
+      alert('还箱链路修复正在执行，请稍等。');
+      return;
+    }
+    if(!confirm('确认执行“修复待还箱链路”？\n系统会扫描已掏箱但缺少待还箱记录的任务，并补齐关联信息。')) return;
+    window.__returnRepairRunningV4531=true;
+    try{
+      if(typeof window.showRealtimeSyncHint==='function') window.showRealtimeSyncHint('正在修复待还箱链路...');
+      if(typeof window.repairReturnLinksV4530==='function'){
+        await window.repairReturnLinksV4530(true);
+      }else{
+        alert('未找到修复函数，请确认系统版本。');
+      }
+    }catch(e){
+      console.error(e);
+      alert('修复待还箱链路失败：'+(e.message||e));
+    }finally{
+      window.__returnRepairRunningV4531=false;
+      try{ if(typeof window.renderContent==='function') window.renderContent(); }catch(_){ }
+    }
+  };
+
+  // 覆盖还箱确认页面：只渲染，不自动 repair，不自动 save。
+  window.renderReturnConfirm = renderReturnConfirm = function(container){
+    if(!container) return;
+    const pendingRows=safeBuildReturnRows(false);
+    const completedRows=safeBuildReturnRows(true);
+    const adminText=(typeof isAdminUser==='function'&&isAdminUser())?'（Admin：RG+JSL全部）':'';
+    container.innerHTML=`
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">🔄 还箱确认${adminText}</span>
+          <button class="btn btn-sm btn-warning" onclick="manualRepairReturnLinksV4531()">🔧 修复待还箱链路</button>
+        </div>
+        <div class="search-bar">
+          <input type="text" id="returnSearch" placeholder="集装箱号 / 提单号" style="width:250px;">
+          <button class="btn btn-primary" onclick="filterReturnList()">查询</button>
+          <button class="btn" onclick="resetReturnFilter()">重置</button>
+          <span style="font-size:12px;color:#909399;">进入页面不会自动修复或保存；如基础数据显示待还箱但列表缺失，请手动点击“修复待还箱链路”。</span>
+        </div>
+        <div class="section-label">📋 待确认还箱</div>
+        <div id="returnList"></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">✅ 已确认还箱</span><button class="btn btn-sm" id="btnCompletedReturn" onclick="toggleHistorySection('completedReturnBody','btnCompletedReturn')">展开查看</button></div>
+        <div id="completedReturnBody" style="display:none;"><div id="completedReturnList"></div></div>
+      </div>`;
+    safeRenderReturnList(pendingRows);
+    safeRenderCompletedReturnList(completedRows);
+  };
+  console.log(VERSION+' loaded');
+})();
+</script>
+
 </body>
 </html>
