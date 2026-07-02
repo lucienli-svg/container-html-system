@@ -1702,7 +1702,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V46.4 Stable：
+        V43.1 Stable：修复动态运输计划发布后被历史非工厂任务误撤回的问题。
       </div>
       <button class="login-btn" onclick="loginWithGoogle()" style="width:100%;margin-bottom:14px;">使用 Google 登录</button>
 
@@ -9425,7 +9425,7 @@ let main=document.getElementById('mainContent');
     });
 
     // 2. 如果同一集装箱存在“当前仍在执行中的非工厂计划”，才撤回未开始的残留工厂计划。
-    // V46.4 修复：历史已到达/已完成的港口→RG堆场/Rio Claro/IRA任务，只代表该箱当前位置，
+    // V43.1 修复：历史已到达/已完成的港口→RG堆场/Rio Claro/IRA任务，只代表该箱当前位置，
     // 不应阻止后续 RG堆场/Rio Claro/IRA→工厂 的动态运输计划。
     function isActiveNonFactoryConflictV431(task){
       if(!task || isTaskCancelledV43(task) || isFactoryDestV43(task.to)) return false;
@@ -14238,7 +14238,7 @@ ${preview}
 </script>
 
 <script>
-/* ==================== V46.4 Safe Login：登录会话修复 + 动态回调地址 + 登录状态提示 ====================
+/* ==================== V46.5 Safe Login：登录会话修复 + 动态回调地址 + 登录状态提示 ====================
    修复 V46.3 中安全保护包装影响登录流程、Google 回调地址硬编码、登录时页面无反馈的问题。
    本补丁不执行任何业务数据保存，只负责登录、读取权限、读取云端状态并进入系统。
 */
@@ -14468,7 +14468,7 @@ ${preview}
       if(!card) return;
       const ps = Array.from(card.querySelectorAll('p'));
       const sub = ps.find(p => /V4\d|Stable|Clean|修复|Safe/i.test(N(p.textContent)));
-      if(sub){ sub.textContent = 'V46.4 Safe Login：修复登录卡住问题，并保持 Safe Core 数据保护。'; }
+      if(sub){ sub.textContent = 'V46.5 Safe Login：修复登录卡住问题，并保持 Safe Core 数据保护。'; }
       setLoginStatus('', 'info');
     }catch(_){ }
   }
@@ -14496,5 +14496,317 @@ ${preview}
 })();
 
 </script>
+<script>
+/* ==================== V46.5 Login Hard Fix：直接绑定登录按钮 + 独立会话进入系统 ====================
+   目的：解决 V46.4 页面显示正确但登录按钮无响应/登录后不进入系统的问题。
+   原则：本补丁只处理登录与读取云端，不自动保存、不自动修复业务数据。
+*/
+(function(){
+  'use strict';
+  const W = window;
+  const VERSION = 'V46.5 Login Hard Fix';
+  const N = v => String(v == null ? '' : v).trim();
+  const $ = id => document.getElementById(id);
+
+  function wait(ms){ return new Promise(r=>setTimeout(r, ms)); }
+  function timeout(p, ms, label){
+    let t;
+    const timer = new Promise((_, rej)=>{ t=setTimeout(()=>rej(new Error((label || '操作') + '超时，请检查网络或刷新后重试')), ms || 20000); });
+    return Promise.race([Promise.resolve(p), timer]).finally(()=>clearTimeout(t));
+  }
+  async function waitSupabase(){
+    for(let i=0;i<40;i++){
+      if(W.supabase && typeof W.supabase.createClient === 'function') return true;
+      await wait(250);
+    }
+    return false;
+  }
+  function sb(){
+    try{
+      if(typeof W.initSupabaseClient === 'function') return W.initSupabaseClient();
+      if(typeof initSupabaseClient === 'function') return initSupabaseClient();
+    }catch(e){ console.warn('[V46.5] initSupabaseClient failed', e); }
+    return null;
+  }
+  function status(text, type){
+    try{
+      let card = document.querySelector('.login-card') || $('loginPage') || document.body;
+      let el = $('v465LoginStatus') || $('v464LoginStatus');
+      if(!el){
+        el = document.createElement('div');
+        el.id = 'v465LoginStatus';
+        el.style.margin = '14px 0 0 0';
+        el.style.padding = '11px 13px';
+        el.style.borderRadius = '10px';
+        el.style.fontSize = '13px';
+        el.style.lineHeight = '1.45';
+        card.appendChild(el);
+      }else{
+        el.id = 'v465LoginStatus';
+      }
+      const colors = {
+        error:['#fdecec','#b42318'], ok:['#ecfdf3','#067647'], warn:['#fff7e6','#b54708'], info:['#eef4ff','#1d4ed8']
+      };
+      const c = colors[type || 'info'] || colors.info;
+      el.style.background = c[0];
+      el.style.color = c[1];
+      el.style.display = text ? 'block' : 'none';
+      el.textContent = text || '';
+    }catch(e){ console.warn('[V46.5] status failed', e); }
+  }
+  function busy(flag){
+    try{
+      document.querySelectorAll('#loginPage button').forEach(b=>{
+        b.disabled = !!flag;
+        b.style.opacity = flag ? '0.72' : '';
+        b.style.cursor = flag ? 'wait' : '';
+      });
+    }catch(_){ }
+  }
+  function redirectTo(){
+    try{ return W.location.origin + W.location.pathname; }
+    catch(_){ return 'https://container-html-system.vercel.app'; }
+  }
+  function showLogin(){
+    if($('loginPage')) $('loginPage').style.display='flex';
+    if($('mainApp')) $('mainApp').style.display='none';
+  }
+  function showShell(profile, authUser){
+    let mapped = null;
+    try{
+      if(typeof W.mapProfileToCurrentUser === 'function') mapped = W.mapProfileToCurrentUser(profile, authUser);
+      else if(typeof mapProfileToCurrentUser === 'function') mapped = mapProfileToCurrentUser(profile, authUser);
+    }catch(e){ console.warn('[V46.5] mapProfile failed', e); }
+    if(!mapped){
+      mapped = {
+        id: profile?.id || authUser?.id || 'current',
+        name: profile?.display_name || profile?.name || authUser?.email || 'Lucien',
+        email: authUser?.email || profile?.email || '',
+        role: profile?.role || 'Admin',
+        warehouse: profile?.warehouse || profile?.warehouse_name || '',
+        carrier: profile?.carrier || ''
+      };
+    }
+    try{ W.cloudUser = authUser; cloudUser = authUser; }catch(_){ }
+    try{ W.cloudProfile = profile; cloudProfile = profile; }catch(_){ }
+    try{ W.currentUser = mapped; currentUser = mapped; }catch(_){ W.currentUser = mapped; }
+
+    try{
+      const role = mapped.role || 'Admin';
+      let menu = 'dashboard';
+      if(!(role === '订购科' || role === 'Admin')){
+        const menus = W.allMenus || (typeof allMenus !== 'undefined' ? allMenus : []);
+        const can = W.canAccessMenu || (typeof canAccessMenu === 'function' ? canAccessMenu : null);
+        menu = (menus.find(m => !can || can(m))?.id || 'containers');
+      }
+      W.currentMenu = menu;
+      try{ currentMenu = menu; }catch(_){ }
+    }catch(_){ try{ W.currentMenu='containers'; currentMenu='containers'; }catch(__){} }
+
+    if($('loginPage')) $('loginPage').style.display='none';
+    if($('mainApp')) $('mainApp').style.display='block';
+    if($('currentRole')) $('currentRole').innerText = mapped.role || 'Admin';
+    if($('currentUser')) $('currentUser').innerText = mapped.name || authUser?.email || 'Lucien';
+  }
+  function showUnauthorized(authUser){
+    if($('loginPage')) $('loginPage').style.display='none';
+    if($('mainApp')) $('mainApp').style.display='block';
+    if($('sidebar')) $('sidebar').innerHTML='';
+    if($('mainContent')) $('mainContent').innerHTML = '<div class="card"><div class="card-header"><span class="card-title">⏳ 等待管理员授权</span></div><p>当前账号：<b>'+ (authUser?.email || '') +'</b></p><p style="margin-top:10px;color:#606266;">该账号尚未在 user_profiles 中分配角色，或账号已停用。</p><button class="btn btn-primary" onclick="logoutCloud()">退出</button></div>';
+  }
+  function showDataSafe(msg){
+    if($('loginPage')) $('loginPage').style.display='none';
+    if($('mainApp')) $('mainApp').style.display='block';
+    if($('sidebar')) $('sidebar').innerHTML='';
+    if($('mainContent')) $('mainContent').innerHTML = '<div class="card"><div class="card-header"><span class="card-title">🛡️ 数据安全中心</span></div><p>'+ (msg || '云端业务数据暂未成功读取。') +'</p><p style="color:#606266;margin-top:8px;">V46.5 不会使用空数据覆盖云端。请检查网络或重新登录。</p><button class="btn btn-primary" onclick="logoutCloud()">退出登录</button></div>';
+  }
+
+  async function loadBusinessDataSafe(){
+    if(typeof W.loadCloudState === 'function') return await timeout(W.loadCloudState(), 35000, '读取云端业务数据');
+    if(typeof loadCloudState === 'function') return await timeout(loadCloudState(), 35000, '读取云端业务数据');
+    throw new Error('系统未找到 loadCloudState 读取函数');
+  }
+
+  async function enterAfterSession(){
+    const okLib = await waitSupabase();
+    if(!okLib){ status('Supabase SDK 加载失败，请刷新页面或检查网络。', 'error'); return false; }
+    const client = sb();
+    if(!client){ status('Supabase 客户端初始化失败，请检查系统配置。', 'error'); return false; }
+
+    status('正在读取登录会话...', 'info');
+    let s;
+    try{ s = await timeout(client.auth.getSession(), 18000, '读取登录会话'); }
+    catch(e){ status(e.message || String(e), 'error'); return false; }
+    if(s.error){ status('读取登录会话失败：' + s.error.message, 'error'); return false; }
+    const session = s.data && s.data.session;
+    if(!session || !session.user){ status('尚未登录，请输入邮箱密码或使用 Google 登录。', 'info'); showLogin(); return false; }
+    const authUser = session.user;
+    try{ W.cloudUser = authUser; cloudUser = authUser; }catch(_){ }
+
+    status('登录成功，正在读取用户权限...', 'info');
+    let pr;
+    try{ pr = await timeout(client.from('user_profiles').select('*').ilike('email', authUser.email).maybeSingle(), 20000, '读取用户权限'); }
+    catch(e){ status(e.message || String(e), 'error'); return false; }
+    if(pr.error){ status('读取用户权限失败：' + pr.error.message, 'error'); return false; }
+    const profile = pr.data;
+    if(!profile || profile.is_active === false){ showUnauthorized(authUser); return false; }
+
+    status('权限确认完成，正在读取云端业务数据...', 'info');
+    let loaded = false;
+    try{ loaded = await loadBusinessDataSafe(); }
+    catch(e){
+      console.error('[V46.5] loadBusinessDataSafe failed', e);
+      status('读取云端业务数据失败：' + (e.message || e), 'error');
+      showDataSafe('登录成功，但读取云端业务数据失败：' + (e.message || e));
+      return false;
+    }
+    if(!loaded){
+      status('登录成功，但没有读取到有效云端业务数据。', 'warn');
+      showDataSafe('登录成功，但没有读取到有效云端业务数据。');
+      return false;
+    }
+
+    status('云端数据读取完成，正在进入系统...', 'info');
+    showShell(profile, authUser);
+    try{ if(typeof W.renderSidebar === 'function') W.renderSidebar(); else if(typeof renderSidebar === 'function') renderSidebar(); }catch(e){ console.warn('[V46.5] renderSidebar failed', e); }
+    try{ if(typeof W.renderContent === 'function') W.renderContent(); else if(typeof renderContent === 'function') renderContent(); }catch(e){ console.warn('[V46.5] renderContent failed', e); }
+    try{ if(typeof W.applyLanguage === 'function') W.applyLanguage(); else if(typeof applyLanguage === 'function') applyLanguage(); }catch(_){ }
+    try{ if(typeof W.startRealtimeSync === 'function') W.startRealtimeSync(); else if(typeof startRealtimeSync === 'function') startRealtimeSync(); }catch(_){ }
+    status('', 'ok');
+    return true;
+  }
+
+  async function emailLogin(){
+    const client = sb();
+    if(!client){ status('Supabase 客户端初始化失败。', 'error'); alert('Supabase 客户端初始化失败'); return; }
+    const email = N($('loginEmail')?.value).toLowerCase();
+    const password = $('loginPassword')?.value || '';
+    if(!email){ status('请输入邮箱。', 'warn'); alert('请输入邮箱'); return; }
+    if(!password){ status('请输入密码。', 'warn'); alert('请输入密码'); return; }
+    busy(true); status('正在登录邮箱账号...', 'info');
+    try{
+      const res = await timeout(client.auth.signInWithPassword({ email, password }), 25000, '邮箱登录');
+      if(res.error){ status('邮箱登录失败：' + res.error.message, 'error'); alert('邮箱登录失败：' + res.error.message); return; }
+      await enterAfterSession();
+    }catch(e){ status(e.message || String(e), 'error'); alert(e.message || e); }
+    finally{ busy(false); }
+  }
+  async function googleLogin(){
+    const client = sb();
+    if(!client){ status('Supabase 客户端初始化失败。', 'error'); alert('Supabase 客户端初始化失败'); return; }
+    busy(true); status('正在跳转到 Google 登录...', 'info');
+    try{
+      const res = await timeout(client.auth.signInWithOAuth({ provider:'google', options:{ redirectTo: redirectTo(), queryParams:{ prompt:'select_account' } } }), 18000, 'Google 登录');
+      if(res.error){ status('Google 登录失败：' + res.error.message, 'error'); alert('Google登录失败：' + res.error.message); }
+    }catch(e){ status(e.message || String(e), 'error'); alert(e.message || e); }
+    finally{ busy(false); }
+  }
+  async function registerEmail(){
+    const client = sb();
+    if(!client){ status('Supabase 客户端初始化失败。', 'error'); alert('Supabase 客户端初始化失败'); return; }
+    const email = N($('loginEmail')?.value).toLowerCase();
+    const password = $('loginPassword')?.value || '';
+    if(!email){ status('请输入邮箱。', 'warn'); alert('请输入邮箱'); return; }
+    if(!password || password.length < 6){ status('密码至少需要6位。', 'warn'); alert('密码至少需要6位'); return; }
+    busy(true); status('正在提交注册...', 'info');
+    try{
+      const res = await timeout(client.auth.signUp({ email, password, options:{ emailRedirectTo: redirectTo() } }), 25000, '邮箱注册');
+      if(res.error){ status('邮箱注册失败：' + res.error.message, 'error'); alert('邮箱注册失败：' + res.error.message); return; }
+      status('注册申请已提交。如开启邮箱确认，请先到邮箱确认后再登录。', 'ok');
+      alert('注册申请已提交。如 Supabase 开启邮箱确认，请先到邮箱中点击确认链接；确认后再登录。');
+    }catch(e){ status(e.message || String(e), 'error'); alert(e.message || e); }
+    finally{ busy(false); }
+  }
+  async function magicLink(){
+    const client = sb();
+    if(!client){ status('Supabase 客户端初始化失败。', 'error'); alert('Supabase 客户端初始化失败'); return; }
+    const email = N($('loginEmail')?.value).toLowerCase();
+    if(!email){ status('请输入邮箱。', 'warn'); alert('请输入邮箱'); return; }
+    busy(true); status('正在发送邮箱登录链接...', 'info');
+    try{
+      const res = await timeout(client.auth.signInWithOtp({ email, options:{ emailRedirectTo: redirectTo() } }), 25000, '发送登录链接');
+      if(res.error){ status('发送失败：' + res.error.message, 'error'); alert('发送失败：' + res.error.message); return; }
+      status('已发送邮箱验证码/登录链接，请到邮箱中打开链接完成登录。', 'ok');
+      alert('已发送邮箱验证码/登录链接，请到邮箱中打开链接完成登录。');
+    }catch(e){ status(e.message || String(e), 'error'); alert(e.message || e); }
+    finally{ busy(false); }
+  }
+
+  function findButton(keyword){
+    return Array.from(document.querySelectorAll('#loginPage button')).find(b => N(b.textContent).includes(keyword));
+  }
+  function bind(){
+    try{
+      const g = findButton('Google');
+      const e = findButton('邮箱 + 密码登录');
+      const r = findButton('邮箱 + 密码注册');
+      const m = findButton('验证码');
+      [[g,googleLogin],[e,emailLogin],[r,registerEmail],[m,magicLink]].forEach(([btn, fn])=>{
+        if(!btn) return;
+        btn.type = 'button';
+        btn.onclick = null;
+        btn.dataset.v465Bound = '1';
+        btn.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); fn(); }, true);
+      });
+      const pass = $('loginPassword');
+      if(pass && !pass.dataset.v465Enter){
+        pass.dataset.v465Enter = '1';
+        pass.addEventListener('keydown', ev=>{ if(ev.key === 'Enter'){ ev.preventDefault(); emailLogin(); } });
+      }
+      const email = $('loginEmail');
+      if(email && !email.dataset.v465Enter){
+        email.dataset.v465Enter = '1';
+        email.addEventListener('keydown', ev=>{ if(ev.key === 'Enter'){ ev.preventDefault(); if(($('loginPassword')?.value || '').trim()) emailLogin(); else $('loginPassword')?.focus(); } });
+      }
+    }catch(e){ console.error('[V46.5] bind failed', e); }
+  }
+  function updateText(){
+    try{
+      document.title = 'Sistema Inteligente de Monitoramento de Contêineres V46.5';
+      const card = document.querySelector('.login-card');
+      if(card){
+        const ps = Array.from(card.querySelectorAll('p'));
+        const sub = ps.find(p => /V4\d|Stable|Clean|Safe|登录|修复/i.test(N(p.textContent)));
+        if(sub) sub.textContent = 'V46.5 Safe Login：登录按钮直接绑定，登录后只读取云端数据，不自动覆盖保存。';
+      }
+    }catch(_){ }
+  }
+
+  W.v465EnterAfterSession = enterAfterSession;
+  W.loginWithEmailPassword = emailLogin;
+  W.loginWithGoogle = googleLogin;
+  W.registerWithEmailPassword = registerEmail;
+  W.loginWithMagicLink = magicLink;
+  W.ensureCloudSession = enterAfterSession;
+  try{ loginWithEmailPassword = emailLogin; }catch(_){ }
+  try{ loginWithGoogle = googleLogin; }catch(_){ }
+  try{ registerWithEmailPassword = registerEmail; }catch(_){ }
+  try{ loginWithMagicLink = magicLink; }catch(_){ }
+  try{ ensureCloudSession = enterAfterSession; }catch(_){ }
+
+  try{
+    updateText(); bind(); status('V46.5 登录模块已加载。请输入邮箱密码，或使用 Google 登录。', 'info');
+  }catch(_){ }
+  document.addEventListener('DOMContentLoaded', ()=>{
+    updateText(); bind(); status('V46.5 登录模块已加载。请输入邮箱密码，或使用 Google 登录。', 'info');
+    setTimeout(()=>{ try{ enterAfterSession(); }catch(_){ } }, 500);
+  });
+  setTimeout(()=>{ updateText(); bind(); }, 1000);
+
+  try{
+    setTimeout(async ()=>{
+      const client = sb();
+      if(client && !W.__v465AuthListener){
+        W.__v465AuthListener = true;
+        client.auth.onAuthStateChange((event, session)=>{
+          if(event === 'SIGNED_IN' && session?.user){ setTimeout(()=>enterAfterSession(), 300); }
+        });
+      }
+    }, 600);
+  }catch(_){ }
+  console.log('V46.5 Login Hard Fix loaded');
+})();
+</script>
+
 </body>
 </html>
