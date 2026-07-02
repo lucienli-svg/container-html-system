@@ -1702,7 +1702,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V43.1 Stable：修复动态运输计划发布后被历史非工厂任务误撤回的问题。
+        V46.4 Stable：
       </div>
       <button class="login-btn" onclick="loginWithGoogle()" style="width:100%;margin-bottom:14px;">使用 Google 登录</button>
 
@@ -9425,7 +9425,7 @@ let main=document.getElementById('mainContent');
     });
 
     // 2. 如果同一集装箱存在“当前仍在执行中的非工厂计划”，才撤回未开始的残留工厂计划。
-    // V43.1 修复：历史已到达/已完成的港口→RG堆场/Rio Claro/IRA任务，只代表该箱当前位置，
+    // V46.4 修复：历史已到达/已完成的港口→RG堆场/Rio Claro/IRA任务，只代表该箱当前位置，
     // 不应阻止后续 RG堆场/Rio Claro/IRA→工厂 的动态运输计划。
     function isActiveNonFactoryConflictV431(task){
       if(!task || isTaskCancelledV43(task) || isFactoryDestV43(task.to)) return false;
