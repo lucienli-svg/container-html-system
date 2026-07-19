@@ -14205,5 +14205,215 @@ ${preview}
 })();
 </script>
 
+
+<script>
+/* ==================== V46.7 Pickup Date Binding Safe Fix ====================
+   问题：V46.6 登录回退后，运输任务页面仍混用了多套旧渲染函数。
+   部分按钮传入的是 plan id / object / old key，但日期输入框是 pickupTimeKey_<base64>，
+   confirmPickup 读取不到当前行的 date input，于是误报“请填写实际提箱日期”。
+   修复：确认提箱统一从当前计划的所有可能 input id + 当前行文本匹配读取日期，
+   并独立 upsert 港口提箱运输任务，不依赖旧闭包函数。
+============================================================================ */
+(function(){
+  'use strict';
+  const W = window;
+  const VERSION = 'V46.7 Pickup Date Binding Fix';
+  function A(v){ return Array.isArray(v) ? v : []; }
+  function S(v){ return String(v == null ? '' : v).trim(); }
+  function U(v){ return S(v).toUpperCase(); }
+  function SL(v){ return S(v).toLowerCase(); }
+  function rows(name){ try{ const v=(0,eval)(name); return Array.isArray(v)?v:[]; }catch(_){ return []; } }
+  function arrName(name, fallback){ const v=rows(name); return v.length || typeof fallback==='undefined' ? v : fallback; }
+  function nowIso(){ return new Date().toISOString(); }
+  function nowLocal(){ try{ return typeof W.nowLocalInput==='function' ? W.nowLocalInput() : new Date().toISOString().slice(0,16); }catch(_){ return new Date().toISOString().slice(0,16); } }
+  function normLoc(v){
+    const raw=S(v), s=raw.replace(/\s+/g,'').toLowerCase();
+    if(!s) return '';
+    if(s.includes('rioclaro') || s.includes('rio claro')) return 'Rio Claro';
+    if(s.includes('ira')) return 'IRA库房';
+    if(s.includes('rg')) return 'RG堆场';
+    if(s.includes('工厂') || s.includes('factory') || s.includes('fabrica') || s.includes('fábrica') || s.includes('gwm')) return '工厂';
+    if(s.includes('港口') || s.includes('santos') || s.includes('porto')) return '港口';
+    return raw;
+  }
+  function datePart(v){ const s=S(v); if(!s) return ''; return (s.includes('T')?s.split('T')[0]:s.split(' ')[0]).replace(/\//g,'-'); }
+  function uuid(prefix){ return (prefix||'id')+'_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8); }
+  function nextTaskId(){
+    try{ if(typeof nextIds==='object' && nextIds){ nextIds.task = Number(nextIds.task||1); return nextIds.task++; } }catch(_){ }
+    const ids=rows('transportTasks').map(t=>Number(t.id)).filter(Number.isFinite);
+    return (ids.length?Math.max(...ids):0)+1;
+  }
+  function encodeObj(obj){
+    try{ return btoa(unescape(encodeURIComponent(JSON.stringify(obj)))).replace(/=+$/,''); }
+    catch(_){ return S(obj && (obj.id || obj.containerNo || obj.containerId)); }
+  }
+  function decodeRef(ref){
+    if(ref && typeof ref==='object') return ref;
+    const raw=S(ref);
+    if(!raw) return {};
+    const mapped = W.__v453TaskKeys && W.__v453TaskKeys[raw];
+    const tries=[mapped, raw].filter(Boolean);
+    for(const v of tries){
+      if(v && typeof v==='object') return v;
+      const s=S(v);
+      try{ return JSON.parse(s); }catch(_){ }
+      try{ return JSON.parse(decodeURIComponent(s)); }catch(_){ }
+      try{ let x=s.replace(/-/g,'+').replace(/_/g,'/'); while(x.length%4)x+='='; return JSON.parse(decodeURIComponent(escape(atob(x)))); }catch(_){ }
+    }
+    return {id:raw, containerNo:raw};
+  }
+  function containerOf(plan){
+    return rows('containers').find(c=>S(c.id)===S(plan.containerId) || (plan.containerNo && U(c.containerNo)===U(plan.containerNo))) || null;
+  }
+  function planMatchesKey(p,k){
+    if(!p || !k) return false;
+    const hard=[];
+    if(k.id!==undefined && k.id!==null && k.id!=='') hard.push(S(p.id)===S(k.id));
+    if(k.containerId!==undefined && k.containerId!==null && k.containerId!=='') hard.push(S(p.containerId)===S(k.containerId));
+    if(k.containerNo) hard.push(U(p.containerNo)===U(k.containerNo));
+    if(!hard.some(Boolean)) return false;
+    if(k.batch && S(p.batch)!==S(k.batch)) return false;
+    if(k.seq && S(p.containerSeq||p.seq) && S(p.containerSeq||p.seq)!==S(k.seq)) return false;
+    if(k.destination && normLoc(p.destination) && normLoc(p.destination)!==normLoc(k.destination)) return false;
+    return true;
+  }
+  function resolvePlan(ref){
+    const k=decodeRef(ref);
+    const list=rows('pickupPlans').filter(p=>p && S(p.status)!=='cancelled');
+    let m=[];
+    if(k.planUid) m=list.filter(p=>S(p.planUid)===S(k.planUid));
+    if(!m.length) m=list.filter(p=>planMatchesKey(p,k));
+    if(!m.length && k.id!==undefined && k.id!==null && k.id!=='') m=list.filter(p=>S(p.id)===S(k.id));
+    if(!m.length && k.containerNo) m=list.filter(p=>U(p.containerNo)===U(k.containerNo));
+    if(!m.length && k.containerId!==undefined && k.containerId!==null && k.containerId!=='') m=list.filter(p=>S(p.containerId)===S(k.containerId));
+    if(m.length>1){ const pending=m.filter(p=>S(p.status)!=='confirmed'); if(pending.length) m=pending; }
+    m.sort((a,b)=>String(b.updatedAt||b.createdAt||'').localeCompare(String(a.updatedAt||a.createdAt||'')));
+    return m[0] || null;
+  }
+  function planKeyVariants(plan, ref){
+    const c=containerOf(plan);
+    const base={id:plan.id,containerId:plan.containerId,containerNo:plan.containerNo||(c&&c.containerNo)||'',batch:plan.batch||(c&&c.batch)||'',seq:plan.containerSeq||plan.seq||(c&&c.containerSeq)||''};
+    const vars=[];
+    vars.push(S(ref));
+    vars.push(encodeObj(base));
+    vars.push(encodeObj(Object.assign({},base,{destination:plan.destination||''})));
+    vars.push(encodeObj(Object.assign({},base,{to:plan.destination||''})));
+    vars.push(S(plan.id));
+    vars.push('plan:'+S(plan.id));
+    return Array.from(new Set(vars.filter(Boolean)));
+  }
+  function valueFromInput(id){ const el=document.getElementById(id); return el && 'value' in el ? S(el.value) : ''; }
+  function readActualPickupDate(ref, plan){
+    const variants=planKeyVariants(plan, ref);
+    for(const k of variants){
+      const v=valueFromInput('pickupTimeKey_'+k) || valueFromInput('pickupTime_'+k);
+      if(v) return v;
+    }
+    const v2=valueFromInput('pickupTime_'+S(plan.id));
+    if(v2) return v2;
+    // 最重要兼容：当前按钮旧参数和输入框 key 不一致时，按当前行文本匹配日期输入框。
+    const targetNo=U(plan.containerNo || (containerOf(plan)||{}).containerNo || '');
+    const targetBatch=U(plan.batch || (containerOf(plan)||{}).batch || '');
+    const inputs=Array.from(document.querySelectorAll('input[type="date"]')).filter(i=>i && S(i.value));
+    for(const input of inputs){
+      const tr=input.closest('tr');
+      const text=U(tr ? tr.textContent : input.parentElement?.textContent || '');
+      if(targetNo && text.includes(targetNo) && (!targetBatch || text.includes(targetBatch))) return S(input.value);
+    }
+    // 如果页面只有一个已填写日期，视为当前行日期，避免误报。
+    if(inputs.length===1) return S(inputs[0].value);
+    return S(plan.actualPickupTime || '');
+  }
+  function getBlText(plan, c){
+    try{ if(typeof W.getTaskBlText==='function') return W.getTaskBlText(plan); }catch(_){ }
+    try{ if(typeof getTaskBlText==='function') return getTaskBlText(plan); }catch(_){ }
+    return S(plan.blNo || plan.billNo || c?.blNo || '');
+  }
+  function getIraText(plan){
+    try{ if(typeof W.getIraList==='function') return W.getIraList(plan.containerId) || plan.iraNo || ''; }catch(_){ }
+    try{ if(typeof getIraList==='function') return getIraList(plan.containerId) || plan.iraNo || ''; }catch(_){ }
+    return S(plan.iraNo || '');
+  }
+  function taskFinished(t){ return ['cancelled','archived','closed','produced','return_completed','completed'].includes(S(t.status)); }
+  function upsertTransportTask(plan, c, actual){
+    const dest=normLoc(plan.destination || plan.to || '');
+    let task=rows('transportTasks').find(t=>!taskFinished(t) && S(t.sourcePlanId||t.pickupPlanId)===S(plan.id));
+    if(!task){
+      task=rows('transportTasks').find(t=>!taskFinished(t) && S(t.containerId)===S(plan.containerId) && normLoc(t.from||t.origin)==='港口' && normLoc(t.to||t.destination)===dest);
+    }
+    if(!task){
+      task={id:nextTaskId(), taskUid:uuid('task'), createdAt:nowIso()};
+      rows('transportTasks').push(task);
+    }
+    Object.assign(task,{
+      containerId: plan.containerId,
+      containerNo: plan.containerNo || c?.containerNo || '',
+      containerSeq: c?.containerSeq || plan.containerSeq || plan.seq || '',
+      batch: plan.batch || c?.batch || '',
+      blNo: getBlText(plan,c),
+      iraNo: getIraText(plan),
+      from: '港口',
+      to: dest,
+      carrier: plan.carrier || task.carrier || 'RG',
+      status: 'in_transit',
+      operationStatus: (dest==='工厂' || dest==='IRA库房') ? (task.operationStatus || 'not_arrived') : (task.operationStatus || ''),
+      estimatedArrival: plan.arrivalDate || plan.estimatedArrival || task.estimatedArrival || '',
+      arrivalDate: plan.arrivalDate || plan.estimatedArrival || task.arrivalDate || '',
+      unloadingDock: dest==='IRA库房' ? 'IRA库房' : (plan.unloadingDock || task.unloadingDock || ''),
+      source: 'pickupPlan',
+      sourcePlanId: plan.id,
+      planUid: plan.planUid || task.planUid || uuid('plan'),
+      actualPickupTime: actual,
+      publishedAt: task.publishedAt || nowIso(),
+      updatedAt: nowIso(),
+      cc46Flow: dest==='RG堆场' ? 'RG_WAIT_SECOND_LEG' : (dest==='Rio Claro' ? 'DIRECT_UNSTUFF_RETURN' : 'GATE_DOCK_RETURN')
+    });
+    return task;
+  }
+  function persistTransportPage(plan){
+    const keepDate = (document.querySelector('.date-tab.active')?.dataset?.date) || datePart(plan.arrivalDate || plan.estimatedArrival);
+    const pos={x:window.scrollX||0,y:window.scrollY||0};
+    try{ if(typeof W.saveData==='function') W.saveData(); else if(typeof saveData==='function') saveData(); }
+    catch(e){ console.error('V46.7 saveData failed', e); alert('提箱已在页面内确认，但保存云端时发生异常，请检查同步状态。'); }
+    setTimeout(()=>{
+      try{
+        const main=document.getElementById('mainContent');
+        if(main && keepDate && typeof W.renderTransportTasksWithDate==='function') W.renderTransportTasksWithDate(main, keepDate);
+        else if(typeof W.renderContent==='function') W.renderContent();
+      }catch(e){ console.warn('V46.7 render failed', e); }
+      setTimeout(()=>{ try{ window.scrollTo(pos.x,pos.y); }catch(_){ } },80);
+    },40);
+  }
+  async function confirmPickupV467(ref){
+    const plan=resolvePlan(ref);
+    if(!plan){ alert('未找到当前行对应的提箱计划，请刷新后重试。'); return false; }
+    const actual=readActualPickupDate(ref, plan);
+    if(!actual){ alert('请填写实际提箱日期'); return false; }
+    const c=containerOf(plan);
+    plan.planUid=plan.planUid || uuid('plan');
+    plan.status='confirmed';
+    plan.actualPickupTime=actual;
+    plan.needReconfirm=false;
+    plan.updatedAt=nowIso();
+    plan.cc46PickupFixed=true;
+    if(c){ c.actualPickupTime=actual; c.updatedAt=nowIso(); }
+    upsertTransportTask(plan,c,actual);
+    persistTransportPage(plan);
+    alert('已确认提箱 '+S(plan.containerNo || c?.containerNo || ''));
+    return true;
+  }
+  W.confirmPickupTask = confirmPickupV467;
+  W.confirmPickupTaskByKey = confirmPickupV467;
+  W.confirmPickupTaskByKeyV45 = confirmPickupV467;
+  W.confirmPickupTaskByKeyV451 = confirmPickupV467;
+  W.confirmPickupTaskByKeyV455 = confirmPickupV467;
+  W.confirmPickupTaskByKeyV4518 = confirmPickupV467;
+  W.confirmPickupTaskByKeyV4521 = confirmPickupV467;
+  W.confirmPickupTaskByKeyV4522 = confirmPickupV467;
+  try{ document.title='Sistema Inteligente de Monitoramento de Contêineres V46.7'; }catch(_){ }
+  console.log(VERSION+' loaded: pickup date input binding fixed.');
+})();
+</script>
+
 </body>
 </html>
