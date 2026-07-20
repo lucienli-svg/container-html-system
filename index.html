@@ -14415,5 +14415,230 @@ ${preview}
 })();
 </script>
 
+
+<script>
+/* ==================== V46.8 Storage Fee Recalculation Fix ====================
+   修复目标：
+   1) 堆存费截止日期：有实际提箱日期时固定截止到实际提箱日；未提箱时才计算到今天。
+   2) 实际提箱日、ETA、堆存费费率、还箱记录、生产完成状态等费用相关数据变化后，
+      自动识别数据签名变化并清除当日旧缓存，立即重新计算费用。
+   3) 不改变现有正常费用/异常费用的业务规则，仅修复计算截止日和缓存刷新机制。
+*/
+(function(){
+  const W = window;
+  const VERSION = 'V46.8 Storage Fee Recalculation Fix';
+  const SIGNATURE_KEY = 'cc_feeInputSignatureV468';
+
+  function safeArray(v){ return Array.isArray(v) ? v : []; }
+  function text(v){ return v === undefined || v === null ? '' : String(v); }
+
+  function normalizeDateV468(value){
+    if(!value) return '';
+    try{
+      if(typeof W.normalizeDateOnly === 'function') return W.normalizeDateOnly(value) || '';
+      if(typeof normalizeDateOnly === 'function') return normalizeDateOnly(value) || '';
+    }catch(_){ }
+    const s = text(value).trim();
+    const m = s.match(/(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
+    if(m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+    const d = new Date(s);
+    if(Number.isNaN(d.getTime())) return '';
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
+
+  function dateDiffV468(startValue, endValue){
+    const s = normalizeDateV468(startValue);
+    const e = normalizeDateV468(endValue);
+    if(!s || !e) return 0;
+    const sp = s.split('-').map(Number);
+    const ep = e.split('-').map(Number);
+    const startUtc = Date.UTC(sp[0], sp[1]-1, sp[2]);
+    const endUtc = Date.UTC(ep[0], ep[1]-1, ep[2]);
+    return Math.max(0, Math.round((endUtc - startUtc) / 86400000));
+  }
+
+  function stableRowsV468(rows, mapper){
+    return safeArray(rows).map(mapper).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  }
+
+  function feeInputPayloadV468(){
+    const containersRef = typeof containers !== 'undefined' ? containers : W.containers;
+    const storageRef = typeof storageConfig !== 'undefined' ? storageConfig : W.storageConfig;
+    const demurrageRef = typeof demurrageConfig !== 'undefined' ? demurrageConfig : W.demurrageConfig;
+    const returnsRef = typeof returnRecords !== 'undefined' ? returnRecords : W.returnRecords;
+    const productionRef = typeof productionRecords !== 'undefined' ? productionRecords : W.productionRecords;
+    const warningRef = typeof warningConfig !== 'undefined' ? warningConfig : W.warningConfig;
+    return {
+      containers: stableRowsV468(containersRef, c => ({
+        id:text(c && c.id), eta:normalizeDateV468(c && c.eta), pickup:normalizeDateV468(c && c.actualPickupTime),
+        vessel:text(c && c.vessel), type:text(c && c.containerType)
+      })),
+      storageConfig: stableRowsV468(storageRef, c => ({
+        start:normalizeDateV468(c && c.startDate), end:normalizeDateV468(c && c.endDate),
+        fixedDays:Number(c && c.fixedDays || 0), fixedRate:Number(c && c.fixedRate || 0), overtimeRate:Number(c && c.overtimeRate || 0)
+      })),
+      demurrageConfig: stableRowsV468(demurrageRef, c => ({
+        carrier:text(c && c.carrier), type:text(c && c.type), start:normalizeDateV468(c && c.startDate),
+        end:normalizeDateV468(c && c.endDate), freeDays:Number(c && c.freeDays || 0), rate:Number(c && c.ratePerDay || 0)
+      })),
+      returns: stableRowsV468(returnsRef, r => ({
+        containerId:text(r && r.containerId), type:text(r && r.type), confirmed:!!(r && r.isReturnConfirmed),
+        returnDate:normalizeDateV468(r && r.returnDate)
+      })),
+      production: stableRowsV468(productionRef, p => ({
+        id:text(p && p.id), containerIds:safeArray(p && p.containerIds).map(text).sort()
+      })),
+      warning: {
+        storageWarningDays:Number(warningRef && warningRef.storageWarningDays || 0),
+        demurrageWarningDays:Number(warningRef && warningRef.demurrageWarningDays || 0)
+      }
+    };
+  }
+
+  function hashV468(value){
+    const s = JSON.stringify(value);
+    let h = 2166136261;
+    for(let i=0;i<s.length;i++){
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(16).padStart(8,'0') + ':' + s.length;
+  }
+
+  function currentFeeSignatureV468(){
+    try{ return hashV468(feeInputPayloadV468()); }
+    catch(e){ console.warn('[V46.8] fee signature failed', e); return 'signature-error:' + Date.now(); }
+  }
+
+  function clearFeeCacheV468(){
+    try{
+      localStorage.removeItem('cc_lastFeeUpdate');
+      localStorage.removeItem('cc_cachedFees');
+    }catch(_){ }
+  }
+
+  const baseCalculateStorage = (typeof W.calculateStorageFeeBreakdown === 'function')
+    ? W.calculateStorageFeeBreakdown
+    : (typeof calculateStorageFeeBreakdown === 'function' ? calculateStorageFeeBreakdown : null);
+
+  function calculateStorageFeeBreakdownV468(container, currentDate){
+    if(!container || !container.eta){
+      return { total:0, normal:0, abnormal:0, days:0, normalDays:0, abnormalDays:0, normalLimitDays:0, config:null };
+    }
+    let config = null;
+    try{
+      if(typeof W.getStorageConfigByDate === 'function') config = W.getStorageConfigByDate(container.eta);
+      else if(typeof getStorageConfigByDate === 'function') config = getStorageConfigByDate(container.eta);
+    }catch(_){ }
+    if(!config && baseCalculateStorage) return baseCalculateStorage(container, currentDate);
+    if(!config){
+      return { total:0, normal:0, abnormal:0, days:0, normalDays:0, abnormalDays:0, normalLimitDays:0, config:null };
+    }
+    const startDate = normalizeDateV468(container.eta);
+    const endDate = normalizeDateV468(container.actualPickupTime || currentDate);
+    const days = dateDiffV468(startDate, endDate);
+    const normalLimitDays = Math.max(0, Number(config.fixedDays || 0));
+    if(days <= 0){
+      return { total:0, normal:0, abnormal:0, days:0, normalDays:0, abnormalDays:0, normalLimitDays, config };
+    }
+    const normalDays = Math.min(days, normalLimitDays);
+    const abnormalDays = Math.max(0, days - normalLimitDays);
+    const normal = normalDays > 0 ? Number(config.fixedRate || 0) : 0;
+    const abnormal = abnormalDays * Number(config.overtimeRate || 0);
+    return { total:normal + abnormal, normal, abnormal, days, normalDays, abnormalDays, normalLimitDays, config };
+  }
+
+  try{
+    W.calculateStorageFeeBreakdown = calculateStorageFeeBreakdownV468;
+    calculateStorageFeeBreakdown = calculateStorageFeeBreakdownV468;
+    W.calculateStorageFee = function(container, currentDate){ return calculateStorageFeeBreakdownV468(container, currentDate).total; };
+    calculateStorageFee = W.calculateStorageFee;
+  }catch(e){ console.warn('[V46.8] storage calculator install skipped', e); }
+
+  const baseUpdateDailyFees = (typeof W.updateDailyFees === 'function')
+    ? W.updateDailyFees
+    : (typeof updateDailyFees === 'function' ? updateDailyFees : null);
+
+  function updateDailyFeesV468(force){
+    const signature = currentFeeSignatureV468();
+    let previous = '';
+    try{ previous = localStorage.getItem(SIGNATURE_KEY) || ''; }catch(_){ }
+    if(force === true || signature !== previous) clearFeeCacheV468();
+    let result;
+    if(baseUpdateDailyFees) result = baseUpdateDailyFees.apply(this, arguments);
+    try{ localStorage.setItem(SIGNATURE_KEY, signature); }catch(_){ }
+    return result;
+  }
+
+  try{
+    W.updateDailyFees = updateDailyFeesV468;
+    updateDailyFees = updateDailyFeesV468;
+  }catch(e){ console.warn('[V46.8] fee updater install skipped', e); }
+
+  W.invalidateAndRefreshFeesV468 = function(reason){
+    clearFeeCacheV468();
+    const result = updateDailyFeesV468(true);
+    try{ localStorage.setItem('cc_lastFeeRefreshReasonV468', text(reason || 'manual')); }catch(_){ }
+    return result;
+  };
+
+  const baseSaveData = W.saveData;
+  if(typeof baseSaveData === 'function' && !baseSaveData.__v468FeeAware){
+    const feeAwareSave = function(){
+      const before = currentFeeSignatureV468();
+      let previous = '';
+      try{ previous = localStorage.getItem(SIGNATURE_KEY) || ''; }catch(_){ }
+      if(before !== previous) W.invalidateAndRefreshFeesV468('before_save_fee_inputs_changed');
+      let result;
+      try{ result = baseSaveData.apply(this, arguments); }
+      catch(e){ throw e; }
+      Promise.resolve(result).then(()=>{
+        const after = currentFeeSignatureV468();
+        let saved = '';
+        try{ saved = localStorage.getItem(SIGNATURE_KEY) || ''; }catch(_){ }
+        if(after !== saved) W.invalidateAndRefreshFeesV468('after_save_fee_inputs_changed');
+      }).catch(e=>console.warn('[V46.8] post-save fee refresh skipped', e));
+      return result;
+    };
+    feeAwareSave.__v468FeeAware = true;
+    feeAwareSave.__base = baseSaveData;
+    W.saveData = feeAwareSave;
+    try{ saveData = feeAwareSave; }catch(_){ }
+  }
+
+  function updateVersionTextV468(){
+    try{
+      document.title = 'Sistema Inteligente de Monitoramento de Contêineres V46.8';
+      const card = document.querySelector('.login-card');
+      if(card){
+        const candidates = Array.from(card.querySelectorAll('div,p,span'));
+        const sub = candidates.find(el => /V46\.[0-7]|Safe Core|Pickup Date|Notebook Stable/i.test(text(el.textContent)));
+        if(sub) sub.textContent = 'V46.8 Safe Core：修复实际提箱日期后的堆存费自动重算。';
+      }
+      document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{
+        if(/V46\.[0-7]|Safe Core|Pickup Date|Notebook Stable/i.test(text(el.textContent))) el.textContent='V46.8 Safe Core';
+      });
+    }catch(_){ }
+  }
+
+  // 首次加载即废弃旧版本缓存，确保历史已维护提箱日期立即生效。
+  try{ W.invalidateAndRefreshFeesV468('v46.8_initial_rebuild'); }catch(e){ console.warn('[V46.8] initial fee rebuild skipped', e); }
+  updateVersionTextV468();
+  document.addEventListener('DOMContentLoaded', ()=>{ updateVersionTextV468(); setTimeout(updateVersionTextV468, 2800); });
+  setTimeout(updateVersionTextV468, 2300);
+  setTimeout(updateVersionTextV468, 6500);
+
+  W.__v468FeeStatus = function(){
+    return {
+      version: VERSION,
+      signature: currentFeeSignatureV468(),
+      cachedSignature: (()=>{ try{return localStorage.getItem(SIGNATURE_KEY)||'';}catch(_){return '';} })(),
+      lastRefreshReason: (()=>{ try{return localStorage.getItem('cc_lastFeeRefreshReasonV468')||'';}catch(_){return '';} })()
+    };
+  };
+  console.log(VERSION + ' loaded: actual pickup date cutoff + fee cache signature refresh enabled.');
+})();
+</script>
+
 </body>
 </html>
