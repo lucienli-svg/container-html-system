@@ -14013,6 +14013,7 @@ ${preview}
     }catch(e){console.error('V47.3 load failed',e);hint('云端数据校验失败');return false;}
   }
   async function pull(reason){
+    if(W.__v479JournalOwnsSync){pendingPull=true;return false;}
     if(W.__v474RestoreInProgress || Date.now()<N(W.__v474RestoreCooldownUntil)){pendingPull=true;return false;}
     if(saveDirty||saveRunning){pendingPull=true;return false;}try{if(typeof isCurrentPageRefreshLocked==='function'&&isCurrentPageRefreshLocked()||typeof isModalOpen==='function'&&isModalOpen()||typeof isUserActivelyEditing==='function'&&isUserActivelyEditing()){pendingPull=true;hint('云端有新数据，完成当前操作后同步');return false;}const r=await readBestCurrent();if(!r)return false;if(currentManifest&&r.manifest.generation===currentManifest.generation)return true;const old=baseline&&baseline.counts,cur=counts(r.state),deleted=N(r.manifest&&r.manifest.deletionCount);if(old&&old.containers>=20&&cur.containers===0&&!r.manifest.destructiveAuthorized){console.error('V47.3 rejected zero remote state');hint('已拦截异常清零版本');return false;}const ui=captureUi();apply(r.state,r.manifest,'sync');render(ui);hint('已同步最新云端数据');return true;}catch(e){console.error('V47.3 pull failed',e);hint('同步失败，继续保留当前完整数据');return false;}
   }
@@ -14022,7 +14023,7 @@ ${preview}
     try{if(typeof realtimeChannel!=='undefined'&&realtimeChannel&&client){client.removeChannel(realtimeChannel);realtimeChannel=null;}}catch(_){}
     try{if(W.__cloudFallbackPoller){clearInterval(W.__cloudFallbackPoller);W.__cloudFallbackPoller=null;}}catch(_){}
   }
-  function startRealtime(){const client=sb();if(!client)return;stopLegacySync();try{if(realtime473)client.removeChannel(realtime473);}catch(_){ }realtime473=client.channel('cms_v473_'+TAB_ID).on('postgres_changes',{event:'*',schema:'public',table:'app_state',filter:'id=eq.'+BASE_ID},()=>setTimeout(()=>pull('realtime'),500)).subscribe(status=>{if(status==='SUBSCRIBED')hint('安全实时同步已开启');else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT')hint('实时同步异常，已启用轮询');});if(poller473)clearInterval(poller473);poller473=setInterval(()=>{if(typeof cloudUser!=='undefined'&&cloudUser&&document.visibilityState==='visible')pull('polling');},45000);try{if(typeof BroadcastChannel!=='undefined'){if(channel473)channel473.close();channel473=new BroadcastChannel('cms-v473-'+BASE_ID);channel473.onmessage=e=>{if(e.data&&e.data.from!==TAB_ID)pull('broadcast');};}}catch(_){}}
+  function startRealtime(){if(W.__v479JournalOwnsSync)return;const client=sb();if(!client)return;stopLegacySync();try{if(realtime473)client.removeChannel(realtime473);}catch(_){ }realtime473=client.channel('cms_v473_'+TAB_ID).on('postgres_changes',{event:'*',schema:'public',table:'app_state',filter:'id=eq.'+BASE_ID},()=>setTimeout(()=>pull('realtime'),500)).subscribe(status=>{if(status==='SUBSCRIBED')hint('安全实时同步已开启');else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT')hint('实时同步异常，已启用轮询');});if(poller473)clearInterval(poller473);poller473=setInterval(()=>{if(typeof cloudUser!=='undefined'&&cloudUser&&document.visibilityState==='visible')pull('polling');},45000);try{if(typeof BroadcastChannel!=='undefined'){if(channel473)channel473.close();channel473=new BroadcastChannel('cms-v473-'+BASE_ID);channel473.onmessage=e=>{if(e.data&&e.data.from!==TAB_ID)pull('broadcast');};}}catch(_){}}
 
   async function transact(reason,mutate,msg){const before=clone(state()),ui=captureUi();try{const r=mutate();if(r===false)return false;try{if(typeof W.normalizeStateV455==='function')W.normalizeStateV455(true);}catch(_){ }render(ui);hint((msg||'操作完成')+'，正在安全保存…');const ok=await queue(reason);if(!ok){apply(before,currentManifest,'rollback_local');render(ui);return false;}hint((msg||'操作完成')+'，已保存');return true;}catch(e){apply(before,currentManifest,'rollback_exception');render(ui);alert('操作失败：'+(e.message||e));return false;}}
   function decode(k){try{let s=S(k);while(s.length%4)s+='=';return JSON.parse(decodeURIComponent(escape(atob(s))));}catch(_){return{id:k};}}
@@ -14692,36 +14693,37 @@ ${preview}
 </script>
 
 <script>
-/* ==================== V47.8 Fast Journal Save：增量事务 + 本地断点续传 + 后台快照合并 ==================== */
+/* ==================== V47.9 Ordered Local-First Journal：即时捕获 + 有序事务 + 防回滚同步 ==================== */
 (function(){
   'use strict';
   const W=window;
-  const VERSION='V47.8 Fast Journal Save';
+  const VERSION='V47.9 Ordered Local-First Journal';
   const BASE_ID=(typeof CLOUD_STATE_ID!=='undefined'?CLOUD_STATE_ID:'container-monitoring-main');
-  const OP_PREFIX=BASE_ID+':v478:op:';
-  const COMPACT_LOCK_ID=BASE_ID+':v478:compact_lock';
-  const PENDING_KEY='cms_v478_pending_ops';
-  const TAB_KEY='cms_v478_tab';
+  const WRITE_PREFIX=BASE_ID+':v479:op:';
+  const READ_PREFIXES=[BASE_ID+':v478:op:',WRITE_PREFIX];
+  const COMPACT_LOCK_ID=BASE_ID+':v479:compact_lock';
   const ARRAY_MODULES=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig'];
   const OBJECT_MODULES=['nextIds','warningConfig'];
   const CORE_MODULES=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans'];
-  const FAST_DELAY=70;
-  const CLOUD_TIMEOUT=6500;
-  const RETRY_INTERVAL=12000;
-  const COMPACT_MIN_OPS=60;
-  const COMPACT_IDLE_MS=180000;
-  const MAX_FAST_RECORDS=350;
-  const MAX_FAST_BYTES=480000;
+  const CLOUD_TIMEOUT=7000;
+  const RETRY_INTERVAL=10000;
+  const MAX_FAST_RECORDS=500;
+  const MAX_FAST_BYTES=700000;
+  const COMPACT_MIN_OPS=240;
+  const COMPACT_IDLE_MS=600000;
+  const DB_NAME='cms_v479_journal';
+  const DB_STORE='pending_ops';
+  const EMERGENCY_KEY='cms_v479_emergency_ops';
+  const TAB_KEY='cms_v479_tab';
   const fullSave=W.queueSaveV473||W.queueSaveV455||W.queueSystemSaveV4513||W.saveCloudState||W.saveData;
   const baseLoad=W.loadCloudState;
-  const basePull=W.pullCloudStateAndRefresh;
-  const baseStartRealtime=W.startRealtimeSync;
   const TAB_ID=(function(){try{let x=sessionStorage.getItem(TAB_KEY);if(!x){x='tab-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,9);sessionStorage.setItem(TAB_KEY,x);}return x;}catch(_){return'tab-'+Math.random().toString(36).slice(2,10);}})();
+
+  W.__v479JournalOwnsSync=true;
 
   const A=v=>Array.isArray(v)?v:[];
   const S=v=>String(v==null?'':v).trim();
   const U=v=>S(v).toUpperCase();
-  const N=v=>Number(v||0);
   const now=()=>new Date().toISOString();
   const clone=v=>JSON.parse(JSON.stringify(v));
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -14729,41 +14731,59 @@ ${preview}
   function sb(){try{return typeof initSupabaseClient==='function'?initSupabaseClient():null;}catch(_){return null;}}
   function get(name,fallback){try{const v=eval(name);return v===undefined?fallback:v;}catch(_){return W[name]===undefined?fallback:W[name];}}
   function state(){return{containers:A(get('containers',[])),blList:A(get('blList',[])),containerBlMap:A(get('containerBlMap',[])),transportTasks:A(get('transportTasks',[])),locationStock:A(get('locationStock',[])),returnRecords:A(get('returnRecords',[])),pickupPlans:A(get('pickupPlans',[])),productionRecords:A(get('productionRecords',[])),productionPlans:A(get('productionPlans',[])),factoryCalendar:A(get('factoryCalendar',[])),storageConfig:A(get('storageConfig',[])),demurrageConfig:A(get('demurrageConfig',[])),nextIds:get('nextIds',{})||{},warningConfig:get('warningConfig',{})||{}};}
-  function replaceArray(name,value){const target=get(name,null);if(Array.isArray(target))target.splice(0,target.length,...A(value));else try{W[name]=A(value);}catch(_){}}
-  function replaceObject(name,value){const target=get(name,null);if(target&&typeof target==='object'&&!Array.isArray(target)){Object.keys(target).forEach(k=>delete target[k]);Object.assign(target,value||{});}else try{W[name]=value||{};}catch(_){}}
+  function replaceArray(name,value){const target=get(name,null);if(Array.isArray(target))target.splice(0,target.length,...A(value));else try{W[name]=A(value);}catch(_){} }
+  function replaceObject(name,value){const target=get(name,null);if(target&&typeof target==='object'&&!Array.isArray(target)){Object.keys(target).forEach(k=>delete target[k]);Object.assign(target,value||{});}else try{W[name]=value||{};}catch(_){} }
   function hashText(str){let h=2166136261;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619);}return('00000000'+(h>>>0).toString(16)).slice(-8);}
   function hash(v){try{return hashText(JSON.stringify(v));}catch(_){return hashText(S(v));}}
   function day(v){const s=S(v);return s?s.slice(0,10):'';}
+  function coreScore(st){return CORE_MODULES.reduce((n,k)=>n+A(st&&st[k]).length,0);}
+  function recordStamp(x){const t=Date.parse(x&&(x.updatedAt||x.updated_at||x.modifiedAt||x.confirmedAt||x.actualArrival||x.createdAt||x.created_at)||0);return Number.isFinite(t)?t:0;}
+
   function recordKey(module,x){
     if(!x||typeof x!=='object')return'';
     if(module==='containers')return U(x.containerNo)||('ID:'+S(x.id));
     if(module==='blList')return U(x.blNo||x.houseBlNo||x.masterBlNo)||('ID:'+S(x.id));
     if(module==='containerBlMap')return S(x.containerId)+'|'+U(x.blNo||x.houseBlNo||x.masterBlNo);
-    if(module==='transportTasks')return S(x.taskUid)||S(x.routeLegKey)||(S(x.sourcePlanId)?'PLAN:'+S(x.sourcePlanId):'')||(S(x.id)?'ID:'+S(x.id):'')||[U(x.containerNo),S(x.containerId),U(x.from||x.origin),U(x.to||x.destination),day(x.estimatedArrival||x.arrivalDate)].join('|');
+    if(module==='transportTasks')return S(x.taskUid)||S(x.routeLegKey)||(S(x.id)?'ID:'+S(x.id)+'|CID:'+S(x.containerId)+'|TO:'+U(x.to||x.destination):'')||(S(x.sourcePlanId)?'PLAN:'+S(x.sourcePlanId)+'|CID:'+S(x.containerId):'')||[U(x.containerNo),S(x.containerId),U(x.from||x.origin),U(x.to||x.destination),day(x.estimatedArrival||x.arrivalDate)].join('|');
     if(module==='locationStock')return S(x.containerId)||U(x.containerNo)||('ID:'+S(x.id));
-    if(module==='returnRecords')return S(x.id)||[S(x.containerId),U(x.type),U(x.location),day(x.returnDate||x.unpackDate||x.createdAt)].join('|');
-    if(module==='pickupPlans')return S(x.planUid)||S(x.id)||[S(x.containerId),U(x.containerNo),day(x.arrivalDate),U(x.destination)].join('|');
-    if(module==='productionRecords')return S(x.id)||[U(x.batch),day(x.date),U(x.workshop||x.area)].join('|');
-    if(module==='productionPlans')return S(x.id)||[day(x.date),U(x.workshop||x.area),U(x.batch),S(x.order||x.planOrder)].join('|');
+    if(module==='returnRecords')return (S(x.id)?'ID:'+S(x.id)+'|CID:'+S(x.containerId):'')||[S(x.containerId),U(x.type),U(x.location),day(x.returnDate||x.unpackDate||x.createdAt)].join('|');
+    if(module==='pickupPlans')return S(x.planUid)||(S(x.id)?'ID:'+S(x.id)+'|CID:'+S(x.containerId)+'|DEST:'+U(x.destination):'')||[S(x.containerId),U(x.containerNo),day(x.arrivalDate),U(x.destination)].join('|');
+    if(module==='productionRecords')return (S(x.id)?'ID:'+S(x.id):'')||[U(x.batch),day(x.date),U(x.workshop||x.area)].join('|');
+    if(module==='productionPlans')return (S(x.id)?'ID:'+S(x.id):'')||[day(x.date),U(x.workshop||x.area),U(x.batch),S(x.order||x.planOrder)].join('|');
     if(module==='factoryCalendar')return day(x.date)||S(x.id);
-    if(module==='storageConfig')return S(x.id)||[day(x.effectiveFrom||x.startDate),day(x.effectiveTo||x.endDate),S(x.fixedDays),S(x.fixedRate),S(x.overtimeRate)].join('|');
-    if(module==='demurrageConfig')return S(x.id)||[U(x.vessel||x.carrier||x.shippingCompany),U(x.containerType||x.type),day(x.effectiveFrom||x.startDate),day(x.effectiveTo||x.endDate),S(x.freeDays),S(x.ratePerDay)].join('|');
+    if(module==='storageConfig')return (S(x.id)?'ID:'+S(x.id):'')||[day(x.effectiveFrom||x.startDate),day(x.effectiveTo||x.endDate),S(x.fixedDays),S(x.fixedRate),S(x.overtimeRate)].join('|');
+    if(module==='demurrageConfig')return (S(x.id)?'ID:'+S(x.id):'')||[U(x.vessel||x.carrier||x.shippingCompany),U(x.containerType||x.type),day(x.effectiveFrom||x.startDate),day(x.effectiveTo||x.endDate),S(x.freeDays),S(x.ratePerDay)].join('|');
     return S(x.id)||hash(x);
   }
-  function recordTime(x,fallback){const t=Date.parse(x&&(x.updatedAt||x.updated_at||x.modifiedAt||x.confirmedAt||x.createdAt||x.created_at)||fallback||0);return Number.isFinite(t)?t:0;}
-  function coreScore(st){return CORE_MODULES.reduce((n,k)=>n+A(st&&st[k]).length,0);}
+  function legacyKey(module,x){
+    if(!x||typeof x!=='object')return'';
+    if(module==='transportTasks')return S(x.taskUid)||S(x.routeLegKey)||(S(x.sourcePlanId)?'PLAN:'+S(x.sourcePlanId):'')||(S(x.id)?'ID:'+S(x.id):'')||[U(x.containerNo),S(x.containerId),U(x.from||x.origin),U(x.to||x.destination),day(x.estimatedArrival||x.arrivalDate)].join('|');
+    if(module==='pickupPlans')return S(x.planUid)||S(x.id)||[S(x.containerId),U(x.containerNo),day(x.arrivalDate),U(x.destination)].join('|');
+    if(module==='returnRecords')return S(x.id)||[S(x.containerId),U(x.type),U(x.location),day(x.returnDate||x.unpackDate||x.createdAt)].join('|');
+    if(module==='productionRecords'||module==='productionPlans'||module==='storageConfig'||module==='demurrageConfig')return S(x.id)||recordKey(module,x);
+    return recordKey(module,x);
+  }
+  function sameIdentity(module,a,b){
+    if(!a||!b)return false;
+    if(module==='transportTasks')return !!((a.taskUid&&S(a.taskUid)===S(b.taskUid))||(a.routeLegKey&&S(a.routeLegKey)===S(b.routeLegKey))||(a.id!=null&&b.id!=null&&S(a.id)===S(b.id)&&S(a.containerId)===S(b.containerId)));
+    if(module==='pickupPlans')return !!((a.planUid&&S(a.planUid)===S(b.planUid))||(a.id!=null&&b.id!=null&&S(a.id)===S(b.id)&&S(a.containerId)===S(b.containerId)));
+    if(module==='containers')return U(a.containerNo)===U(b.containerNo)||S(a.id)===S(b.id);
+    if(a.id!=null&&b.id!=null)return S(a.id)===S(b.id);
+    return recordKey(module,a)===recordKey(module,b)||legacyKey(module,a)===legacyKey(module,b);
+  }
 
   let shadow=null;
-  function buildShadow(st){const sh={modules:{},objects:{},counts:{},core:coreScore(st)};ARRAY_MODULES.forEach(m=>{const map=new Map();A(st[m]).forEach(x=>{const k=recordKey(m,x);if(k)map.set(k,hash(x));});sh.modules[m]=map;sh.counts[m]=map.size;});OBJECT_MODULES.forEach(m=>sh.objects[m]=hash(st[m]||{}));return sh;}
-  function resetShadow(){const st=state();if(coreScore(st)>0)shadow=buildShadow(st);return shadow;}
-  function applyOpToShadow(op){if(!shadow)shadow={modules:{},objects:{},counts:{},core:0};ARRAY_MODULES.forEach(m=>{const mm=shadow.modules[m]||(shadow.modules[m]=new Map()),ch=op.changes&&op.changes[m]||{};A(ch.deletes).forEach(k=>mm.delete(S(k)));A(ch.upserts).forEach(x=>{const k=recordKey(m,x);if(k)mm.set(k,hash(x));});shadow.counts[m]=mm.size;});OBJECT_MODULES.forEach(m=>{if(op.objects&&Object.prototype.hasOwnProperty.call(op.objects,m))shadow.objects[m]=hash(op.objects[m]||{});});shadow.core=CORE_MODULES.reduce((n,m)=>n+(shadow.counts[m]||0),0);}
-  function currentGeneration(){try{const s=W.__v473Status&&W.__v473Status();return s&&s.generation||'';}catch(_){return'';}}
-  function opChecksum(op){const c=clone(op);delete c.checksum;return hash(c);}
+  const clocks={};
+  function buildShadow(st){const sh={modules:{},objects:{},counts:{},core:coreScore(st)};ARRAY_MODULES.forEach(m=>{const map=new Map();A(st[m]).forEach(x=>{const k=recordKey(m,x);if(k)map.set(k,hash(x));});sh.modules[m]=map;sh.counts[m]=A(st[m]).length;});OBJECT_MODULES.forEach(m=>sh.objects[m]=hash(st[m]||{}));return sh;}
+  function resetClocks(st){ARRAY_MODULES.forEach(m=>{const map=new Map();A(st[m]).forEach(x=>{const k=recordKey(m,x);if(k)map.set(k,String(recordStamp(x)).padStart(16,'0')+'|base');});clocks[m]=map;});}
+  function resetShadow(){const st=state();shadow=buildShadow(st);resetClocks(st);return shadow;}
+  function applyOpToShadow(op){if(!shadow)shadow=buildShadow(state());ARRAY_MODULES.forEach(m=>{const mm=shadow.modules[m]||(shadow.modules[m]=new Map()),ch=op.changes&&op.changes[m]||{};A(ch.deletes).forEach(k=>{for(const key of [...mm.keys()])if(key===S(k))mm.delete(key);});A(ch.upserts).forEach(x=>{const k=recordKey(m,x);if(k)mm.set(k,hash(x));});shadow.counts[m]=A(state()[m]).length;});OBJECT_MODULES.forEach(m=>{if(op.objects&&Object.prototype.hasOwnProperty.call(op.objects,m))shadow.objects[m]=hash(op.objects[m]||{});});shadow.core=coreScore(state());}
+  function opChecksum(op){const c=clone(op);delete c.checksum;delete c._serverAt;return hash(c);}
+  function opClock(op){const t=Date.parse(op&&op._serverAt||op&&op.createdAt||0);return String(Number.isFinite(t)?t:0).padStart(16,'0')+'|'+S(op&&op.opId);}
   function createDelta(reason){
-    const st=state();
-    if(!shadow)return{fallback:true,state:clone(st),reason:'shadow_not_ready'};
-    if(shadow.counts.containers>=20&&A(st.containers).length===0&&!/restore|import|authoritative/i.test(S(reason)))return{blocked:'基础数据异常变为0，系统已阻止保存。'};
-    if(shadow.core>=200&&coreScore(st)<Math.floor(shadow.core*0.45)&&!/restore|import|authoritative/i.test(S(reason)))return{blocked:'业务数据量异常大幅下降，系统已阻止保存。'};
+    const st=state();if(!shadow)return{fallback:true,state:clone(st),reason:'shadow_not_ready'};
+    if((shadow.counts.containers||0)>=20&&A(st.containers).length===0&&!/restore|import|authoritative/i.test(S(reason)))return{blocked:'基础数据异常变为0，系统已阻止保存。'};
+    if((shadow.core||0)>=200&&coreScore(st)<Math.floor((shadow.core||0)*0.45)&&!/restore|import|authoritative/i.test(S(reason)))return{blocked:'业务数据量异常大幅下降，系统已阻止保存。'};
     const createdAt=now(),changes={},objects={};let records=0;
     ARRAY_MODULES.forEach(m=>{
       const prev=shadow.modules[m]||new Map(),cur=new Map(),upserts=[],deletes=[];
@@ -14773,147 +14793,146 @@ ${preview}
     });
     OBJECT_MODULES.forEach(m=>{const h=hash(st[m]||{});if(shadow.objects[m]!==h)objects[m]=clone(st[m]||{});});
     if(!records&&!Object.keys(objects).length)return null;
-    const op={version:VERSION,type:'incremental_operation',opId:Date.now().toString(36)+'-'+TAB_ID+'-'+Math.random().toString(36).slice(2,8),tabId:TAB_ID,createdAt,createdBy:user(),baseGeneration:currentGeneration(),reason:S(reason)||'save',changes,objects,recordCount:records};
-    op.checksum=opChecksum(op);
-    const bytes=JSON.stringify(op).length;
+    const op={version:VERSION,keyVersion:2,type:'incremental_operation',opId:Date.now().toString(36)+'-'+TAB_ID+'-'+Math.random().toString(36).slice(2,8),tabId:TAB_ID,createdAt,createdBy:user(),reason:S(reason)||'save',changes,objects,recordCount:records};
+    op.checksum=opChecksum(op);const bytes=JSON.stringify(op).length;
     if(records>MAX_FAST_RECORDS||bytes>MAX_FAST_BYTES)return{fallback:true,state:clone(st),reason:'large_change',records,bytes};
     return op;
   }
 
-  function pending(){try{const v=JSON.parse(localStorage.getItem(PENDING_KEY)||'[]');return A(v).filter(x=>x&&x.opId);}catch(_){return[];}}
-  function writePending(list){try{localStorage.setItem(PENDING_KEY,JSON.stringify(A(list).slice(-120)));return true;}catch(e){console.error('V47.8 local pending save failed',e);return false;}}
-  function addPending(op){const list=pending();if(!list.some(x=>x.opId===op.opId))list.push(op);return writePending(list);}
-  function removePending(id){return writePending(pending().filter(x=>x.opId!==id));}
-  function localPendingCount(){return pending().length;}
+  let dbPromise=null;
+  function openDb(){if(dbPromise)return dbPromise;dbPromise=new Promise((resolve,reject)=>{try{const req=indexedDB.open(DB_NAME,1);req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains(DB_STORE))db.createObjectStore(DB_STORE,{keyPath:'opId'});};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error||new Error('IndexedDB打开失败'));}catch(e){reject(e);}});return dbPromise;}
+  async function idbPut(op){const db=await openDb();return new Promise((resolve,reject)=>{const tx=db.transaction(DB_STORE,'readwrite');tx.objectStore(DB_STORE).put(op);tx.oncomplete=()=>resolve(true);tx.onerror=()=>reject(tx.error||new Error('IndexedDB写入失败'));});}
+  async function idbDelete(id){const db=await openDb();return new Promise((resolve,reject)=>{const tx=db.transaction(DB_STORE,'readwrite');tx.objectStore(DB_STORE).delete(id);tx.oncomplete=()=>resolve(true);tx.onerror=()=>reject(tx.error||new Error('IndexedDB删除失败'));});}
+  async function idbAll(){const db=await openDb();return new Promise((resolve,reject)=>{const tx=db.transaction(DB_STORE,'readonly'),req=tx.objectStore(DB_STORE).getAll();req.onsuccess=()=>resolve(A(req.result).sort((a,b)=>S(a.createdAt).localeCompare(S(b.createdAt))||S(a.opId).localeCompare(S(b.opId))));req.onerror=()=>reject(req.error||new Error('IndexedDB读取失败'));});}
+  function emergencyRead(){try{return A(JSON.parse(localStorage.getItem(EMERGENCY_KEY)||'[]'));}catch(_){return[];}}
+  function emergencyWrite(list){try{localStorage.setItem(EMERGENCY_KEY,JSON.stringify(A(list).slice(-20)));return true;}catch(_){return false;}}
+  async function pendingPut(op){try{return await idbPut(op);}catch(e){console.warn('V47.9 IndexedDB fallback',e);const list=emergencyRead().filter(x=>x.opId!==op.opId);list.push(op);if(!emergencyWrite(list))throw new Error('浏览器本地断点存储不可用');return true;}}
+  async function pendingDelete(id){try{await idbDelete(id);}catch(_){ }emergencyWrite(emergencyRead().filter(x=>x.opId!==id));}
+  async function pendingAll(){let list=[];try{list=await idbAll();}catch(_){ }const map=new Map(list.map(x=>[x.opId,x]));emergencyRead().forEach(x=>{if(x&&x.opId&&!map.has(x.opId))map.set(x.opId,x);});return[...map.values()].sort((a,b)=>S(a.createdAt).localeCompare(S(b.createdAt))||S(a.opId).localeCompare(S(b.opId)));}
+  async function migrateV478Pending(){try{const old=A(JSON.parse(localStorage.getItem('cms_v478_pending_ops')||'[]')).filter(x=>x&&x.opId);if(!old.length)return 0;let moved=0;for(const op of old){if(!verifyOp(op))continue;await pendingPut(op);moved++;}if(moved===old.length)localStorage.removeItem('cms_v478_pending_ops');return moved;}catch(e){console.warn('V47.9 legacy pending migration skipped',e);return 0;}}
 
   let indicator=null;
-  function ensureIndicator(){if(indicator&&document.body.contains(indicator))return indicator;indicator=document.createElement('div');indicator.id='v478SaveIndicator';indicator.style.cssText='position:fixed;right:16px;bottom:14px;z-index:99999;padding:7px 11px;border-radius:999px;font-size:12px;font-weight:700;background:#ecf5ff;color:#2b5aa6;border:1px solid #b3d8ff;box-shadow:0 2px 10px rgba(0,0,0,.12);display:none';document.body.appendChild(indicator);return indicator;}
-  function status(text,type,hold){const el=ensureIndicator();el.textContent=text;el.style.display='block';const map={ok:['#f0f9eb','#2f7d32','#c2e7b0'],local:['#fdf6ec','#b26a00','#f5dab1'],error:['#fef0f0','#c73636','#f5c2c2'],saving:['#ecf5ff','#2b5aa6','#b3d8ff']},c=map[type]||map.saving;el.style.background=c[0];el.style.color=c[1];el.style.borderColor=c[2];if(hold!==true)setTimeout(()=>{if(el.textContent===text)el.style.display='none';},hold||2600);}
-  function hint(text){try{if(typeof showRealtimeSyncHint==='function')showRealtimeSyncHint(text);}catch(_){}}
-
+  function ensureIndicator(){if(indicator&&document.body.contains(indicator))return indicator;indicator=document.createElement('div');indicator.id='v479SaveIndicator';indicator.style.cssText='position:fixed;right:16px;bottom:14px;z-index:99999;padding:7px 11px;border-radius:999px;font-size:12px;font-weight:700;background:#ecf5ff;color:#2b5aa6;border:1px solid #b3d8ff;box-shadow:0 2px 10px rgba(0,0,0,.12);display:none';document.body.appendChild(indicator);return indicator;}
+  function status(text,type,hold){const el=ensureIndicator();el.textContent=text;el.style.display='block';const map={ok:['#f0f9eb','#2f7d32','#c2e7b0'],local:['#fdf6ec','#b26a00','#f5dab1'],error:['#fef0f0','#c73636','#f5c2c2'],saving:['#ecf5ff','#2b5aa6','#b3d8ff']},c=map[type]||map.saving;el.style.background=c[0];el.style.color=c[1];el.style.borderColor=c[2];if(hold!==true)setTimeout(()=>{if(el.textContent===text)el.style.display='none';},typeof hold==='number'?hold:2600);}
+  function hint(text){try{if(typeof showRealtimeSyncHint==='function')showRealtimeSyncHint(text);}catch(_){} }
   function timeout(p,ms){return Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('云端请求超时')),ms))]);}
-  async function upload(op){const client=sb();if(!client)throw new Error('Supabase未连接');if(opChecksum(op)!==op.checksum)throw new Error('本地增量校验失败');const row={id:OP_PREFIX+op.opId,data:op,updated_by:op.createdBy||user(),updated_at:op.createdAt||now()};let last=null;for(let i=0;i<2;i++){try{const r=await timeout(client.from('app_state').upsert(row),CLOUD_TIMEOUT);if(r&&r.error)throw r.error;return true;}catch(e){last=e;if(i===0)await sleep(350);}}throw last||new Error('增量保存失败');}
-
-  let fastDirty=false,fastTimer=null,fastRunning=null,fastWaiters=[],fastReasons=new Set(),pendingRemote=false,lastActivity=Date.now(),uploadedSinceCompact=0,compactTimer=null,compacting=false;
-  const seenOps=new Set();
-  function scheduleCompact(){if(compactTimer)clearTimeout(compactTimer);compactTimer=setTimeout(()=>compact(false),COMPACT_IDLE_MS);}
-  async function flushFast(){
-    if(fastRunning)return fastRunning;
-    if(!fastDirty)return true;
-    fastDirty=false;if(fastTimer){clearTimeout(fastTimer);fastTimer=null;}
-    const waiters=fastWaiters.splice(0),reason=[...fastReasons].join(',')||'fast_save';fastReasons.clear();
-    fastRunning=(async()=>{
-      const delta=createDelta(reason);
-      if(!delta){waiters.forEach(w=>w.resolve(true));return true;}
-      if(delta.blocked){alert(delta.blocked);waiters.forEach(w=>w.resolve(false));return false;}
-      if(delta.fallback){
-        status('数据量较大，正在后台提交完整版本…','saving',true);hint('正在保存较大批次数据…');
-        if(typeof fullSave!=='function')throw new Error('完整保存函数未加载');
-        const ok=await fullSave.call(W,'v478_full_'+reason);
-        if(ok!==false){resetShadow();status('完整版本已保存','ok');waiters.forEach(w=>w.resolve(true));return true;}
-        waiters.forEach(w=>w.resolve(false));return false;
-      }
-      if(!addPending(delta)){
-        status('本地保存空间不足','error',true);alert('浏览器本地保存空间不足，无法建立断点续传记录。请先导出备份或清理浏览器存储。');waiters.forEach(w=>w.resolve(false));return false;
-      }
-      applyOpToShadow(delta);
-      status('已保存到本机，正在同步云端…','saving',true);hint('操作已保存到本机，正在快速同步云端…');
-      try{
-        await upload(delta);removePending(delta.opId);seenOps.add(delta.opId);uploadedSinceCompact++;status('云端已快速保存','ok');hint('云端快速保存完成');waiters.forEach(w=>w.resolve(true));scheduleCompact();return true;
-      }catch(e){
-        console.warn('V47.8 cloud upload deferred',e);status('本机已保存，云端等待重试','local',true);setTimeout(()=>{hint('数据已安全保存在本机，网络恢复后自动同步云端');},30);waiters.forEach(w=>w.resolve(true));scheduleRetry();return true;
-      }
-    })().catch(e=>{console.error('V47.8 fast save failed',e);status('保存失败：'+(e.message||e),'error',true);waiters.forEach(w=>w.resolve(false));return false;}).finally(()=>{fastRunning=null;if(fastDirty)setTimeout(flushFast,0);else if(pendingRemote)setTimeout(syncJournal,200);});
-    return fastRunning;
-  }
-  function queue(reason){lastActivity=Date.now();fastDirty=true;fastReasons.add(reason||'save');const p=new Promise((resolve,reject)=>fastWaiters.push({resolve,reject}));if(compacting){if(fastTimer){clearTimeout(fastTimer);fastTimer=null;}if(snapshotDirtyLocal('during_compaction_'+(reason||'save'))){status('操作已保存到本机，后台整理完成后同步','local',true);retryPending();return p;}}if(fastTimer)clearTimeout(fastTimer);fastTimer=setTimeout(flushFast,FAST_DELAY);return p;}
-  function snapshotDirtyLocal(reason){if(!fastDirty)return true;const delta=createDelta(reason||'page_close');if(!delta||delta.blocked||delta.fallback)return false;const ok=addPending(delta);if(ok){applyOpToShadow(delta);fastDirty=false;fastReasons.clear();const ws=fastWaiters.splice(0);ws.forEach(w=>w.resolve(true));}return ok;}
-
-  let retryTimer=null;
-  function scheduleRetry(){if(retryTimer)return;retryTimer=setTimeout(async()=>{retryTimer=null;await retryPending();if(localPendingCount())scheduleRetry();},RETRY_INTERVAL);}
-  async function retryPending(){const list=pending();if(!list.length)return true;let all=true;for(const op of list){try{await upload(op);removePending(op.opId);seenOps.add(op.opId);uploadedSinceCompact++;}catch(e){all=false;console.warn('V47.8 pending retry failed',op.opId,e);break;}}if(all){status('待同步数据已全部上传','ok');scheduleCompact();}return all;}
-
   function verifyOp(op){return !!(op&&op.type==='incremental_operation'&&op.opId&&op.checksum&&opChecksum(op)===op.checksum);}
-  function applyOp(op){
-    if(!verifyOp(op))return false;
-    const at=op.createdAt||now();
-    ARRAY_MODULES.forEach(m=>{
-      const ch=op.changes&&op.changes[m];if(!ch)return;
-      const cur=A(get(m,[])),map=new Map();cur.forEach(x=>{const k=recordKey(m,x);if(k)map.set(k,x);});
-      A(ch.deletes).forEach(k=>{const old=map.get(S(k));if(!old||recordTime(old)<=Date.parse(at)||0)map.delete(S(k));});
-      A(ch.upserts).forEach(raw=>{const k=recordKey(m,raw);if(!k)return;const old=map.get(k);if(!old||recordTime(raw,at)>=recordTime(old))map.set(k,clone(raw));});
-      replaceArray(m,[...map.values()]);
-    });
-    OBJECT_MODULES.forEach(m=>{if(op.objects&&Object.prototype.hasOwnProperty.call(op.objects,m))replaceObject(m,clone(op.objects[m]||{}));});
-    try{if(typeof W.normalizeStateV455==='function')W.normalizeStateV455(false);}catch(_){ }
-    try{if(typeof W.invalidatePerformanceIndexesV471==='function')W.invalidatePerformanceIndexesV471('v478_journal');if(typeof W.rebuildPerformanceIndexesV471==='function')W.rebuildPerformanceIndexesV471();}catch(_){ }
-    try{if(typeof W.invalidateAndRefreshFeesV472==='function')W.invalidateAndRefreshFeesV472();}catch(_){ }
-    return true;
-  }
-  async function fetchOps(){const client=sb();if(!client)return[];const rows=[];let from=0;while(true){const {data,error}=await client.from('app_state').select('id,data,updated_at').like('id',OP_PREFIX+'%').order('updated_at',{ascending:true}).range(from,from+999);if(error)throw error;const part=A(data);rows.push(...part);if(part.length<1000)break;from+=1000;if(from>10000)break;}return rows;}
-  function editing(){try{return(typeof isCurrentPageRefreshLocked==='function'&&isCurrentPageRefreshLocked())||(typeof isModalOpen==='function'&&isModalOpen())||(typeof isUserActivelyEditing==='function'&&isUserActivelyEditing());}catch(_){return false;}}
-  async function syncJournal(force){
-    if(!force&&(fastDirty||fastRunning||editing())){pendingRemote=true;return false;}
-    pendingRemote=false;
-    try{const rows=await fetchOps();let changed=false;for(const r of rows){const op=r.data;if(!verifyOp(op)||seenOps.has(op.opId))continue;if(applyOp(op)){seenOps.add(op.opId);changed=true;}}const locals=pending();for(const op of locals){if(applyOp(op))changed=true;}if(changed){resetShadow();try{if(typeof renderSidebar==='function')renderSidebar();if(typeof renderContent==='function')renderContent();if(typeof applyLanguage==='function')applyLanguage();}catch(_){ }hint('已同步最新增量数据');}return true;}catch(e){console.warn('V47.8 journal sync failed',e);return false;}
+
+  async function uploadVerified(op){
+    const client=sb();if(!client)throw new Error('Supabase未连接');if(!verifyOp(op))throw new Error('本地事务校验失败');
+    const row={id:WRITE_PREFIX+op.opId,data:op,updated_by:op.createdBy||user(),updated_at:op.createdAt||now()};let last=null;
+    for(let i=0;i<2;i++){
+      try{
+        const r=await timeout(client.from('app_state').upsert(row),CLOUD_TIMEOUT);if(r&&r.error)throw r.error;
+        const check=await timeout(client.from('app_state').select('data,updated_at').eq('id',row.id).maybeSingle(),CLOUD_TIMEOUT);if(check&&check.error)throw check.error;
+        if(!check||!check.data||!verifyOp(check.data.data)||check.data.data.checksum!==op.checksum)throw new Error('云端写入回读校验失败');
+        return true;
+      }catch(e){last=e;if(i===0)await sleep(300);}
+    }
+    throw last||new Error('事务上传失败');
   }
 
-  async function compactLock(){const client=sb();if(!client)return null;const owner=TAB_ID+'|'+user(),t=now(),payload={owner,expiresAt:new Date(Date.now()+180000).toISOString()};const {error}=await client.from('app_state').insert({id:COMPACT_LOCK_ID,data:payload,updated_by:owner,updated_at:t});if(!error)return owner;try{const {data}=await client.from('app_state').select('data,updated_by,updated_at').eq('id',COMPACT_LOCK_ID).maybeSingle();const exp=Date.parse(data&&data.data&&data.data.expiresAt||data&&data.updated_at||0);if(exp&&exp<Date.now()){await client.from('app_state').delete().eq('id',COMPACT_LOCK_ID);return compactLock();}}catch(_){ }return null;}
-  async function releaseCompact(owner){if(!owner)return;try{const client=sb();if(client)await client.from('app_state').delete().eq('id',COMPACT_LOCK_ID).eq('updated_by',owner);}catch(_){ }}
-  async function deleteOps(ids){const client=sb();if(!client)return;for(let i=0;i<ids.length;i+=50){const {error}=await client.from('app_state').delete().in('id',ids.slice(i,i+50));if(error)throw error;}}
-  async function compact(force){
-    if(compacting||fastDirty||fastRunning||localPendingCount())return false;
-    if(!force&&Date.now()-lastActivity<COMPACT_IDLE_MS)return false;
-    if(!force&&uploadedSinceCompact<COMPACT_MIN_OPS)return false;
-    const owner=await compactLock();if(!owner)return false;compacting=true;
+  function findExistingIndex(module,arr,raw){let i=arr.findIndex(x=>sameIdentity(module,x,raw));if(i<0){const k=recordKey(module,raw),lk=legacyKey(module,raw);i=arr.findIndex(x=>recordKey(module,x)===k||legacyKey(module,x)===lk);}return i;}
+  function deleteByKey(module,arr,key){const k=S(key);for(let i=arr.length-1;i>=0;i--){if(recordKey(module,arr[i])===k||legacyKey(module,arr[i])===k)arr.splice(i,1);}}
+  function applyOp(op){
+    if(!verifyOp(op))return false;const clk=opClock(op);let changed=false;
+    ARRAY_MODULES.forEach(m=>{
+      const ch=op.changes&&op.changes[m];if(!ch)return;const arr=A(get(m,[])),cm=clocks[m]||(clocks[m]=new Map());
+      A(ch.deletes).forEach(k=>{const oldClock=cm.get(S(k))||'';if(clk>=oldClock){const before=arr.length;deleteByKey(m,arr,k);cm.set(S(k),clk);if(arr.length!==before)changed=true;}});
+      A(ch.upserts).forEach(raw=>{const k=recordKey(m,raw);if(!k)return;let oldClock=cm.get(k)||'';const idx=findExistingIndex(m,arr,raw);if(idx>=0){const oldKey=recordKey(m,arr[idx]);oldClock=cm.get(oldKey)||oldClock||String(recordStamp(arr[idx])).padStart(16,'0')+'|base';}
+        if(clk>=oldClock){if(idx>=0)arr[idx]=clone(raw);else arr.push(clone(raw));cm.set(k,clk);changed=true;}
+      });
+      replaceArray(m,arr);
+    });
+    OBJECT_MODULES.forEach(m=>{if(op.objects&&Object.prototype.hasOwnProperty.call(op.objects,m)){replaceObject(m,clone(op.objects[m]||{}));changed=true;}});
+    if(changed){try{if(typeof W.normalizeStateV455==='function')W.normalizeStateV455(false);}catch(_){ }try{if(typeof W.invalidatePerformanceIndexesV471==='function')W.invalidatePerformanceIndexesV471('v479_journal');if(typeof W.rebuildPerformanceIndexesV471==='function')W.rebuildPerformanceIndexesV471();}catch(_){ }try{if(typeof W.invalidateAndRefreshFeesV472==='function')W.invalidateAndRefreshFeesV472();}catch(_){ }}
+    return changed;
+  }
+
+  async function fetchOps(){const client=sb();if(!client)return[];const all=[];for(const prefix of READ_PREFIXES){let from=0;while(true){const {data,error}=await client.from('app_state').select('id,data,updated_at').like('id',prefix+'%').order('updated_at',{ascending:true}).range(from,from+999);if(error)throw error;const part=A(data);part.forEach(r=>{if(r&&r.data){r.data._serverAt=r.updated_at||r.data.createdAt;all.push(r);}});if(part.length<1000)break;from+=1000;if(from>20000)break;}}all.sort((a,b)=>S(a.updated_at).localeCompare(S(b.updated_at))||S(a.id).localeCompare(S(b.id)));return all;}
+
+  const seenOps=new Set();
+  let captureChain=Promise.resolve(true),uploadChain=Promise.resolve(true),retryTimer=null,pendingRemote=false,reloading=false,lastActivity=Date.now(),uploadedSinceCompact=0,compactTimer=null,compacting=false;
+  function scheduleRetry(){if(retryTimer)return;retryTimer=setTimeout(async()=>{retryTimer=null;await retryPending();const list=await pendingAll();if(list.length)scheduleRetry();},RETRY_INTERVAL);}
+  function scheduleCompact(){if(compactTimer)clearTimeout(compactTimer);compactTimer=setTimeout(()=>compact(false),COMPACT_IDLE_MS);}
+  async function sendOp(op){
+    try{status('已保存到本机，正在同步云端…','saving',true);await uploadVerified(op);await pendingDelete(op.opId);seenOps.add(op.opId);uploadedSinceCompact++;status('云端已验证保存','ok');hint('云端保存完成');try{if(broadcast)broadcast.postMessage({from:TAB_ID,opId:op.opId});}catch(_){ }scheduleCompact();return true;}
+    catch(e){console.warn('V47.9 upload deferred',e);status('已保存到本机，云端稍后自动重试','local',true);hint('操作已在本机安全保存，正在等待云端重试');scheduleRetry();return true;}
+  }
+  async function capture(reason){
+    lastActivity=Date.now();const op=createDelta(reason||'save');
+    if(!op)return true;if(op.blocked){alert(op.blocked);return false;}
+    if(op.fallback){status('本次变化较大，正在提交完整版本…','saving',true);if(typeof fullSave!=='function')return false;const ok=await fullSave.call(W,'v479_full_'+S(reason));if(ok!==false){resetShadow();status('完整版本已保存','ok');return true;}return false;}
+    try{await pendingPut(op);}catch(e){status('本地断点保存失败','error',true);alert('浏览器本地断点保存失败：'+(e.message||e));return false;}
+    applyOpToShadow(op);
+    uploadChain=uploadChain.catch(()=>true).then(()=>sendOp(op));
+    return uploadChain;
+  }
+  function queue(reason){const p=captureChain=captureChain.catch(()=>true).then(()=>capture(reason||'saveData'));return p;}
+  async function retryPending(){const list=await pendingAll();if(!list.length)return true;for(const op of list){if(!verifyOp(op)){await pendingDelete(op.opId);continue;}const ok=await sendOp(op);if(!ok)return false;}return true;}
+
+  async function applyAllOps(renderAfter){
+    const rows=await fetchOps();let changed=false;
+    for(const row of rows){const op=row.data;if(!verifyOp(op)||seenOps.has(op.opId))continue;if(applyOp(op))changed=true;seenOps.add(op.opId);}
+    const locals=await pendingAll();for(const op of locals){if(applyOp(op))changed=true;}
+    if(changed||renderAfter){resetShadow();try{if(typeof renderSidebar==='function')renderSidebar();if(typeof renderContent==='function')renderContent();if(typeof applyLanguage==='function')applyLanguage();}catch(_){ }}
+    return changed;
+  }
+  function editing(){try{return(typeof isCurrentPageRefreshLocked==='function'&&isCurrentPageRefreshLocked())||(typeof isModalOpen==='function'&&isModalOpen())||(typeof isUserActivelyEditing==='function'&&isUserActivelyEditing());}catch(_){return false;}}
+  async function syncJournal(force){if(!force&&(editing()||reloading)){pendingRemote=true;return false;}pendingRemote=false;try{await applyAllOps(false);return true;}catch(e){console.warn('V47.9 journal sync failed',e);return false;}}
+  async function reloadCheckpoint(reason){
+    if(reloading){pendingRemote=true;return false;}if(!reason&&editing()){pendingRemote=true;return false;}reloading=true;
     try{
-      const rows=await fetchOps();if(!rows.length)return true;if(!force&&rows.length<COMPACT_MIN_OPS)return true;
-      await syncJournal(true);const ids=rows.map(r=>r.id);status('后台正在整理云端数据…','saving',true);
-      if(typeof fullSave!=='function')return false;
-      const ok=await fullSave.call(W,'v478_background_compaction');if(ok===false)return false;
-      await deleteOps(ids);seenOps.clear();await syncJournal(true);resetShadow();uploadedSinceCompact=0;status('后台数据整理完成','ok');return true;
-    }catch(e){console.warn('V47.8 compaction failed',e);return false;}finally{compacting=false;await releaseCompact(owner);}
+      const locals=await pendingAll();
+      const ok=typeof baseLoad==='function'?await baseLoad.call(W):true;
+      resetShadow();seenOps.clear();await applyAllOps(true);for(const op of locals)applyOp(op);resetShadow();hint('已同步最新云端版本并保留本地操作');return ok;
+    }catch(e){console.warn('V47.9 checkpoint reload failed',e);return false;}finally{reloading=false;}
+  }
+
+  async function compactLock(){const client=sb();if(!client)return null;const owner=TAB_ID+'|'+user(),payload={owner,expiresAt:new Date(Date.now()+120000).toISOString()};const {error}=await client.from('app_state').insert({id:COMPACT_LOCK_ID,data:payload,updated_by:owner,updated_at:now()});if(!error)return owner;try{const {data}=await client.from('app_state').select('data,updated_at').eq('id',COMPACT_LOCK_ID).maybeSingle();const exp=Date.parse(data&&data.data&&data.data.expiresAt||data&&data.updated_at||0);if(exp&&exp<Date.now()){await client.from('app_state').delete().eq('id',COMPACT_LOCK_ID);return compactLock();}}catch(_){ }return null;}
+  async function releaseCompact(owner){if(!owner)return;try{const client=sb();if(client)await client.from('app_state').delete().eq('id',COMPACT_LOCK_ID).eq('updated_by',owner);}catch(_){ }}
+  async function deleteRows(ids){const client=sb();if(!client)return;for(let i=0;i<ids.length;i+=50){const {error}=await client.from('app_state').delete().in('id',ids.slice(i,i+50));if(error)throw error;}}
+  async function compact(force){
+    if(compacting||reloading)return false;const pending=await pendingAll();if(pending.length)return false;if(!force&&(Date.now()-lastActivity<COMPACT_IDLE_MS||uploadedSinceCompact<COMPACT_MIN_OPS))return false;
+    const owner=await compactLock();if(!owner)return false;compacting=true;
+    try{const rows=await fetchOps();if(!rows.length)return true;if(!force&&rows.length<COMPACT_MIN_OPS)return true;await applyAllOps(false);if(typeof fullSave!=='function')return false;const ok=await fullSave.call(W,'v479_background_compaction');if(ok===false)return false;await deleteRows(rows.map(r=>r.id));seenOps.clear();resetShadow();uploadedSinceCompact=0;status('后台数据整理完成','ok');return true;}catch(e){console.warn('V47.9 compaction skipped',e);return false;}finally{compacting=false;await releaseCompact(owner);}
   }
 
   let journalChannel=null,journalPoller=null,broadcast=null;
-  function startJournalRealtime(){
+  function startRealtime(){
     const client=sb();if(!client)return;
     try{if(journalChannel)client.removeChannel(journalChannel);}catch(_){ }
-    journalChannel=client.channel('cms_v478_'+TAB_ID).on('postgres_changes',{event:'*',schema:'public',table:'app_state'},payload=>{const id=S(payload&&payload.new&&payload.new.id||payload&&payload.old&&payload.old.id);if(id.startsWith(OP_PREFIX)){const op=payload&&payload.new&&payload.new.data;if(op&&op.tabId!==TAB_ID&&!seenOps.has(op.opId)){if(fastDirty||fastRunning||editing())pendingRemote=true;else{applyOp(op);seenOps.add(op.opId);resetShadow();try{if(typeof renderContent==='function')renderContent();}catch(_){ }}}}else if(id===BASE_ID||id.includes(':v473:manifest')){setTimeout(()=>pullWithJournal('checkpoint'),500);}}).subscribe();
-    if(journalPoller)clearInterval(journalPoller);journalPoller=setInterval(()=>{try{if(document.visibilityState==='visible')syncJournal(false);retryPending();}catch(_){ }},15000);
-    try{if(typeof BroadcastChannel!=='undefined'){if(broadcast)broadcast.close();broadcast=new BroadcastChannel('cms-v478-'+BASE_ID);broadcast.onmessage=e=>{if(e.data&&e.data.from!==TAB_ID)syncJournal(false);};}}catch(_){ }
+    journalChannel=client.channel('cms_v479_'+TAB_ID).on('postgres_changes',{event:'*',schema:'public',table:'app_state'},payload=>{
+      const id=S(payload&&payload.new&&payload.new.id||payload&&payload.old&&payload.old.id);
+      if(READ_PREFIXES.some(p=>id.startsWith(p))){const op=payload&&payload.new&&payload.new.data;if(op&&op.tabId!==TAB_ID&&!seenOps.has(op.opId)){op._serverAt=payload&&payload.new&&payload.new.updated_at||op.createdAt;if(editing()||reloading)pendingRemote=true;else{if(applyOp(op)){resetShadow();try{if(typeof renderContent==='function')renderContent();}catch(_){ }}seenOps.add(op.opId);}}}
+      else if(id===BASE_ID||id.includes(':v473:manifest'))setTimeout(()=>reloadCheckpoint('manifest'),350);
+    }).subscribe(statusCode=>{if(statusCode==='SUBSCRIBED')hint('有序实时同步已开启');else if(statusCode==='CHANNEL_ERROR'||statusCode==='TIMED_OUT')hint('实时同步异常，已启用轮询');});
+    if(journalPoller)clearInterval(journalPoller);journalPoller=setInterval(()=>{try{if(document.visibilityState==='visible'){syncJournal(false);retryPending();}}catch(_){ }},15000);
+    try{if(typeof BroadcastChannel!=='undefined'){if(broadcast)broadcast.close();broadcast=new BroadcastChannel('cms-v479-'+BASE_ID);broadcast.onmessage=e=>{if(e.data&&e.data.from!==TAB_ID)syncJournal(false);};}}catch(_){ }
   }
-  async function loadWithJournal(){const ok=typeof baseLoad==='function'?await baseLoad.apply(this,arguments):true;await syncJournal(true);const locals=pending();locals.forEach(op=>applyOp(op));resetShadow();await retryPending();startJournalRealtime();return ok;}
-  async function pullWithJournal(reason){if(fastDirty||fastRunning||localPendingCount()){pendingRemote=true;return false;}const ok=typeof basePull==='function'?await basePull.call(W,reason):true;seenOps.clear();await syncJournal(true);resetShadow();return ok;}
-  function startRealtimeWithJournal(){try{if(typeof baseStartRealtime==='function')baseStartRealtime.apply(this,arguments);}catch(_){ }startJournalRealtime();}
+  async function load(){await migrateV478Pending();const ok=typeof baseLoad==='function'?await baseLoad.apply(this,arguments):true;resetShadow();seenOps.clear();await applyAllOps(true);await retryPending();startRealtime();return ok;}
+  async function pull(reason){if(editing()){pendingRemote=true;return false;}return reloadCheckpoint(reason||'pull');}
 
-  W.queueSaveV478=queue;
-  W.queueSaveV473=W.queueSaveV455=W.queueSystemSaveV4513=W.queueCloudPersistV435=queue;
+  W.queueSaveV479=queue;
+  W.queueSaveV478=W.queueSaveV473=W.queueSaveV455=W.queueSystemSaveV4513=W.queueCloudPersistV435=queue;
   W.saveData=function(reason){return queue(reason||'saveData');};
   W.saveCloudState=function(reason){return queue(reason||'saveCloudState');};
   W.saveCloudStateV45=W.saveCloudStateV44=W.saveCloudStateV442=W.saveCloudState;
-  W.flushPendingSaveV478=flushFast;
-  W.flushPendingSaveV473=W.flushPendingSaveV471=flushFast;
-  W.saveAndRenderContentKeepState=function(){let ui=null;try{ui=typeof W.captureCurrentUiStateV4513==='function'?W.captureCurrentUiStateV4513():typeof captureCurrentUiState==='function'?captureCurrentUiState():{scrollY:scrollY};}catch(_){ui={scrollY:scrollY};}try{if(typeof renderSidebar==='function')renderSidebar();if(typeof renderContent==='function')renderContent();if(typeof applyLanguage==='function')applyLanguage();if(typeof W.restoreCurrentUiStateV4513==='function')setTimeout(()=>W.restoreCurrentUiStateV4513(ui),0);else setTimeout(()=>scrollTo(0,ui&&ui.scrollY||0),0);}catch(_){ }return queue('save_and_render');};
-  W.loadCloudState=loadWithJournal;
-  W.pullCloudStateAndRefresh=pullWithJournal;
-  W.startRealtimeSync=startRealtimeWithJournal;
-  W.compactCloudJournalV478=()=>compact(true);
-  W.retryPendingSavesV478=retryPending;
-  W.__v478Status=()=>({version:VERSION,shadowReady:!!shadow,dirty:fastDirty,running:!!fastRunning,pendingLocal:localPendingCount(),pendingRemote,uploadedSinceCompact,compacting,seenOps:seenOps.size});
+  W.flushPendingSaveV479=()=>captureChain.then(()=>uploadChain);
+  W.flushPendingSaveV478=W.flushPendingSaveV473=W.flushPendingSaveV471=W.flushPendingSaveV479;
+  W.saveAndRenderContentKeepState=function(){let ui=null;try{ui=typeof W.captureCurrentUiStateV4513==='function'?W.captureCurrentUiStateV4513():{scrollY:scrollY};}catch(_){ui={scrollY:scrollY};}try{if(typeof renderSidebar==='function')renderSidebar();if(typeof renderContent==='function')renderContent();if(typeof applyLanguage==='function')applyLanguage();if(typeof W.restoreCurrentUiStateV4513==='function')setTimeout(()=>W.restoreCurrentUiStateV4513(ui),0);}catch(_){ }return queue('save_and_render');};
+  W.loadCloudState=load;W.pullCloudStateAndRefresh=pull;W.startRealtimeSync=startRealtime;
+  W.retryPendingSavesV479=retryPending;W.compactCloudJournalV479=()=>compact(true);
+  W.__v479Status=async()=>({version:VERSION,tab:TAB_ID,shadowReady:!!shadow,pendingLocal:(await pendingAll()).length,pendingRemote,reloading,uploadedSinceCompact,compacting,seenOps:seenOps.size});
   try{saveData=W.saveData;saveCloudState=W.saveCloudState;loadCloudState=W.loadCloudState;pullCloudStateAndRefresh=W.pullCloudStateAndRefresh;startRealtimeSync=W.startRealtimeSync;}catch(_){ }
 
-  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){snapshotDirtyLocal('visibility_hidden');retryPending();}else{retryPending();syncJournal(false);}});
-  W.addEventListener('beforeunload',()=>{snapshotDirtyLocal('beforeunload');});
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){retryPending();if(pendingRemote){pendingRemote=false;syncJournal(false);}}});
   W.addEventListener('online',()=>{retryPending();syncJournal(false);});
   document.addEventListener('pointerdown',()=>{lastActivity=Date.now();},true);
-
-  function setVersion(){try{document.title='Sistema Inteligente de Monitoramento de Contêineres V47.8';document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.[0-7]|Workflow Reference Integrity|Fast Journal Save/i.test(S(el.textContent)))el.textContent=VERSION;});}catch(_){ }}
+  function setVersion(){try{document.title='Sistema Inteligente de Monitoramento de Contêineres V47.9';document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.[0-8]|Fast Journal Save|Workflow Reference Integrity|Ordered Local-First Journal/i.test(S(el.textContent)))el.textContent=VERSION;});}catch(_){ }}
   const oldRender=W.renderContent;if(typeof oldRender==='function'){W.renderContent=function(){const r=oldRender.apply(this,arguments);setTimeout(setVersion,0);return r;};try{renderContent=W.renderContent;}catch(_){ }}
-  setVersion();if(coreScore(state())>0&&!shadow)resetShadow();document.addEventListener('DOMContentLoaded',()=>{setTimeout(()=>{setVersion();if(coreScore(state())>0&&!shadow)resetShadow();retryPending();startJournalRealtime();},700);});
-  setTimeout(()=>{if(coreScore(state())>0&&!shadow)resetShadow();retryPending();startJournalRealtime();},2500);
-  scheduleCompact();
-  console.log(VERSION+' loaded: routine operations use atomic delta rows; local pending queue survives browser close; full snapshots compact in background.');
+  setVersion();if(coreScore(state())>0)resetShadow();document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>{setVersion();if(!shadow&&coreScore(state())>0)resetShadow();migrateV478Pending().then(retryPending);startRealtime();},600));setTimeout(()=>{if(!shadow&&coreScore(state())>0)resetShadow();migrateV478Pending().then(retryPending);startRealtime();},2200);scheduleCompact();
+  console.log(VERSION+' loaded: every operation is captured immediately, persisted to IndexedDB, cloud-verified in order, and protected from stale snapshot rollback.');
 })();
 </script>
 
