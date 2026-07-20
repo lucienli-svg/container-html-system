@@ -4,998 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
   <title>Sistema Inteligente de Monitoramento de Contêineres V45.5</title>
-  <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js">
-
-    /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
-    function v42SeqNum(v){ const n=parseInt(String(v||'').replace(/[^0-9]/g,''),10); return isNaN(n)?null:n; }
-    function v42IsSupplementBatch(batch){ return String(batch||'').trim().toUpperCase().startsWith('BX'); }
-    function v42BatchRule(batch){
-      const b=String(batch||'').trim().toUpperCase();
-      if(!b) return {model:'未知',series:'OTHER',total:0,welding:[],assembly:[]};
-      if(b.startsWith('BHC')) return {model:'B01-PHEV四驱',series:'B',total:22,welding:[1,2,3,4,5,6,7,8],assembly:[8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]};
-      if(b.startsWith('BHE')) return {model:'B01-PHEV两驱',series:'B',total:22,welding:[1,2,3,4,5,6,7,8],assembly:[8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]};
-      if(b.startsWith('BHF')) return {model:'B03-PHEV四驱',series:'B',total:23,welding:[1,2,3,4,5,6,7,8,9,10],assembly:[8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]};
-      if(b.startsWith('BF')) return {model:'P11',series:'P',total:15,welding:[1,2,3,4,5,6],assembly:[5,6,7,8,9,10,11,12,13,14,15]};
-      if(b.startsWith('BP') || b.startsWith('BHP')) return {model:'P3012',series:'P',total:13,welding:[1,2,3,4,5],assembly:[5,6,7,8,9,10,11,12,13]};
-      return {model:'未配置',series:'OTHER',total:0,welding:[],assembly:[]};
-    }
-    function v42RecommendedDock(batch, seq){
-      const b=String(batch||'').toUpperCase(); const n=v42SeqNum(seq); if(!n) return '';
-      if(b.startsWith('BHC') || b.startsWith('BHE')){ if(n>=1&&n<=7) return '120B'; if(n===8) return '120B→140B'; if(n>=9&&n<=22) return '140B'; }
-      if(b.startsWith('BHF')){ if(n>=1&&n<=7) return '120B'; if(n>=8&&n<=10) return '120B→140B'; if(n>=11&&n<=23) return '140B'; }
-      if(b.startsWith('BF')){ if(n>=1&&n<=4) return '120B'; if(n>=5&&n<=6) return '120B→132'; if(n>=13&&n<=14) return '140C'; if((n>=7&&n<=12)||n===15) return '132'; }
-      if(b.startsWith('BP') || b.startsWith('BHP')){ if(n>=1&&n<=4) return '120B'; if(n===5) return '120B→132'; if(n>=11&&n<=12) return '140C'; if((n>=6&&n<=10)||n===13) return '132'; }
-      return '';
-    }
-    function v42VehicleTypeFromOrigin(origin){ const o=String(origin||'').toUpperCase(); return (o.includes('RIO') || o.includes('IRA')) ? 'SIDER' : 'CONTAINER'; }
-    function v42TaskFor(batch, seq){ const s=String(seq||'').trim(); return transportTasks.find(t=>String(t.batch||'').toUpperCase()===String(batch||'').toUpperCase() && String(t.containerSeq||'').trim()===s && t.to==='工厂' && !t.cancelled); }
-    function v42ChipState(task){
-      if(!task) return 'none';
-      const st=getOpStatus(task);
-      if(st==='unloaded' || task.status==='completed') return 'done';
-      if(st==='unloading') return 'unload';
-      if(st==='inside_waiting') return 'wait';
-      if(st==='outside_parking') return 'gate';
-      if(task.status==='in_transit') return 'transit';
-      return 'none';
-    }
-    function v42StatusText(state){ return {done:'已完成',wait:'工厂内等待',gate:'已到门口',unload:'卸货中',transit:'运输中',none:'未发运',borrow:'异常借料'}[state]||state; }
-    function v42GetBoardDates(){ const t=getTodayStr(); const d=new Date(t+'T00:00:00'); d.setDate(d.getDate()+1); return [t, `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`]; }
-    function v42DateLabel(d,i){ return `${fmtDate(d)} ${i===0?'今日':'明日'}`; }
-    function v42BuildBatchGroups(area, date){
-      const areaKey=area==='Welding'?'welding':'assembly';
-      const groups={}; const groupOrders={};
-      productionPlans.filter(p=>p.date===date && ((String(p.area||'').toLowerCase()===area.toLowerCase()) || (p.planMode==='schedule' && productionPlanAreaFromWorkshop(p.workshop)===area))).forEach(p=>{
-        const batch=String(p.batch||'').trim().toUpperCase(); if(!batch || v42IsSupplementBatch(batch)) return;
-        groups[batch]=groups[batch]||new Set();
-        groupOrders[batch]=Math.min(groupOrders[batch]||999999, getProductionPlanOrder(p));
-        if(p.seq) groups[batch].add(v42SeqNum(p.seq));
-        if(p.planMode==='schedule'){ const rule=v42BatchRule(batch); (rule[area==='Welding'?'welding':'assembly']||[]).forEach(n=>groups[batch].add(n)); }
-      });
-      transportTasks.filter(t=>t.to==='工厂' && !t.cancelled && (getDatePart(t.estimatedArrival||'')===date || getDatePart(t.gateArrivalTime||'')===date || getDatePart(t.waitingAreaTime||'')===date || getDatePart(t.unloadStartTime||'')===date || getDatePart(t.unloadFinishTime||'')===date)).forEach(t=>{
-        const batch=String(t.batch||'').trim().toUpperCase(); const seq=v42SeqNum(t.containerSeq); if(!batch || !seq || v42IsSupplementBatch(batch)) return;
-        const rule=v42BatchRule(batch); const seqs=rule[areaKey]||[]; if(seqs.includes(seq)){ groups[batch]=groups[batch]||new Set(); groups[batch].add(seq); }
-      });
-      Object.keys(groups).forEach(batch=>{ const rule=v42BatchRule(batch); const arr=rule[areaKey]||[]; if(arr.length){ groups[batch]=new Set(arr); } });
-      return Object.entries(groups).sort((a,b)=>(groupOrders[a[0]]||999999)-(groupOrders[b[0]]||999999) || a[0].localeCompare(b[0],'zh-CN',{numeric:true})).map(([batch,set])=>({batch,planOrder:groupOrders[batch]||999999,seqs:[...set].filter(Boolean).sort((x,y)=>x-y)}));
-    }
-    function v42RenderBatchRow(group){
-      let done=0, total=group.seqs.length||1;
-      const sider=[], cont=[];
-      group.seqs.forEach(seq=>{
-        const task=v42TaskFor(group.batch,seq); const state=v42ChipState(task); if(state==='done') done++;
-        const type=task?v42VehicleTypeFromOrigin(task.from):'CONTAINER';
-        const title=`${group.batch} #${seq}\n${v42StatusText(state)}\n出发地：${task?.from||'-'}\n推荐卸货口：${v42RecommendedDock(group.batch,seq)}`;
-        const chip=`<span class="v42-chip ${state}" title="${title}">${seq}</span>`;
-        if(type==='SIDER') sider.push(chip); else cont.push(chip);
-      });
-      const pct=Math.round(done/total*100);
-      return `<tr><td><span style="display:inline-block;background:rgba(255,255,255,.12);border-radius:999px;padding:2px 7px;margin-right:6px;font-size:10px;">#${group.planOrder===999999?'-':group.planOrder}</span><span class="v42-batch-name">${group.batch}</span><div style="font-size:10px;color:#cbd5e1;margin-top:3px;">${v42BatchRule(group.batch).model}</div></td><td><div class="v42-chip-wrap">${sider.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div class="v42-chip-wrap">${cont.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div style="font-weight:900;">${done}/${total}</div><div class="v42-progress"><span style="width:${pct}%"></span></div></td></tr>`;
-    }
-    function v42PanelKpis(area){
-      const dates=v42GetBoardDates(); let rows=[]; dates.forEach(d=>v42BuildBatchGroups(area,d).forEach(g=>g.seqs.forEach(seq=>rows.push(v42TaskFor(g.batch,seq)))));
-      const c={none:0,gate:0,wait:0,unload:0,done:0,transit:0}; rows.forEach(t=>{const s=v42ChipState(t); c[s] = (c[s]||0)+1;});
-      return `<div class="v42-panel-kpis"><div class="v42-status-card v42-status-pending"><div class="num">${c.none||0}</div><div class="lab">未发运</div></div><div class="v42-status-card v42-status-gate"><div class="num">${c.gate||0}</div><div class="lab">门口</div></div><div class="v42-status-card v42-status-wait"><div class="num">${c.wait||0}</div><div class="lab">厂内等待</div></div><div class="v42-status-card v42-status-unload"><div class="num">${c.unload||0}</div><div class="lab">卸货中</div></div><div class="v42-status-card v42-status-done"><div class="num">${c.done||0}</div><div class="lab">已完成</div></div></div>`;
-    }
-    function v42RenderProductionPanel(area){
-      const dates=v42GetBoardDates(); const cls=area==='Welding'?'welding':'assembly'; const icon=area==='Welding'?'🔧':'🚚';
-      return `<div class="v42-panel ${cls}"><div class="v42-panel-head"><div class="v42-panel-name">${icon} ${area.toUpperCase()}</div><div style="font-size:12px;opacity:.75;">生产保供进度</div></div>${v42PanelKpis(area)}${dates.map((d,i)=>{const groups=v42BuildBatchGroups(area,d);return `<div class="v42-date-block"><div class="v42-date-title">📅 ${v42DateLabel(d,i)} <span style="margin-left:auto;font-size:11px;opacity:.7;">${groups.length} batches</span></div>${groups.length?`<table class="v42-batch-table"><thead><tr><th>BATCH</th><th>SIDER</th><th>CONTAINER</th><th>完成率</th></tr></thead><tbody>${groups.map(v42RenderBatchRow).join('')}</tbody></table>`:`<div style="padding:14px;opacity:.65;">暂无生产计划/到箱计划</div>`}</div>`}).join('')}<div class="v42-legend"><span><i class="v42-dot" style="background:#16a34a"></i>已完成</span><span><i class="v42-dot" style="background:#2563eb"></i>厂内等待</span><span><i class="v42-dot" style="background:#eab308"></i>门口</span><span><i class="v42-dot" style="background:#0ea5e9"></i>卸货中</span><span><i class="v42-dot" style="background:#f97316"></i>运输中</span><span><i class="v42-dot" style="background:#dc2626"></i>未发运</span></div></div>`;
-    }
-    function v42RenderProductionBoard(){ return `<div class="v42-section-title"><h3>🏭 生产保供看板</h3><span class="v42-mini-note">按 Welding / Assembly 展示今日与明日批次到货进度，区分 SIDER 与 CONTAINER</span></div><div class="v42-board">${v42RenderProductionPanel('Welding')}${v42RenderProductionPanel('Assembly')}</div>`; }
-    const v42OriginalRenderDashboard = renderDashboard;
-    renderDashboard = function(container){
-      let activeContainers=containers.filter(isOperationalVisibleContainer);
-      let total=activeContainers.length;
-      let inTransit=transportTasks.filter(t=>t.status==='in_transit' && isOperationalVisibleTask(t)).length;
-      let stock={'港口':0,'RG堆场':0,'Rio Claro':0,'IRA库房':0,'工厂':0};
-      let producedCount = containers.filter(c => isProducedCompletedContainerId(c.id)).length;
-      activeContainers.forEach(c=>{ let loc=getContainerLocation(c.id); if(loc==='已生产') return; stock[loc]=(stock[loc]||0)+1; });
-      let dailyReport = getDailyOperationReport(getTodayStr());
-      let totalAbnormalStorage = cachedFeeData.totalAbnormalStorage || 0;
-      let totalDemurrage = cachedFeeData.totalDemurrage || 0;
-      let storageWarningCount = cachedFeeData.storageWarningList.length;
-      let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
-      container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.12</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
-        <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
-        <div class="v42-kpi-grid">
-          <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
-          <div class="v42-kpi danger" onclick="showDailyReportDetail('todayDemurrage')"><div class="v42-kpi-num">$ ${dailyReport.todayDemurrage.toFixed(2)}</div><div class="v42-kpi-label">今日新增滞箱费</div></div>
-          <div class="v42-kpi" onclick="showDailyReportDetail('clearanceCompleted')"><div class="v42-kpi-num">${dailyReport.clearanceCompleted}</div><div class="v42-kpi-label">今日清关完成</div></div>
-          <div class="v42-kpi" onclick="showDailyReportDetail('plannedPickup')"><div class="v42-kpi-num">${dailyReport.plannedPickup}</div><div class="v42-kpi-label">今日计划提箱</div></div>
-          <div class="v42-kpi green" onclick="showDailyReportDetail('actualPickup')"><div class="v42-kpi-num">${dailyReport.actualPickup}</div><div class="v42-kpi-label">今日实际提箱</div></div>
-          <div class="v42-kpi" onclick="showDailyReportDetail('clearedPendingPickup')"><div class="v42-kpi-num">${dailyReport.clearedPendingPickup}</div><div class="v42-kpi-label">已清关待提箱</div></div>
-          <div class="v42-kpi warn" onclick="showDailyReportDetail('clearedPendingPickupAbnormal')"><div class="v42-kpi-num">${dailyReport.clearedPendingPickupAbnormal}</div><div class="v42-kpi-label">异常费待提箱</div></div>
-          <div class="v42-kpi" onclick="jumpTo('transportTasks')"><div class="v42-kpi-num">${inTransit}</div><div class="v42-kpi-label">运输中集装箱</div></div>
-          <div class="v42-kpi warn"><div class="v42-kpi-num">R$ ${totalAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">累计异常堆存费</div></div>
-          <div class="v42-kpi danger"><div class="v42-kpi-num">$ ${totalDemurrage.toFixed(2)}</div><div class="v42-kpi-label">累计滞箱费</div></div>
-          <div class="v42-kpi warn" onclick="showWarningDetail('storage')"><div class="v42-kpi-num">${storageWarningCount}</div><div class="v42-kpi-label">异常堆存费预警</div></div>
-          <div class="v42-kpi danger" onclick="showWarningDetail('demurrage')"><div class="v42-kpi-num">${demurrageWarningCount}</div><div class="v42-kpi-label">滞箱费预警</div></div>
-        </div>
-        <div class="card"><div class="card-title">📍 库存分布</div><div class="v42-stock-strip">${Object.entries(stock).map(([k,v])=>`<div class="v42-stock" onclick="showLocationStockDetail('${k}')"><div class="n">${v}</div><div class="l">${k}</div></div>`).join('')}<div class="v42-stock" onclick="showLocationStockDetail('已生产')"><div class="n">${producedCount}</div><div class="l">已生产</div></div></div></div>
-        ${v42RenderProductionBoard()}
-      `;
-    };
-    const v42OriginalPublishDynamicSingle = window.publishDynamicSingle;
-    window.publishDynamicSingle = function(id, fromLoc){
-      try{
-        const cont=containers.find(c=>c.id===id);
-        const dest=document.getElementById(`dynDest_${id}`)?.value;
-        const dockEl=document.getElementById(`dynDock_${id}`);
-        if(dest==='工厂' && dockEl && !String(dockEl.value||'').trim() && cont){
-          const rec=v42RecommendedDock(cont.batch, cont.containerSeq);
-          if(rec) dockEl.value=rec;
-        }
-      }catch(e){ console.warn('V42 auto dock skipped', e); }
-      return v42OriginalPublishDynamicSingle ? v42OriginalPublishDynamicSingle(id, fromLoc) : undefined;
-    };
-
-  
-
-  /* ==================== V42.22 工厂日历联动生产计划维护 ====================
-     修复：生产计划维护必须先判断工厂日历。休息日/法定假日不再强制维护，默认不可新增排产；特殊加班按工作日处理。
-  */
-  function v4222IsProductionRequiredDate(date, idx){
-    return idx < 2 && isFactoryWorkday(date);
-  }
-  function v4222ProductionDayStatusText(date, idx){
-    if(!isFactoryWorkday(date)) return getFactoryDayTypeLabel(getFactoryDayType(date)) + '｜不排产';
-    if(idx === 0) return '今天 必填';
-    if(idx === 1) return '明天 必填';
-    return '后天 可选';
-  }
-  function v4222ProductionDayStatusColor(date, idx){
-    if(!isFactoryWorkday(date)) return '#f56c6c';
-    return idx < 2 ? '#f56c6c' : '#909399';
-  }
-  function v4222OpenAddProductionPlanModal(date, workshop){
-    if(date && !isFactoryWorkday(date)){
-      alert(`${fmtDate(date)} 是${getFactoryDayTypeLabel(getFactoryDayType(date))}，不能维护生产计划。如当天需要生产，请先到“工厂日历”设置为特殊加班。`);
-      return;
-    }
-    if(typeof window.__originalOpenAddProductionPlanModalV4222 === 'function'){
-      window.__originalOpenAddProductionPlanModalV4222(date, workshop);
-    }
-  }
-  if(typeof window.openAddProductionPlanModal === 'function' && !window.__originalOpenAddProductionPlanModalV4222){
-    window.__originalOpenAddProductionPlanModalV4222 = window.openAddProductionPlanModal;
-    window.openAddProductionPlanModal = v4222OpenAddProductionPlanModal;
-  }
-  // 覆盖必填缺失检查：仅今天/明天且为工作日/特殊加班时才强制维护。
-  getRequiredPlanMissingDates = function(baseDate){
-    const dates = productionPlanBaseDates(baseDate).slice(0,2);
-    return dates.filter((d,idx) => isFactoryWorkday(d) && getScheduleProductionPlans(d).length===0);
-  };
-  // 覆盖生产计划表格渲染：休息日/假日显示为灰红提示，不再标记“必填计划未维护”。
-  renderProductionPlanGrid = function(baseDate){
-    const dates = productionPlanBaseDates(baseDate);
-    const workshops = productionPlanWorkshops();
-    let html = '<div class="table-wrapper"><table class="data-table prod-plan-sheet"><thead><tr><th style="width:140px;">车间/产线</th>' + dates.map((d,i)=>{
-      const bs = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='welding') : productionPlanTotalsFor(d);
-      const gaB = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b') : productionPlanTotalsFor(d,'assembly_b');
-      const gaP = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_p') : productionPlanTotalsFor(d,'assembly_p');
-      const ga = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b' || p.workshop==='assembly_p') : {total:(gaB.total||0)+(gaP.total||0)};
-      return `<th>${fmtDate(d)}<br><span style="font-size:11px;color:${v4222ProductionDayStatusColor(d,i)};">${v4222ProductionDayStatusText(d,i)}</span><div class="prod-day-total" style="line-height:1.8;"><span class="prod-chip gray">BS ${bs.total||0}</span><span class="prod-chip gray">GA ${ga.total||0}</span><span class="prod-chip b">GA-B ${gaB.total||0}</span><span class="prod-chip p">GA-P ${gaP.total||0}</span></div></th>`;
-    }).join('') + '</tr></thead><tbody>';
-
-    workshops.forEach(ws=>{
-      const ws3 = typeof v428Totals === 'function' ? v428Totals(dates, p=>p.workshop===ws.id) : productionPlanTotalsForDates(dates,p=>p.workshop===ws.id);
-      html += `<tr><td class="prod-plan-workshop"><div>${ws.label}</div><div style="font-size:12px;color:#606266;margin-top:8px;line-height:1.8;"><span class="prod-chip gray">合计 ${ws3.total||0}</span><br><span class="prod-chip b">B ${ws3.b||0}</span><br><span class="prod-chip p">P ${ws3.p||0}</span>${ws3.other?`<br><span class="prod-chip gray">其他 ${ws3.other}</span>`:''}</div></td>`;
-      dates.forEach((d,idx)=>{
-        const plans = getProductionPlansForCell(d, ws.id);
-        const isWorkday = isFactoryWorkday(d);
-        const emptyRequired = v4222IsProductionRequiredDate(d,idx) && plans.length === 0;
-        const cellTotal = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop===ws.id) : productionPlanTotalsFor(d,ws.id);
-        html += `<td class="${!isWorkday?'prod-nonworkday-cell':''}"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><span style="font-size:12px;color:#606266;font-weight:700;">${ws.label}</span><span class="prod-chip gray">${cellTotal.total||0} 台</span></div><div class="prod-plan-list">`;
-        if(plans.length){
-          html += plans.map(p=>`<div class="prod-plan-item">
-            <div class="prod-plan-main"><span class="prod-order-badge">#${getProductionPlanOrder(p)===999999?'-':getProductionPlanOrder(p)}</span><span class="prod-batch-code">${p.batch||'-'}</span><span class="prod-qty">${Number(p.plannedQty||0)} 台</span><div class="prod-meta">${productionBatchSeries(p.batch)}系列｜实际 ${Number(p.actualQty||0)}｜${isProductionPlanConfirmed(p)?'已确认':'未确认'}${p.remark?'｜'+p.remark:''}</div></div>
-            <div class="prod-plan-actions"><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','up')">↑</button><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','down')">↓</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button><button class="btn btn-sm" onclick="copyProductionPlan('${p.id}')">复制</button><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan('${p.id}')">删除</button></div>
-          </div>`).join('');
-        }else if(!isWorkday){
-          html += `<div class="prod-empty-cell" style="border-color:#fbc4c4;background:#fef0f0;color:#9b1c1c;">${getFactoryDayTypeLabel(getFactoryDayType(d))}<br>不需要维护计划</div>`;
-        }else{
-          html += `<div class="prod-empty-cell ${emptyRequired?'required':''}">${emptyRequired?'必填计划未维护':'可选未维护'}</div>`;
-        }
-        html += `</div>${isWorkday?`<button class="btn btn-sm btn-success" style="margin-top:8px;" onclick="openAddProductionPlanModal('${d}','${ws.id}')">+ 新增计划</button>`:`<button class="btn btn-sm" style="margin-top:8px;" onclick="currentMenu='factoryCalendar';renderSidebar();renderContent();">设置加班后排产</button>`}</td>`;
-      });
-      html += '</tr>';
-    });
-    html += '</tbody></table></div>';
-    const el = document.getElementById('prePlanGrid');
-    if(el) el.innerHTML = html;
-  };
-
-
-
-  /* ==================== V43.0 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
-     问题：提箱计划从“港口→工厂”改为“港口→RG堆场/Rio Claro/IRA”后，旧工厂到货监控任务没有同步撤回，导致动态运输计划发布时提示“已有未完成工厂到货计划”。
-     修复：编辑提箱计划时，如目的地从工厂改为非工厂，且门岗/卸货口尚未开始操作，则自动取消旧工厂监控任务；如已开始门岗/卸货执行，则禁止改为非工厂。
-  */
-  (function(){
-    function v4227IsFactoryDestination(dest){
-      const d = String(dest || '').trim();
-      return d === '工厂' || d.toLowerCase() === 'factory' || d.toUpperCase() === 'GWM';
-    }
-
-    function v4227FindFactoryTaskByPlan(plan){
-      if(!plan) return null;
-      return (transportTasks || []).find(t =>
-        t &&
-        t.to === '工厂' &&
-        !t.cancelled &&
-        (
-          String(t.sourcePlanId || '') === String(plan.id || '') ||
-          (String(t.containerId || '') === String(plan.containerId || '') && String(t.source || '') === 'pickupPlan') ||
-          (String(t.containerId || '') === String(plan.containerId || '') && String(t.estimatedArrival || '') === String(plan.arrivalDate || ''))
-        )
-      ) || null;
-    }
-
-    function v4227CancelFactoryTask(task, reason){
-      if(!task) return false;
-      if(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(task)){
-        return false;
-      }
-      task.cancelled = true;
-      task.status = 'cancelled';
-      task.operationStatus = 'cancelled';
-      task.cancelReason = reason || '提箱计划目的地变更，自动撤回工厂到货计划';
-      task.cancelTime = new Date().toISOString();
-      task.cancelUser = (currentUser && (currentUser.name || currentUser.email)) || '';
-      return true;
-    }
-
-    function v4227EnsureOrUpdateFactoryTask(plan){
-      if(typeof v4217EnsureFactoryReceivingTaskFromPickupPlan === 'function'){
-        return v4217EnsureFactoryReceivingTaskFromPickupPlan(plan);
-      }
-      return null;
-    }
-
-    function v4227SyncPickupPlanDestination(plan, oldDestination){
-      if(!plan) return true;
-      const wasFactory = v4227IsFactoryDestination(oldDestination);
-      const nowFactory = v4227IsFactoryDestination(plan.destination);
-      const oldTask = v4227FindFactoryTaskByPlan(plan);
-
-      if(wasFactory && !nowFactory && oldTask){
-        if(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(oldTask)){
-          alert('该集装箱已经进入门岗/卸货口执行流程，不能把目的地从工厂改为其他地点。');
-          plan.destination = oldDestination;
-          return false;
-        }
-        v4227CancelFactoryTask(oldTask, '提箱计划目的地从工厂改为' + (plan.destination || '-'));
-      }
-
-      if(nowFactory){
-        const task = v4227EnsureOrUpdateFactoryTask(plan);
-        if(task){
-          task.cancelled = false;
-          task.to = '工厂';
-          task.from = '港口';
-          task.estimatedArrival = plan.arrivalDate || task.estimatedArrival || '';
-          task.unloadingDock = plan.unloadingDock || task.unloadingDock || '';
-          task.carrier = plan.carrier || task.carrier || 'RG';
-          if(!task.operationStatus || task.operationStatus === 'cancelled') task.operationStatus = 'not_arrived';
-          if(!task.status || task.status === 'cancelled') task.status = plan.status === 'confirmed' ? 'in_transit' : 'planned';
-        }
-      }
-      return true;
-    }
-
-    window.modifyPlan = function(planId){
-      let plan = pickupPlans.find(p => p.id === planId);
-      if(!plan) return;
-
-      const old = {
-        arrivalDate: plan.arrivalDate,
-        carrier: plan.carrier,
-        destination: plan.destination,
-        unloadingDock: plan.unloadingDock,
-        status: plan.status,
-        needReconfirm: plan.needReconfirm
-      };
-
-      const newArrival = prompt('修改到货时间（格式：YYYY-MM-DDTHH:mm 或 YYYY/MM/DD HH:mm）', plan.arrivalDate || '');
-      if(newArrival === null) return;
-      const newCarrier = prompt('修改运输公司(RG/JSL)', plan.carrier || 'RG');
-      if(newCarrier === null) return;
-      const newDest = prompt('修改目的地（RG堆场/Rio Claro/IRA库房/工厂）', plan.destination || '');
-      if(newDest === null) return;
-      const newDock = prompt('修改卸货口（目的地为工厂时必填）', plan.unloadingDock || '');
-      if(newDock === null) return;
-
-      if(v4227IsFactoryDestination(newDest) && !String(newDock || '').trim()){
-        alert('目的地为工厂时，卸货口必填');
-        return;
-      }
-
-      if(newArrival) plan.arrivalDate = newArrival;
-      if(newCarrier && (newCarrier === 'RG' || newCarrier === 'JSL')) plan.carrier = newCarrier;
-      if(newDest) plan.destination = newDest;
-      plan.unloadingDock = String(newDock || '').trim();
-      plan.status = 'pending';
-      plan.needReconfirm = true;
-      plan.updatedAt = new Date().toISOString();
-      plan.updatedBy = (currentUser && (currentUser.name || currentUser.email)) || '';
-
-      const ok = v4227SyncPickupPlanDestination(plan, old.destination);
-      if(!ok){
-        plan.arrivalDate = old.arrivalDate;
-        plan.carrier = old.carrier;
-        plan.destination = old.destination;
-        plan.unloadingDock = old.unloadingDock;
-        plan.status = old.status;
-        plan.needReconfirm = old.needReconfirm;
-        return;
-      }
-
-      const viewState = typeof capturePickupPlanViewState === 'function' ? capturePickupPlanViewState() : null;
-      saveData();
-      if(typeof refreshPickupPlanTablesKeepState === 'function') refreshPickupPlanTablesKeepState(viewState);
-      else renderContent();
-      alert('计划已修改，关联的门岗/卸货口计划已同步更新，需运输公司重新确认。');
-    };
-
-    // 页面/数据加载后做一次清理：非工厂提箱计划不应保留未开始的工厂监控任务。
-    window.v4227CleanupStaleFactoryTasks = function(){
-      let changed = false;
-      (pickupPlans || []).forEach(plan => {
-        if(!plan || v4227IsFactoryDestination(plan.destination)) return;
-        const task = v4227FindFactoryTaskByPlan(plan);
-        if(task && !(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(task))){
-          if(v4227CancelFactoryTask(task, '提箱计划目的地不是工厂，自动清理残留工厂到货计划')) changed = true;
-        }
-      });
-      if(changed) saveData();
-      return changed;
-    };
-
-    const oldRenderGateOnly = window.renderFactoryGateOnly;
-    if(typeof oldRenderGateOnly === 'function'){
-      window.renderFactoryGateOnly = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before gate skipped', e); }
-        return oldRenderGateOnly.apply(this, arguments);
-      };
-    }
-    const oldRenderDock = window.renderDockMonitoring;
-    if(typeof oldRenderDock === 'function'){
-      window.renderDockMonitoring = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dock skipped', e); }
-        return oldRenderDock.apply(this, arguments);
-      };
-    }
-
-    // 动态运输计划发布前也先清理一次，避免旧残留任务继续阻挡新计划。
-    const oldPublishDynamicSingle = window.publishDynamicSingle;
-    if(typeof oldPublishDynamicSingle === 'function'){
-      window.publishDynamicSingle = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic publish skipped', e); }
-        return oldPublishDynamicSingle.apply(this, arguments);
-      };
-    }
-    const oldBatchPublishDynamic = window.batchPublishDynamic;
-    if(typeof oldBatchPublishDynamic === 'function'){
-      window.batchPublishDynamic = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic batch skipped', e); }
-        return oldBatchPublishDynamic.apply(this, arguments);
-      };
-    }
-  })();
-
-
-
-/* ==================== V43.4 自动备份中心：每日自动备份 + 30天保留 ==================== */
-(function(){
-  const V434_VERSION = 'V44.0 Split Cloud Persistence';
-  const DAILY_PREFIX = `${CLOUD_STATE_ID}-daily-`;
-  const MAX_DAILY_BACKUPS = 30;
-  window.__autoBackupRunningV434 = false;
-  window.__dailyBackupsV434 = [];
-
-  function pad2(n){ return String(n).padStart(2,'0'); }
-  function formatDateV434(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
-  function getYesterdayStrV434(){ const d=new Date(); d.setDate(d.getDate()-1); return formatDateV434(d); }
-  function getNowStampV434(){ return new Date().toISOString().replace(/[-:.TZ]/g,'').slice(0,14); }
-
-  function getPayloadV434(){
-    try{ return getCloudStatePayload(); }catch(e){
-      return {containers, blList, containerBlMap, transportTasks, locationStock, returnRecords, pickupPlans, productionRecords, productionPlans, factoryCalendar, nextIds, storageConfig, demurrageConfig, warningConfig};
-    }
-  }
-  function countsV434(state){
-    if(typeof getStateCountsV433 === 'function') return getStateCountsV433(state || {});
-    const len = v => Array.isArray(v) ? v.length : 0;
-    state = state || {};
-    return {containers:len(state.containers), blList:len(state.blList), pickupPlans:len(state.pickupPlans), transportTasks:len(state.transportTasks), productionPlans:len(state.productionPlans), productionRecords:len(state.productionRecords)};
-  }
-  function emptyV434(state){
-    if(typeof isStateEmptyV433 === 'function') return isStateEmptyV433(state);
-    const c=countsV434(state); return (c.containers+c.blList+c.pickupPlans+c.transportTasks+c.productionPlans+c.productionRecords)===0;
-  }
-
-  async function backupExistsV434(dateStr){
-    try{
-      const sb = initSupabaseClient(); if(!sb) return false;
-      const { data, error } = await sb.from('app_state').select('id').eq('id', DAILY_PREFIX + dateStr).maybeSingle();
-      if(error){ console.warn('检查每日备份失败', error); return false; }
-      return !!data;
-    }catch(e){ console.warn(e); return false; }
-  }
-
-  async function createDailyBackupV434(dateStr, reason){
-    const sb = initSupabaseClient(); if(!sb) return false;
-    const payload = JSON.parse(JSON.stringify(getPayloadV434()));
-    if(emptyV434(payload)){
-      console.warn('V43.4保护：当前数据为空，跳过自动备份，避免保存空备份。');
-      return false;
-    }
-    const c = countsV434(payload);
-    payload.backupMeta = {
-      type: 'daily',
-      backupDate: dateStr,
-      version: V434_VERSION,
-      reason: reason || 'auto_daily_backup',
-      createdAt: new Date().toISOString(),
-      createdBy: (cloudUser && cloudUser.email) || (currentUser && (currentUser.email || currentUser.name)) || '',
-      counts: c
-    };
-    const { error } = await sb.from('app_state').upsert({
-      id: DAILY_PREFIX + dateStr,
-      data: payload,
-      updated_by: payload.backupMeta.createdBy,
-      updated_at: new Date().toISOString()
-    });
-    if(error){ console.error('创建每日备份失败', error); return false; }
-    localStorage.setItem('cc_lastAutoBackupDate', dateStr);
-    console.log('V43.4每日备份已创建', dateStr, c);
-    return true;
-  }
-
-  async function pruneDailyBackupsV434(){
-    try{
-      const sb = initSupabaseClient(); if(!sb) return;
-      const { data, error } = await sb.from('app_state').select('id, updated_at').like('id', DAILY_PREFIX + '%').order('id', {ascending:false});
-      if(error || !Array.isArray(data)) return;
-      const old = data.slice(MAX_DAILY_BACKUPS);
-      for(const row of old){
-        try{ await sb.from('app_state').delete().eq('id', row.id); }catch(e){ console.warn('删除过期备份失败', row.id, e); }
-      }
-    }catch(e){ console.warn('清理过期备份失败', e); }
-  }
-
-  window.ensureDailyAutoBackupV434 = async function(reason){
-    if(window.__autoBackupRunningV434) return false;
-    window.__autoBackupRunningV434 = true;
-    try{
-      const dateStr = getYesterdayStrV434();
-      const payload = getPayloadV434();
-      if(emptyV434(payload)) return false;
-      if(await backupExistsV434(dateStr)) return true;
-      const ok = await createDailyBackupV434(dateStr, reason || 'first_open_today');
-      await pruneDailyBackupsV434();
-      return ok;
-    }finally{
-      window.__autoBackupRunningV434 = false;
-    }
-  };
-
-  async function loadDailyBackupsV434(){
-    const sb = initSupabaseClient(); if(!sb) return [];
-    const { data, error } = await sb.from('app_state').select('id, data, updated_at, updated_by').like('id', DAILY_PREFIX + '%').order('id', {ascending:false});
-    if(error){ alert('读取备份列表失败：' + error.message); return []; }
-    window.__dailyBackupsV434 = (data || []).map(row => {
-      const meta = row.data && row.data.backupMeta ? row.data.backupMeta : {};
-      return {id: row.id, date: row.id.replace(DAILY_PREFIX,''), updated_at: row.updated_at, updated_by: row.updated_by, counts: meta.counts || countsV434(row.data), data: row.data};
-    });
-    return window.__dailyBackupsV434;
-  }
-
-  function countsTableV434(c){
-    c = c || {};
-    return `<div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));margin:10px 0;">
-      <div class="stat-card"><div class="stat-number">${c.containers||0}</div><div class="stat-label">基础数据</div></div>
-      <div class="stat-card"><div class="stat-number">${c.blList||0}</div><div class="stat-label">提单</div></div>
-      <div class="stat-card"><div class="stat-number">${c.pickupPlans||0}</div><div class="stat-label">提箱计划</div></div>
-      <div class="stat-card"><div class="stat-number">${c.transportTasks||0}</div><div class="stat-label">运输任务</div></div>
-      <div class="stat-card"><div class="stat-number">${c.productionPlans||0}</div><div class="stat-label">生产计划</div></div>
-    </div>`;
-  }
-
-  window.renderAutoBackupCenterV434 = async function(container){
-    const localCounts = countsV434(getPayloadV434());
-    container.innerHTML = `<div class="card">
-      <div class="card-header"><span class="card-title">🛡️ 自动备份中心 V43.4</span><span class="status-badge status-success">数据保护已开启</span></div>
-      <div style="line-height:1.8;color:#606266;margin-bottom:12px;">
-        系统每天首次打开时，会自动把当前云端主数据保存为“昨天数据备份”。同步前也会先检查备份，避免再次出现空数据覆盖风险。默认保留最近 <b>${MAX_DAILY_BACKUPS}</b> 天备份。
-      </div>
-      <div class="card" style="background:#f8f9fc;box-shadow:none;border:1px solid #ebeef5;">
-        <div class="section-label">当前系统数据量</div>
-        ${countsTableV434(localCounts)}
-        <button class="btn btn-primary" onclick="manualCreateDailyBackupV434()">立即创建今日恢复点</button>
-        <button class="btn btn-secondary" onclick="refreshDailyBackupListV434()">刷新备份列表</button>
-      </div>
-      <div id="dailyBackupListV434" class="card" style="background:#fff;box-shadow:none;border:1px solid #ebeef5;">
-        正在读取备份列表...
-      </div>
-    </div>`;
-    await refreshDailyBackupListV434(false);
-  };
-
-  window.refreshDailyBackupListV434 = async function(showMsg=true){
-    const box = document.getElementById('dailyBackupListV434');
-    if(box) box.innerHTML = '正在读取备份列表...';
-    const list = await loadDailyBackupsV434();
-    if(box){
-      if(!list.length){
-        box.innerHTML = '<div class="empty-state">暂无每日备份。点击“立即创建今日恢复点”可手动创建一份。</div>';
-      }else{
-        box.innerHTML = `<div class="section-label">最近备份</div><table class="data-table"><thead><tr><th>备份日期</th><th>基础数据</th><th>提箱计划</th><th>运输任务</th><th>生产计划</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${list.map(b=>`<tr>
-          <td><b>${b.date}</b></td><td>${b.counts.containers||0}</td><td>${b.counts.pickupPlans||0}</td><td>${b.counts.transportTasks||0}</td><td>${b.counts.productionPlans||0}</td><td>${formatDateTime ? formatDateTime(b.updated_at) : (b.updated_at||'-')}</td>
-          <td><button class="btn btn-secondary" onclick="downloadDailyBackupV434('${b.id}')">下载</button> <button class="btn btn-danger" onclick="restoreDailyBackupV434('${b.id}')">恢复</button></td>
-        </tr>`).join('')}</tbody></table>`;
-      }
-    }
-    if(showMsg) showRealtimeSyncHint && showRealtimeSyncHint('备份列表已刷新');
-  };
-
-  window.manualCreateDailyBackupV434 = async function(){
-    const dateStr = formatDateV434(new Date()) + '-' + getNowStampV434().slice(8);
-    const ok = await createDailyBackupV434(dateStr, 'manual_backup');
-    if(ok){ alert('已创建手动恢复点。'); await refreshDailyBackupListV434(false); }
-    else alert('创建失败：当前数据为空或云端不可用。');
-  };
-
-  window.downloadDailyBackupV434 = function(id){
-    const b = (window.__dailyBackupsV434 || []).find(x=>x.id===id);
-    if(!b){ alert('找不到备份'); return; }
-    const blob = new Blob([JSON.stringify(b.data, null, 2)], {type:'application/json'});
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `container_auto_backup_${b.date}.json`;
-    a.click();
-  };
-
-  window.restoreDailyBackupV434 = async function(id){
-    const b = (window.__dailyBackupsV434 || []).find(x=>x.id===id);
-    if(!b){ alert('找不到备份'); return; }
-    if(emptyV434(b.data)){ alert('该备份为空，禁止恢复。'); return; }
-    const c = countsV434(b.data);
-    if(!confirm(`确认恢复备份 ${b.date}？\n基础数据：${c.containers||0}\n提箱计划：${c.pickupPlans||0}\n运输任务：${c.transportTasks||0}\n生产计划：${c.productionPlans||0}\n\n恢复前系统会自动创建一份当前数据恢复点。`)) return;
-    await createDailyBackupV434('before-restore-' + getNowStampV434(), 'before_restore_daily_backup');
-    applyCloudState(b.data);
-    if(typeof saveLocalData === 'function') saveLocalData();
-    window.__forceCloudSaveOnce = true;
-    await saveCloudState();
-    alert('恢复完成，请检查基础数据和运输任务。');
-    currentMenu = 'dashboard'; renderSidebar(); renderContent();
-  };
-
-  // 登录成功后自动备份一次：如果昨天没有备份，则创建昨天备份。
-  const baseEnsureCloudSessionV434 = window.ensureCloudSession;
-  if(baseEnsureCloudSessionV434){
-    window.ensureCloudSession = ensureCloudSession = async function(){
-      const ret = await baseEnsureCloudSessionV434.apply(this, arguments);
-      try{ if(ret && currentUser) await ensureDailyAutoBackupV434('login_auto_daily_backup'); }catch(e){ console.warn('V43.4登录自动备份失败', e); }
-      return ret;
-    };
-  }
-
-  // 每次保存云端前先确保存在每日备份，且继续继承 V43.3 的空数据保护。
-  const baseSaveCloudStateV434 = window.saveCloudState;
-  if(baseSaveCloudStateV434){
-    window.saveCloudState = saveCloudState = async function(){
-      try{ await ensureDailyAutoBackupV434('before_cloud_save'); }catch(e){ console.warn('V43.4保存前自动备份失败', e); }
-      return baseSaveCloudStateV434.apply(this, arguments);
-    };
-  }
-
-  try{
-    if(Array.isArray(allMenus) && !allMenus.some(m=>m.id==='autoBackupCenter')) allMenus.push({id:'autoBackupCenter', name:'自动备份中心', icon:'🛡️', roles:['Admin','订购科']});
-    if(Array.isArray(permissionModules) && !permissionModules.some(m=>m.id==='autoBackupCenter')) permissionModules.push({id:'autoBackupCenter', name:'自动备份中心'});
-  }catch(e){ console.warn(e); }
-
-  const baseRenderContentV434 = window.renderContent;
-  window.renderContent = renderContent = function(){
-    if(currentMenu === 'autoBackupCenter'){
-      bindCurrentPageOperationLock && bindCurrentPageOperationLock();
-      const main = document.getElementById('mainContent');
-      renderAutoBackupCenterV434(main);
-      applyLanguage && applyLanguage();
-      return;
-    }
-    return baseRenderContentV434.apply(this, arguments);
-  };
-
-  // 页面已经登录时延迟检查一次，避免因浏览器刷新未触发登录包装。
-  setTimeout(()=>{ try{ if(currentUser && !emptyV434(getPayloadV434())) ensureDailyAutoBackupV434('delayed_page_check'); }catch(e){} }, 2500);
-
-  console.log('V44.0 Split Cloud Persistence loaded');
-})();
-
-</script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">
-
-    /* ==================== V42：批次规则引擎 + 首页生产保供看板 ==================== */
-    function v42SeqNum(v){ const n=parseInt(String(v||'').replace(/[^0-9]/g,''),10); return isNaN(n)?null:n; }
-    function v42IsSupplementBatch(batch){ return String(batch||'').trim().toUpperCase().startsWith('BX'); }
-    function v42BatchRule(batch){
-      const b=String(batch||'').trim().toUpperCase();
-      if(!b) return {model:'未知',series:'OTHER',total:0,welding:[],assembly:[]};
-      if(b.startsWith('BHC')) return {model:'B01-PHEV四驱',series:'B',total:22,welding:[1,2,3,4,5,6,7,8],assembly:[8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]};
-      if(b.startsWith('BHE')) return {model:'B01-PHEV两驱',series:'B',total:22,welding:[1,2,3,4,5,6,7,8],assembly:[8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]};
-      if(b.startsWith('BHF')) return {model:'B03-PHEV四驱',series:'B',total:23,welding:[1,2,3,4,5,6,7,8,9,10],assembly:[8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]};
-      if(b.startsWith('BF')) return {model:'P11',series:'P',total:15,welding:[1,2,3,4,5,6],assembly:[5,6,7,8,9,10,11,12,13,14,15]};
-      if(b.startsWith('BP') || b.startsWith('BHP')) return {model:'P3012',series:'P',total:13,welding:[1,2,3,4,5],assembly:[5,6,7,8,9,10,11,12,13]};
-      return {model:'未配置',series:'OTHER',total:0,welding:[],assembly:[]};
-    }
-    function v42RecommendedDock(batch, seq){
-      const b=String(batch||'').toUpperCase(); const n=v42SeqNum(seq); if(!n) return '';
-      if(b.startsWith('BHC') || b.startsWith('BHE')){ if(n>=1&&n<=7) return '120B'; if(n===8) return '120B→140B'; if(n>=9&&n<=22) return '140B'; }
-      if(b.startsWith('BHF')){ if(n>=1&&n<=7) return '120B'; if(n>=8&&n<=10) return '120B→140B'; if(n>=11&&n<=23) return '140B'; }
-      if(b.startsWith('BF')){ if(n>=1&&n<=4) return '120B'; if(n>=5&&n<=6) return '120B→132'; if(n>=13&&n<=14) return '140C'; if((n>=7&&n<=12)||n===15) return '132'; }
-      if(b.startsWith('BP') || b.startsWith('BHP')){ if(n>=1&&n<=4) return '120B'; if(n===5) return '120B→132'; if(n>=11&&n<=12) return '140C'; if((n>=6&&n<=10)||n===13) return '132'; }
-      return '';
-    }
-    function v42VehicleTypeFromOrigin(origin){ const o=String(origin||'').toUpperCase(); return (o.includes('RIO') || o.includes('IRA')) ? 'SIDER' : 'CONTAINER'; }
-    function v42TaskFor(batch, seq){ const s=String(seq||'').trim(); return transportTasks.find(t=>String(t.batch||'').toUpperCase()===String(batch||'').toUpperCase() && String(t.containerSeq||'').trim()===s && t.to==='工厂' && !t.cancelled); }
-    function v42ChipState(task){
-      if(!task) return 'none';
-      const st=getOpStatus(task);
-      if(st==='unloaded' || task.status==='completed') return 'done';
-      if(st==='unloading') return 'unload';
-      if(st==='inside_waiting') return 'wait';
-      if(st==='outside_parking') return 'gate';
-      if(task.status==='in_transit') return 'transit';
-      return 'none';
-    }
-    function v42StatusText(state){ return {done:'已完成',wait:'工厂内等待',gate:'已到门口',unload:'卸货中',transit:'运输中',none:'未发运',borrow:'异常借料'}[state]||state; }
-    function v42GetBoardDates(){ const t=getTodayStr(); const d=new Date(t+'T00:00:00'); d.setDate(d.getDate()+1); return [t, `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`]; }
-    function v42DateLabel(d,i){ return `${fmtDate(d)} ${i===0?'今日':'明日'}`; }
-    function v42BuildBatchGroups(area, date){
-      const areaKey=area==='Welding'?'welding':'assembly';
-      const groups={}; const groupOrders={};
-      productionPlans.filter(p=>p.date===date && ((String(p.area||'').toLowerCase()===area.toLowerCase()) || (p.planMode==='schedule' && productionPlanAreaFromWorkshop(p.workshop)===area))).forEach(p=>{
-        const batch=String(p.batch||'').trim().toUpperCase(); if(!batch || v42IsSupplementBatch(batch)) return;
-        groups[batch]=groups[batch]||new Set();
-        groupOrders[batch]=Math.min(groupOrders[batch]||999999, getProductionPlanOrder(p));
-        if(p.seq) groups[batch].add(v42SeqNum(p.seq));
-        if(p.planMode==='schedule'){ const rule=v42BatchRule(batch); (rule[area==='Welding'?'welding':'assembly']||[]).forEach(n=>groups[batch].add(n)); }
-      });
-      transportTasks.filter(t=>t.to==='工厂' && !t.cancelled && (getDatePart(t.estimatedArrival||'')===date || getDatePart(t.gateArrivalTime||'')===date || getDatePart(t.waitingAreaTime||'')===date || getDatePart(t.unloadStartTime||'')===date || getDatePart(t.unloadFinishTime||'')===date)).forEach(t=>{
-        const batch=String(t.batch||'').trim().toUpperCase(); const seq=v42SeqNum(t.containerSeq); if(!batch || !seq || v42IsSupplementBatch(batch)) return;
-        const rule=v42BatchRule(batch); const seqs=rule[areaKey]||[]; if(seqs.includes(seq)){ groups[batch]=groups[batch]||new Set(); groups[batch].add(seq); }
-      });
-      Object.keys(groups).forEach(batch=>{ const rule=v42BatchRule(batch); const arr=rule[areaKey]||[]; if(arr.length){ groups[batch]=new Set(arr); } });
-      return Object.entries(groups).sort((a,b)=>(groupOrders[a[0]]||999999)-(groupOrders[b[0]]||999999) || a[0].localeCompare(b[0],'zh-CN',{numeric:true})).map(([batch,set])=>({batch,planOrder:groupOrders[batch]||999999,seqs:[...set].filter(Boolean).sort((x,y)=>x-y)}));
-    }
-    function v42RenderBatchRow(group){
-      let done=0, total=group.seqs.length||1;
-      const sider=[], cont=[];
-      group.seqs.forEach(seq=>{
-        const task=v42TaskFor(group.batch,seq); const state=v42ChipState(task); if(state==='done') done++;
-        const type=task?v42VehicleTypeFromOrigin(task.from):'CONTAINER';
-        const title=`${group.batch} #${seq}\n${v42StatusText(state)}\n出发地：${task?.from||'-'}\n推荐卸货口：${v42RecommendedDock(group.batch,seq)}`;
-        const chip=`<span class="v42-chip ${state}" title="${title}">${seq}</span>`;
-        if(type==='SIDER') sider.push(chip); else cont.push(chip);
-      });
-      const pct=Math.round(done/total*100);
-      return `<tr><td><span style="display:inline-block;background:rgba(255,255,255,.12);border-radius:999px;padding:2px 7px;margin-right:6px;font-size:10px;">#${group.planOrder===999999?'-':group.planOrder}</span><span class="v42-batch-name">${group.batch}</span><div style="font-size:10px;color:#cbd5e1;margin-top:3px;">${v42BatchRule(group.batch).model}</div></td><td><div class="v42-chip-wrap">${sider.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div class="v42-chip-wrap">${cont.join('')||'<span style="opacity:.35;">—</span>'}</div></td><td><div style="font-weight:900;">${done}/${total}</div><div class="v42-progress"><span style="width:${pct}%"></span></div></td></tr>`;
-    }
-    function v42PanelKpis(area){
-      const dates=v42GetBoardDates(); let rows=[]; dates.forEach(d=>v42BuildBatchGroups(area,d).forEach(g=>g.seqs.forEach(seq=>rows.push(v42TaskFor(g.batch,seq)))));
-      const c={none:0,gate:0,wait:0,unload:0,done:0,transit:0}; rows.forEach(t=>{const s=v42ChipState(t); c[s] = (c[s]||0)+1;});
-      return `<div class="v42-panel-kpis"><div class="v42-status-card v42-status-pending"><div class="num">${c.none||0}</div><div class="lab">未发运</div></div><div class="v42-status-card v42-status-gate"><div class="num">${c.gate||0}</div><div class="lab">门口</div></div><div class="v42-status-card v42-status-wait"><div class="num">${c.wait||0}</div><div class="lab">厂内等待</div></div><div class="v42-status-card v42-status-unload"><div class="num">${c.unload||0}</div><div class="lab">卸货中</div></div><div class="v42-status-card v42-status-done"><div class="num">${c.done||0}</div><div class="lab">已完成</div></div></div>`;
-    }
-    function v42RenderProductionPanel(area){
-      const dates=v42GetBoardDates(); const cls=area==='Welding'?'welding':'assembly'; const icon=area==='Welding'?'🔧':'🚚';
-      return `<div class="v42-panel ${cls}"><div class="v42-panel-head"><div class="v42-panel-name">${icon} ${area.toUpperCase()}</div><div style="font-size:12px;opacity:.75;">生产保供进度</div></div>${v42PanelKpis(area)}${dates.map((d,i)=>{const groups=v42BuildBatchGroups(area,d);return `<div class="v42-date-block"><div class="v42-date-title">📅 ${v42DateLabel(d,i)} <span style="margin-left:auto;font-size:11px;opacity:.7;">${groups.length} batches</span></div>${groups.length?`<table class="v42-batch-table"><thead><tr><th>BATCH</th><th>SIDER</th><th>CONTAINER</th><th>完成率</th></tr></thead><tbody>${groups.map(v42RenderBatchRow).join('')}</tbody></table>`:`<div style="padding:14px;opacity:.65;">暂无生产计划/到箱计划</div>`}</div>`}).join('')}<div class="v42-legend"><span><i class="v42-dot" style="background:#16a34a"></i>已完成</span><span><i class="v42-dot" style="background:#2563eb"></i>厂内等待</span><span><i class="v42-dot" style="background:#eab308"></i>门口</span><span><i class="v42-dot" style="background:#0ea5e9"></i>卸货中</span><span><i class="v42-dot" style="background:#f97316"></i>运输中</span><span><i class="v42-dot" style="background:#dc2626"></i>未发运</span></div></div>`;
-    }
-    function v42RenderProductionBoard(){ return `<div class="v42-section-title"><h3>🏭 生产保供看板</h3><span class="v42-mini-note">按 Welding / Assembly 展示今日与明日批次到货进度，区分 SIDER 与 CONTAINER</span></div><div class="v42-board">${v42RenderProductionPanel('Welding')}${v42RenderProductionPanel('Assembly')}</div>`; }
-    const v42OriginalRenderDashboard = renderDashboard;
-    renderDashboard = function(container){
-      let activeContainers=containers.filter(isOperationalVisibleContainer);
-      let total=activeContainers.length;
-      let inTransit=transportTasks.filter(t=>t.status==='in_transit' && isOperationalVisibleTask(t)).length;
-      let stock={'港口':0,'RG堆场':0,'Rio Claro':0,'IRA库房':0,'工厂':0};
-      let producedCount = containers.filter(c => isProducedCompletedContainerId(c.id)).length;
-      activeContainers.forEach(c=>{ let loc=getContainerLocation(c.id); if(loc==='已生产') return; stock[loc]=(stock[loc]||0)+1; });
-      let dailyReport = getDailyOperationReport(getTodayStr());
-      let totalAbnormalStorage = cachedFeeData.totalAbnormalStorage || 0;
-      let totalDemurrage = cachedFeeData.totalDemurrage || 0;
-      let storageWarningCount = cachedFeeData.storageWarningList.length;
-      let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
-      container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.12</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
-        <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
-        <div class="v42-kpi-grid">
-          <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
-          <div class="v42-kpi danger" onclick="showDailyReportDetail('todayDemurrage')"><div class="v42-kpi-num">$ ${dailyReport.todayDemurrage.toFixed(2)}</div><div class="v42-kpi-label">今日新增滞箱费</div></div>
-          <div class="v42-kpi" onclick="showDailyReportDetail('clearanceCompleted')"><div class="v42-kpi-num">${dailyReport.clearanceCompleted}</div><div class="v42-kpi-label">今日清关完成</div></div>
-          <div class="v42-kpi" onclick="showDailyReportDetail('plannedPickup')"><div class="v42-kpi-num">${dailyReport.plannedPickup}</div><div class="v42-kpi-label">今日计划提箱</div></div>
-          <div class="v42-kpi green" onclick="showDailyReportDetail('actualPickup')"><div class="v42-kpi-num">${dailyReport.actualPickup}</div><div class="v42-kpi-label">今日实际提箱</div></div>
-          <div class="v42-kpi" onclick="showDailyReportDetail('clearedPendingPickup')"><div class="v42-kpi-num">${dailyReport.clearedPendingPickup}</div><div class="v42-kpi-label">已清关待提箱</div></div>
-          <div class="v42-kpi warn" onclick="showDailyReportDetail('clearedPendingPickupAbnormal')"><div class="v42-kpi-num">${dailyReport.clearedPendingPickupAbnormal}</div><div class="v42-kpi-label">异常费待提箱</div></div>
-          <div class="v42-kpi" onclick="jumpTo('transportTasks')"><div class="v42-kpi-num">${inTransit}</div><div class="v42-kpi-label">运输中集装箱</div></div>
-          <div class="v42-kpi warn"><div class="v42-kpi-num">R$ ${totalAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">累计异常堆存费</div></div>
-          <div class="v42-kpi danger"><div class="v42-kpi-num">$ ${totalDemurrage.toFixed(2)}</div><div class="v42-kpi-label">累计滞箱费</div></div>
-          <div class="v42-kpi warn" onclick="showWarningDetail('storage')"><div class="v42-kpi-num">${storageWarningCount}</div><div class="v42-kpi-label">异常堆存费预警</div></div>
-          <div class="v42-kpi danger" onclick="showWarningDetail('demurrage')"><div class="v42-kpi-num">${demurrageWarningCount}</div><div class="v42-kpi-label">滞箱费预警</div></div>
-        </div>
-        <div class="card"><div class="card-title">📍 库存分布</div><div class="v42-stock-strip">${Object.entries(stock).map(([k,v])=>`<div class="v42-stock" onclick="showLocationStockDetail('${k}')"><div class="n">${v}</div><div class="l">${k}</div></div>`).join('')}<div class="v42-stock" onclick="showLocationStockDetail('已生产')"><div class="n">${producedCount}</div><div class="l">已生产</div></div></div></div>
-        ${v42RenderProductionBoard()}
-      `;
-    };
-    const v42OriginalPublishDynamicSingle = window.publishDynamicSingle;
-    window.publishDynamicSingle = function(id, fromLoc){
-      try{
-        const cont=containers.find(c=>c.id===id);
-        const dest=document.getElementById(`dynDest_${id}`)?.value;
-        const dockEl=document.getElementById(`dynDock_${id}`);
-        if(dest==='工厂' && dockEl && !String(dockEl.value||'').trim() && cont){
-          const rec=v42RecommendedDock(cont.batch, cont.containerSeq);
-          if(rec) dockEl.value=rec;
-        }
-      }catch(e){ console.warn('V42 auto dock skipped', e); }
-      return v42OriginalPublishDynamicSingle ? v42OriginalPublishDynamicSingle(id, fromLoc) : undefined;
-    };
-
-  
-
-  /* ==================== V42.22 工厂日历联动生产计划维护 ====================
-     修复：生产计划维护必须先判断工厂日历。休息日/法定假日不再强制维护，默认不可新增排产；特殊加班按工作日处理。
-  */
-  function v4222IsProductionRequiredDate(date, idx){
-    return idx < 2 && isFactoryWorkday(date);
-  }
-  function v4222ProductionDayStatusText(date, idx){
-    if(!isFactoryWorkday(date)) return getFactoryDayTypeLabel(getFactoryDayType(date)) + '｜不排产';
-    if(idx === 0) return '今天 必填';
-    if(idx === 1) return '明天 必填';
-    return '后天 可选';
-  }
-  function v4222ProductionDayStatusColor(date, idx){
-    if(!isFactoryWorkday(date)) return '#f56c6c';
-    return idx < 2 ? '#f56c6c' : '#909399';
-  }
-  function v4222OpenAddProductionPlanModal(date, workshop){
-    if(date && !isFactoryWorkday(date)){
-      alert(`${fmtDate(date)} 是${getFactoryDayTypeLabel(getFactoryDayType(date))}，不能维护生产计划。如当天需要生产，请先到“工厂日历”设置为特殊加班。`);
-      return;
-    }
-    if(typeof window.__originalOpenAddProductionPlanModalV4222 === 'function'){
-      window.__originalOpenAddProductionPlanModalV4222(date, workshop);
-    }
-  }
-  if(typeof window.openAddProductionPlanModal === 'function' && !window.__originalOpenAddProductionPlanModalV4222){
-    window.__originalOpenAddProductionPlanModalV4222 = window.openAddProductionPlanModal;
-    window.openAddProductionPlanModal = v4222OpenAddProductionPlanModal;
-  }
-  // 覆盖必填缺失检查：仅今天/明天且为工作日/特殊加班时才强制维护。
-  getRequiredPlanMissingDates = function(baseDate){
-    const dates = productionPlanBaseDates(baseDate).slice(0,2);
-    return dates.filter((d,idx) => isFactoryWorkday(d) && getScheduleProductionPlans(d).length===0);
-  };
-  // 覆盖生产计划表格渲染：休息日/假日显示为灰红提示，不再标记“必填计划未维护”。
-  renderProductionPlanGrid = function(baseDate){
-    const dates = productionPlanBaseDates(baseDate);
-    const workshops = productionPlanWorkshops();
-    let html = '<div class="table-wrapper"><table class="data-table prod-plan-sheet"><thead><tr><th style="width:140px;">车间/产线</th>' + dates.map((d,i)=>{
-      const bs = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='welding') : productionPlanTotalsFor(d);
-      const gaB = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b') : productionPlanTotalsFor(d,'assembly_b');
-      const gaP = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_p') : productionPlanTotalsFor(d,'assembly_p');
-      const ga = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b' || p.workshop==='assembly_p') : {total:(gaB.total||0)+(gaP.total||0)};
-      return `<th>${fmtDate(d)}<br><span style="font-size:11px;color:${v4222ProductionDayStatusColor(d,i)};">${v4222ProductionDayStatusText(d,i)}</span><div class="prod-day-total" style="line-height:1.8;"><span class="prod-chip gray">BS ${bs.total||0}</span><span class="prod-chip gray">GA ${ga.total||0}</span><span class="prod-chip b">GA-B ${gaB.total||0}</span><span class="prod-chip p">GA-P ${gaP.total||0}</span></div></th>`;
-    }).join('') + '</tr></thead><tbody>';
-
-    workshops.forEach(ws=>{
-      const ws3 = typeof v428Totals === 'function' ? v428Totals(dates, p=>p.workshop===ws.id) : productionPlanTotalsForDates(dates,p=>p.workshop===ws.id);
-      html += `<tr><td class="prod-plan-workshop"><div>${ws.label}</div><div style="font-size:12px;color:#606266;margin-top:8px;line-height:1.8;"><span class="prod-chip gray">合计 ${ws3.total||0}</span><br><span class="prod-chip b">B ${ws3.b||0}</span><br><span class="prod-chip p">P ${ws3.p||0}</span>${ws3.other?`<br><span class="prod-chip gray">其他 ${ws3.other}</span>`:''}</div></td>`;
-      dates.forEach((d,idx)=>{
-        const plans = getProductionPlansForCell(d, ws.id);
-        const isWorkday = isFactoryWorkday(d);
-        const emptyRequired = v4222IsProductionRequiredDate(d,idx) && plans.length === 0;
-        const cellTotal = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop===ws.id) : productionPlanTotalsFor(d,ws.id);
-        html += `<td class="${!isWorkday?'prod-nonworkday-cell':''}"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><span style="font-size:12px;color:#606266;font-weight:700;">${ws.label}</span><span class="prod-chip gray">${cellTotal.total||0} 台</span></div><div class="prod-plan-list">`;
-        if(plans.length){
-          html += plans.map(p=>`<div class="prod-plan-item">
-            <div class="prod-plan-main"><span class="prod-order-badge">#${getProductionPlanOrder(p)===999999?'-':getProductionPlanOrder(p)}</span><span class="prod-batch-code">${p.batch||'-'}</span><span class="prod-qty">${Number(p.plannedQty||0)} 台</span><div class="prod-meta">${productionBatchSeries(p.batch)}系列｜实际 ${Number(p.actualQty||0)}｜${isProductionPlanConfirmed(p)?'已确认':'未确认'}${p.remark?'｜'+p.remark:''}</div></div>
-            <div class="prod-plan-actions"><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','up')">↑</button><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','down')">↓</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button><button class="btn btn-sm" onclick="copyProductionPlan('${p.id}')">复制</button><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan('${p.id}')">删除</button></div>
-          </div>`).join('');
-        }else if(!isWorkday){
-          html += `<div class="prod-empty-cell" style="border-color:#fbc4c4;background:#fef0f0;color:#9b1c1c;">${getFactoryDayTypeLabel(getFactoryDayType(d))}<br>不需要维护计划</div>`;
-        }else{
-          html += `<div class="prod-empty-cell ${emptyRequired?'required':''}">${emptyRequired?'必填计划未维护':'可选未维护'}</div>`;
-        }
-        html += `</div>${isWorkday?`<button class="btn btn-sm btn-success" style="margin-top:8px;" onclick="openAddProductionPlanModal('${d}','${ws.id}')">+ 新增计划</button>`:`<button class="btn btn-sm" style="margin-top:8px;" onclick="currentMenu='factoryCalendar';renderSidebar();renderContent();">设置加班后排产</button>`}</td>`;
-      });
-      html += '</tr>';
-    });
-    html += '</tbody></table></div>';
-    const el = document.getElementById('prePlanGrid');
-    if(el) el.innerHTML = html;
-  };
-
-
-
-  /* ==================== V43.0 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
-     问题：提箱计划从“港口→工厂”改为“港口→RG堆场/Rio Claro/IRA”后，旧工厂到货监控任务没有同步撤回，导致动态运输计划发布时提示“已有未完成工厂到货计划”。
-     修复：编辑提箱计划时，如目的地从工厂改为非工厂，且门岗/卸货口尚未开始操作，则自动取消旧工厂监控任务；如已开始门岗/卸货执行，则禁止改为非工厂。
-  */
-  (function(){
-    function v4227IsFactoryDestination(dest){
-      const d = String(dest || '').trim();
-      return d === '工厂' || d.toLowerCase() === 'factory' || d.toUpperCase() === 'GWM';
-    }
-
-    function v4227FindFactoryTaskByPlan(plan){
-      if(!plan) return null;
-      return (transportTasks || []).find(t =>
-        t &&
-        t.to === '工厂' &&
-        !t.cancelled &&
-        (
-          String(t.sourcePlanId || '') === String(plan.id || '') ||
-          (String(t.containerId || '') === String(plan.containerId || '') && String(t.source || '') === 'pickupPlan') ||
-          (String(t.containerId || '') === String(plan.containerId || '') && String(t.estimatedArrival || '') === String(plan.arrivalDate || ''))
-        )
-      ) || null;
-    }
-
-    function v4227CancelFactoryTask(task, reason){
-      if(!task) return false;
-      if(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(task)){
-        return false;
-      }
-      task.cancelled = true;
-      task.status = 'cancelled';
-      task.operationStatus = 'cancelled';
-      task.cancelReason = reason || '提箱计划目的地变更，自动撤回工厂到货计划';
-      task.cancelTime = new Date().toISOString();
-      task.cancelUser = (currentUser && (currentUser.name || currentUser.email)) || '';
-      return true;
-    }
-
-    function v4227EnsureOrUpdateFactoryTask(plan){
-      if(typeof v4217EnsureFactoryReceivingTaskFromPickupPlan === 'function'){
-        return v4217EnsureFactoryReceivingTaskFromPickupPlan(plan);
-      }
-      return null;
-    }
-
-    function v4227SyncPickupPlanDestination(plan, oldDestination){
-      if(!plan) return true;
-      const wasFactory = v4227IsFactoryDestination(oldDestination);
-      const nowFactory = v4227IsFactoryDestination(plan.destination);
-      const oldTask = v4227FindFactoryTaskByPlan(plan);
-
-      if(wasFactory && !nowFactory && oldTask){
-        if(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(oldTask)){
-          alert('该集装箱已经进入门岗/卸货口执行流程，不能把目的地从工厂改为其他地点。');
-          plan.destination = oldDestination;
-          return false;
-        }
-        v4227CancelFactoryTask(oldTask, '提箱计划目的地从工厂改为' + (plan.destination || '-'));
-      }
-
-      if(nowFactory){
-        const task = v4227EnsureOrUpdateFactoryTask(plan);
-        if(task){
-          task.cancelled = false;
-          task.to = '工厂';
-          task.from = '港口';
-          task.estimatedArrival = plan.arrivalDate || task.estimatedArrival || '';
-          task.unloadingDock = plan.unloadingDock || task.unloadingDock || '';
-          task.carrier = plan.carrier || task.carrier || 'RG';
-          if(!task.operationStatus || task.operationStatus === 'cancelled') task.operationStatus = 'not_arrived';
-          if(!task.status || task.status === 'cancelled') task.status = plan.status === 'confirmed' ? 'in_transit' : 'planned';
-        }
-      }
-      return true;
-    }
-
-    window.modifyPlan = function(planId){
-      let plan = pickupPlans.find(p => p.id === planId);
-      if(!plan) return;
-
-      const old = {
-        arrivalDate: plan.arrivalDate,
-        carrier: plan.carrier,
-        destination: plan.destination,
-        unloadingDock: plan.unloadingDock,
-        status: plan.status,
-        needReconfirm: plan.needReconfirm
-      };
-
-      const newArrival = prompt('修改到货时间（格式：YYYY-MM-DDTHH:mm 或 YYYY/MM/DD HH:mm）', plan.arrivalDate || '');
-      if(newArrival === null) return;
-      const newCarrier = prompt('修改运输公司(RG/JSL)', plan.carrier || 'RG');
-      if(newCarrier === null) return;
-      const newDest = prompt('修改目的地（RG堆场/Rio Claro/IRA库房/工厂）', plan.destination || '');
-      if(newDest === null) return;
-      const newDock = prompt('修改卸货口（目的地为工厂时必填）', plan.unloadingDock || '');
-      if(newDock === null) return;
-
-      if(v4227IsFactoryDestination(newDest) && !String(newDock || '').trim()){
-        alert('目的地为工厂时，卸货口必填');
-        return;
-      }
-
-      if(newArrival) plan.arrivalDate = newArrival;
-      if(newCarrier && (newCarrier === 'RG' || newCarrier === 'JSL')) plan.carrier = newCarrier;
-      if(newDest) plan.destination = newDest;
-      plan.unloadingDock = String(newDock || '').trim();
-      plan.status = 'pending';
-      plan.needReconfirm = true;
-      plan.updatedAt = new Date().toISOString();
-      plan.updatedBy = (currentUser && (currentUser.name || currentUser.email)) || '';
-
-      const ok = v4227SyncPickupPlanDestination(plan, old.destination);
-      if(!ok){
-        plan.arrivalDate = old.arrivalDate;
-        plan.carrier = old.carrier;
-        plan.destination = old.destination;
-        plan.unloadingDock = old.unloadingDock;
-        plan.status = old.status;
-        plan.needReconfirm = old.needReconfirm;
-        return;
-      }
-
-      const viewState = typeof capturePickupPlanViewState === 'function' ? capturePickupPlanViewState() : null;
-      saveData();
-      if(typeof refreshPickupPlanTablesKeepState === 'function') refreshPickupPlanTablesKeepState(viewState);
-      else renderContent();
-      alert('计划已修改，关联的门岗/卸货口计划已同步更新，需运输公司重新确认。');
-    };
-
-    // 页面/数据加载后做一次清理：非工厂提箱计划不应保留未开始的工厂监控任务。
-    window.v4227CleanupStaleFactoryTasks = function(){
-      let changed = false;
-      (pickupPlans || []).forEach(plan => {
-        if(!plan || v4227IsFactoryDestination(plan.destination)) return;
-        const task = v4227FindFactoryTaskByPlan(plan);
-        if(task && !(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(task))){
-          if(v4227CancelFactoryTask(task, '提箱计划目的地不是工厂，自动清理残留工厂到货计划')) changed = true;
-        }
-      });
-      if(changed) saveData();
-      return changed;
-    };
-
-    const oldRenderGateOnly = window.renderFactoryGateOnly;
-    if(typeof oldRenderGateOnly === 'function'){
-      window.renderFactoryGateOnly = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before gate skipped', e); }
-        return oldRenderGateOnly.apply(this, arguments);
-      };
-    }
-    const oldRenderDock = window.renderDockMonitoring;
-    if(typeof oldRenderDock === 'function'){
-      window.renderDockMonitoring = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dock skipped', e); }
-        return oldRenderDock.apply(this, arguments);
-      };
-    }
-
-    // 动态运输计划发布前也先清理一次，避免旧残留任务继续阻挡新计划。
-    const oldPublishDynamicSingle = window.publishDynamicSingle;
-    if(typeof oldPublishDynamicSingle === 'function'){
-      window.publishDynamicSingle = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic publish skipped', e); }
-        return oldPublishDynamicSingle.apply(this, arguments);
-      };
-    }
-    const oldBatchPublishDynamic = window.batchPublishDynamic;
-    if(typeof oldBatchPublishDynamic === 'function'){
-      window.batchPublishDynamic = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic batch skipped', e); }
-        return oldBatchPublishDynamic.apply(this, arguments);
-      };
-    }
-  })();
-
-</script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; }
@@ -6966,259 +5976,7 @@ let main=document.getElementById('mainContent');
 
   
 
-  /* ==================== V42.22 工厂日历联动生产计划维护 ====================
-     修复：生产计划维护必须先判断工厂日历。休息日/法定假日不再强制维护，默认不可新增排产；特殊加班按工作日处理。
-  */
-  function v4222IsProductionRequiredDate(date, idx){
-    return idx < 2 && isFactoryWorkday(date);
-  }
-  function v4222ProductionDayStatusText(date, idx){
-    if(!isFactoryWorkday(date)) return getFactoryDayTypeLabel(getFactoryDayType(date)) + '｜不排产';
-    if(idx === 0) return '今天 必填';
-    if(idx === 1) return '明天 必填';
-    return '后天 可选';
-  }
-  function v4222ProductionDayStatusColor(date, idx){
-    if(!isFactoryWorkday(date)) return '#f56c6c';
-    return idx < 2 ? '#f56c6c' : '#909399';
-  }
-  function v4222OpenAddProductionPlanModal(date, workshop){
-    if(date && !isFactoryWorkday(date)){
-      alert(`${fmtDate(date)} 是${getFactoryDayTypeLabel(getFactoryDayType(date))}，不能维护生产计划。如当天需要生产，请先到“工厂日历”设置为特殊加班。`);
-      return;
-    }
-    if(typeof window.__originalOpenAddProductionPlanModalV4222 === 'function'){
-      window.__originalOpenAddProductionPlanModalV4222(date, workshop);
-    }
-  }
-  if(typeof window.openAddProductionPlanModal === 'function' && !window.__originalOpenAddProductionPlanModalV4222){
-    window.__originalOpenAddProductionPlanModalV4222 = window.openAddProductionPlanModal;
-    window.openAddProductionPlanModal = v4222OpenAddProductionPlanModal;
-  }
-  // 覆盖必填缺失检查：仅今天/明天且为工作日/特殊加班时才强制维护。
-  getRequiredPlanMissingDates = function(baseDate){
-    const dates = productionPlanBaseDates(baseDate).slice(0,2);
-    return dates.filter((d,idx) => isFactoryWorkday(d) && getScheduleProductionPlans(d).length===0);
-  };
-  // 覆盖生产计划表格渲染：休息日/假日显示为灰红提示，不再标记“必填计划未维护”。
-  renderProductionPlanGrid = function(baseDate){
-    const dates = productionPlanBaseDates(baseDate);
-    const workshops = productionPlanWorkshops();
-    let html = '<div class="table-wrapper"><table class="data-table prod-plan-sheet"><thead><tr><th style="width:140px;">车间/产线</th>' + dates.map((d,i)=>{
-      const bs = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='welding') : productionPlanTotalsFor(d);
-      const gaB = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b') : productionPlanTotalsFor(d,'assembly_b');
-      const gaP = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_p') : productionPlanTotalsFor(d,'assembly_p');
-      const ga = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b' || p.workshop==='assembly_p') : {total:(gaB.total||0)+(gaP.total||0)};
-      return `<th>${fmtDate(d)}<br><span style="font-size:11px;color:${v4222ProductionDayStatusColor(d,i)};">${v4222ProductionDayStatusText(d,i)}</span><div class="prod-day-total" style="line-height:1.8;"><span class="prod-chip gray">BS ${bs.total||0}</span><span class="prod-chip gray">GA ${ga.total||0}</span><span class="prod-chip b">GA-B ${gaB.total||0}</span><span class="prod-chip p">GA-P ${gaP.total||0}</span></div></th>`;
-    }).join('') + '</tr></thead><tbody>';
-
-    workshops.forEach(ws=>{
-      const ws3 = typeof v428Totals === 'function' ? v428Totals(dates, p=>p.workshop===ws.id) : productionPlanTotalsForDates(dates,p=>p.workshop===ws.id);
-      html += `<tr><td class="prod-plan-workshop"><div>${ws.label}</div><div style="font-size:12px;color:#606266;margin-top:8px;line-height:1.8;"><span class="prod-chip gray">合计 ${ws3.total||0}</span><br><span class="prod-chip b">B ${ws3.b||0}</span><br><span class="prod-chip p">P ${ws3.p||0}</span>${ws3.other?`<br><span class="prod-chip gray">其他 ${ws3.other}</span>`:''}</div></td>`;
-      dates.forEach((d,idx)=>{
-        const plans = getProductionPlansForCell(d, ws.id);
-        const isWorkday = isFactoryWorkday(d);
-        const emptyRequired = v4222IsProductionRequiredDate(d,idx) && plans.length === 0;
-        const cellTotal = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop===ws.id) : productionPlanTotalsFor(d,ws.id);
-        html += `<td class="${!isWorkday?'prod-nonworkday-cell':''}"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><span style="font-size:12px;color:#606266;font-weight:700;">${ws.label}</span><span class="prod-chip gray">${cellTotal.total||0} 台</span></div><div class="prod-plan-list">`;
-        if(plans.length){
-          html += plans.map(p=>`<div class="prod-plan-item">
-            <div class="prod-plan-main"><span class="prod-order-badge">#${getProductionPlanOrder(p)===999999?'-':getProductionPlanOrder(p)}</span><span class="prod-batch-code">${p.batch||'-'}</span><span class="prod-qty">${Number(p.plannedQty||0)} 台</span><div class="prod-meta">${productionBatchSeries(p.batch)}系列｜实际 ${Number(p.actualQty||0)}｜${isProductionPlanConfirmed(p)?'已确认':'未确认'}${p.remark?'｜'+p.remark:''}</div></div>
-            <div class="prod-plan-actions"><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','up')">↑</button><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','down')">↓</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button><button class="btn btn-sm" onclick="copyProductionPlan('${p.id}')">复制</button><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan('${p.id}')">删除</button></div>
-          </div>`).join('');
-        }else if(!isWorkday){
-          html += `<div class="prod-empty-cell" style="border-color:#fbc4c4;background:#fef0f0;color:#9b1c1c;">${getFactoryDayTypeLabel(getFactoryDayType(d))}<br>不需要维护计划</div>`;
-        }else{
-          html += `<div class="prod-empty-cell ${emptyRequired?'required':''}">${emptyRequired?'必填计划未维护':'可选未维护'}</div>`;
-        }
-        html += `</div>${isWorkday?`<button class="btn btn-sm btn-success" style="margin-top:8px;" onclick="openAddProductionPlanModal('${d}','${ws.id}')">+ 新增计划</button>`:`<button class="btn btn-sm" style="margin-top:8px;" onclick="currentMenu='factoryCalendar';renderSidebar();renderContent();">设置加班后排产</button>`}</td>`;
-      });
-      html += '</tr>';
-    });
-    html += '</tbody></table></div>';
-    const el = document.getElementById('prePlanGrid');
-    if(el) el.innerHTML = html;
-  };
-
-
-
-  /* ==================== V43.0 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
-     问题：提箱计划从“港口→工厂”改为“港口→RG堆场/Rio Claro/IRA”后，旧工厂到货监控任务没有同步撤回，导致动态运输计划发布时提示“已有未完成工厂到货计划”。
-     修复：编辑提箱计划时，如目的地从工厂改为非工厂，且门岗/卸货口尚未开始操作，则自动取消旧工厂监控任务；如已开始门岗/卸货执行，则禁止改为非工厂。
-  */
-  (function(){
-    function v4227IsFactoryDestination(dest){
-      const d = String(dest || '').trim();
-      return d === '工厂' || d.toLowerCase() === 'factory' || d.toUpperCase() === 'GWM';
-    }
-
-    function v4227FindFactoryTaskByPlan(plan){
-      if(!plan) return null;
-      return (transportTasks || []).find(t =>
-        t &&
-        t.to === '工厂' &&
-        !t.cancelled &&
-        (
-          String(t.sourcePlanId || '') === String(plan.id || '') ||
-          (String(t.containerId || '') === String(plan.containerId || '') && String(t.source || '') === 'pickupPlan') ||
-          (String(t.containerId || '') === String(plan.containerId || '') && String(t.estimatedArrival || '') === String(plan.arrivalDate || ''))
-        )
-      ) || null;
-    }
-
-    function v4227CancelFactoryTask(task, reason){
-      if(!task) return false;
-      if(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(task)){
-        return false;
-      }
-      task.cancelled = true;
-      task.status = 'cancelled';
-      task.operationStatus = 'cancelled';
-      task.cancelReason = reason || '提箱计划目的地变更，自动撤回工厂到货计划';
-      task.cancelTime = new Date().toISOString();
-      task.cancelUser = (currentUser && (currentUser.name || currentUser.email)) || '';
-      return true;
-    }
-
-    function v4227EnsureOrUpdateFactoryTask(plan){
-      if(typeof v4217EnsureFactoryReceivingTaskFromPickupPlan === 'function'){
-        return v4217EnsureFactoryReceivingTaskFromPickupPlan(plan);
-      }
-      return null;
-    }
-
-    function v4227SyncPickupPlanDestination(plan, oldDestination){
-      if(!plan) return true;
-      const wasFactory = v4227IsFactoryDestination(oldDestination);
-      const nowFactory = v4227IsFactoryDestination(plan.destination);
-      const oldTask = v4227FindFactoryTaskByPlan(plan);
-
-      if(wasFactory && !nowFactory && oldTask){
-        if(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(oldTask)){
-          alert('该集装箱已经进入门岗/卸货口执行流程，不能把目的地从工厂改为其他地点。');
-          plan.destination = oldDestination;
-          return false;
-        }
-        v4227CancelFactoryTask(oldTask, '提箱计划目的地从工厂改为' + (plan.destination || '-'));
-      }
-
-      if(nowFactory){
-        const task = v4227EnsureOrUpdateFactoryTask(plan);
-        if(task){
-          task.cancelled = false;
-          task.to = '工厂';
-          task.from = '港口';
-          task.estimatedArrival = plan.arrivalDate || task.estimatedArrival || '';
-          task.unloadingDock = plan.unloadingDock || task.unloadingDock || '';
-          task.carrier = plan.carrier || task.carrier || 'RG';
-          if(!task.operationStatus || task.operationStatus === 'cancelled') task.operationStatus = 'not_arrived';
-          if(!task.status || task.status === 'cancelled') task.status = plan.status === 'confirmed' ? 'in_transit' : 'planned';
-        }
-      }
-      return true;
-    }
-
-    window.modifyPlan = function(planId){
-      let plan = pickupPlans.find(p => p.id === planId);
-      if(!plan) return;
-
-      const old = {
-        arrivalDate: plan.arrivalDate,
-        carrier: plan.carrier,
-        destination: plan.destination,
-        unloadingDock: plan.unloadingDock,
-        status: plan.status,
-        needReconfirm: plan.needReconfirm
-      };
-
-      const newArrival = prompt('修改到货时间（格式：YYYY-MM-DDTHH:mm 或 YYYY/MM/DD HH:mm）', plan.arrivalDate || '');
-      if(newArrival === null) return;
-      const newCarrier = prompt('修改运输公司(RG/JSL)', plan.carrier || 'RG');
-      if(newCarrier === null) return;
-      const newDest = prompt('修改目的地（RG堆场/Rio Claro/IRA库房/工厂）', plan.destination || '');
-      if(newDest === null) return;
-      const newDock = prompt('修改卸货口（目的地为工厂时必填）', plan.unloadingDock || '');
-      if(newDock === null) return;
-
-      if(v4227IsFactoryDestination(newDest) && !String(newDock || '').trim()){
-        alert('目的地为工厂时，卸货口必填');
-        return;
-      }
-
-      if(newArrival) plan.arrivalDate = newArrival;
-      if(newCarrier && (newCarrier === 'RG' || newCarrier === 'JSL')) plan.carrier = newCarrier;
-      if(newDest) plan.destination = newDest;
-      plan.unloadingDock = String(newDock || '').trim();
-      plan.status = 'pending';
-      plan.needReconfirm = true;
-      plan.updatedAt = new Date().toISOString();
-      plan.updatedBy = (currentUser && (currentUser.name || currentUser.email)) || '';
-
-      const ok = v4227SyncPickupPlanDestination(plan, old.destination);
-      if(!ok){
-        plan.arrivalDate = old.arrivalDate;
-        plan.carrier = old.carrier;
-        plan.destination = old.destination;
-        plan.unloadingDock = old.unloadingDock;
-        plan.status = old.status;
-        plan.needReconfirm = old.needReconfirm;
-        return;
-      }
-
-      const viewState = typeof capturePickupPlanViewState === 'function' ? capturePickupPlanViewState() : null;
-      saveData();
-      if(typeof refreshPickupPlanTablesKeepState === 'function') refreshPickupPlanTablesKeepState(viewState);
-      else renderContent();
-      alert('计划已修改，关联的门岗/卸货口计划已同步更新，需运输公司重新确认。');
-    };
-
-    // 页面/数据加载后做一次清理：非工厂提箱计划不应保留未开始的工厂监控任务。
-    window.v4227CleanupStaleFactoryTasks = function(){
-      let changed = false;
-      (pickupPlans || []).forEach(plan => {
-        if(!plan || v4227IsFactoryDestination(plan.destination)) return;
-        const task = v4227FindFactoryTaskByPlan(plan);
-        if(task && !(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(task))){
-          if(v4227CancelFactoryTask(task, '提箱计划目的地不是工厂，自动清理残留工厂到货计划')) changed = true;
-        }
-      });
-      if(changed) saveData();
-      return changed;
-    };
-
-    const oldRenderGateOnly = window.renderFactoryGateOnly;
-    if(typeof oldRenderGateOnly === 'function'){
-      window.renderFactoryGateOnly = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before gate skipped', e); }
-        return oldRenderGateOnly.apply(this, arguments);
-      };
-    }
-    const oldRenderDock = window.renderDockMonitoring;
-    if(typeof oldRenderDock === 'function'){
-      window.renderDockMonitoring = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dock skipped', e); }
-        return oldRenderDock.apply(this, arguments);
-      };
-    }
-
-    // 动态运输计划发布前也先清理一次，避免旧残留任务继续阻挡新计划。
-    const oldPublishDynamicSingle = window.publishDynamicSingle;
-    if(typeof oldPublishDynamicSingle === 'function'){
-      window.publishDynamicSingle = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic publish skipped', e); }
-        return oldPublishDynamicSingle.apply(this, arguments);
-      };
-    }
-    const oldBatchPublishDynamic = window.batchPublishDynamic;
-    if(typeof oldBatchPublishDynamic === 'function'){
-      window.batchPublishDynamic = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic batch skipped', e); }
-        return oldBatchPublishDynamic.apply(this, arguments);
-      };
-    }
-  })();
-
-</script>
+  </script>
 
 <script>
 /* ==================== V42.9：生产计划统计与保供看板同步修复 ====================
@@ -7536,259 +6294,7 @@ let main=document.getElementById('mainContent');
 
 })();
 
-  /* ==================== V42.22 工厂日历联动生产计划维护 ====================
-     修复：生产计划维护必须先判断工厂日历。休息日/法定假日不再强制维护，默认不可新增排产；特殊加班按工作日处理。
-  */
-  function v4222IsProductionRequiredDate(date, idx){
-    return idx < 2 && isFactoryWorkday(date);
-  }
-  function v4222ProductionDayStatusText(date, idx){
-    if(!isFactoryWorkday(date)) return getFactoryDayTypeLabel(getFactoryDayType(date)) + '｜不排产';
-    if(idx === 0) return '今天 必填';
-    if(idx === 1) return '明天 必填';
-    return '后天 可选';
-  }
-  function v4222ProductionDayStatusColor(date, idx){
-    if(!isFactoryWorkday(date)) return '#f56c6c';
-    return idx < 2 ? '#f56c6c' : '#909399';
-  }
-  function v4222OpenAddProductionPlanModal(date, workshop){
-    if(date && !isFactoryWorkday(date)){
-      alert(`${fmtDate(date)} 是${getFactoryDayTypeLabel(getFactoryDayType(date))}，不能维护生产计划。如当天需要生产，请先到“工厂日历”设置为特殊加班。`);
-      return;
-    }
-    if(typeof window.__originalOpenAddProductionPlanModalV4222 === 'function'){
-      window.__originalOpenAddProductionPlanModalV4222(date, workshop);
-    }
-  }
-  if(typeof window.openAddProductionPlanModal === 'function' && !window.__originalOpenAddProductionPlanModalV4222){
-    window.__originalOpenAddProductionPlanModalV4222 = window.openAddProductionPlanModal;
-    window.openAddProductionPlanModal = v4222OpenAddProductionPlanModal;
-  }
-  // 覆盖必填缺失检查：仅今天/明天且为工作日/特殊加班时才强制维护。
-  getRequiredPlanMissingDates = function(baseDate){
-    const dates = productionPlanBaseDates(baseDate).slice(0,2);
-    return dates.filter((d,idx) => isFactoryWorkday(d) && getScheduleProductionPlans(d).length===0);
-  };
-  // 覆盖生产计划表格渲染：休息日/假日显示为灰红提示，不再标记“必填计划未维护”。
-  renderProductionPlanGrid = function(baseDate){
-    const dates = productionPlanBaseDates(baseDate);
-    const workshops = productionPlanWorkshops();
-    let html = '<div class="table-wrapper"><table class="data-table prod-plan-sheet"><thead><tr><th style="width:140px;">车间/产线</th>' + dates.map((d,i)=>{
-      const bs = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='welding') : productionPlanTotalsFor(d);
-      const gaB = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b') : productionPlanTotalsFor(d,'assembly_b');
-      const gaP = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_p') : productionPlanTotalsFor(d,'assembly_p');
-      const ga = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop==='assembly_b' || p.workshop==='assembly_p') : {total:(gaB.total||0)+(gaP.total||0)};
-      return `<th>${fmtDate(d)}<br><span style="font-size:11px;color:${v4222ProductionDayStatusColor(d,i)};">${v4222ProductionDayStatusText(d,i)}</span><div class="prod-day-total" style="line-height:1.8;"><span class="prod-chip gray">BS ${bs.total||0}</span><span class="prod-chip gray">GA ${ga.total||0}</span><span class="prod-chip b">GA-B ${gaB.total||0}</span><span class="prod-chip p">GA-P ${gaP.total||0}</span></div></th>`;
-    }).join('') + '</tr></thead><tbody>';
-
-    workshops.forEach(ws=>{
-      const ws3 = typeof v428Totals === 'function' ? v428Totals(dates, p=>p.workshop===ws.id) : productionPlanTotalsForDates(dates,p=>p.workshop===ws.id);
-      html += `<tr><td class="prod-plan-workshop"><div>${ws.label}</div><div style="font-size:12px;color:#606266;margin-top:8px;line-height:1.8;"><span class="prod-chip gray">合计 ${ws3.total||0}</span><br><span class="prod-chip b">B ${ws3.b||0}</span><br><span class="prod-chip p">P ${ws3.p||0}</span>${ws3.other?`<br><span class="prod-chip gray">其他 ${ws3.other}</span>`:''}</div></td>`;
-      dates.forEach((d,idx)=>{
-        const plans = getProductionPlansForCell(d, ws.id);
-        const isWorkday = isFactoryWorkday(d);
-        const emptyRequired = v4222IsProductionRequiredDate(d,idx) && plans.length === 0;
-        const cellTotal = typeof v428Totals === 'function' ? v428Totals([d], p=>p.workshop===ws.id) : productionPlanTotalsFor(d,ws.id);
-        html += `<td class="${!isWorkday?'prod-nonworkday-cell':''}"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><span style="font-size:12px;color:#606266;font-weight:700;">${ws.label}</span><span class="prod-chip gray">${cellTotal.total||0} 台</span></div><div class="prod-plan-list">`;
-        if(plans.length){
-          html += plans.map(p=>`<div class="prod-plan-item">
-            <div class="prod-plan-main"><span class="prod-order-badge">#${getProductionPlanOrder(p)===999999?'-':getProductionPlanOrder(p)}</span><span class="prod-batch-code">${p.batch||'-'}</span><span class="prod-qty">${Number(p.plannedQty||0)} 台</span><div class="prod-meta">${productionBatchSeries(p.batch)}系列｜实际 ${Number(p.actualQty||0)}｜${isProductionPlanConfirmed(p)?'已确认':'未确认'}${p.remark?'｜'+p.remark:''}</div></div>
-            <div class="prod-plan-actions"><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','up')">↑</button><button class="btn btn-sm" onclick="moveProductionPlanOrder('${p.id}','down')">↓</button><button class="btn btn-sm btn-warning" onclick="editPreProductionPlan('${p.id}')">编辑</button><button class="btn btn-sm" onclick="copyProductionPlan('${p.id}')">复制</button><button class="btn btn-sm btn-danger" onclick="deleteProductionPlan('${p.id}')">删除</button></div>
-          </div>`).join('');
-        }else if(!isWorkday){
-          html += `<div class="prod-empty-cell" style="border-color:#fbc4c4;background:#fef0f0;color:#9b1c1c;">${getFactoryDayTypeLabel(getFactoryDayType(d))}<br>不需要维护计划</div>`;
-        }else{
-          html += `<div class="prod-empty-cell ${emptyRequired?'required':''}">${emptyRequired?'必填计划未维护':'可选未维护'}</div>`;
-        }
-        html += `</div>${isWorkday?`<button class="btn btn-sm btn-success" style="margin-top:8px;" onclick="openAddProductionPlanModal('${d}','${ws.id}')">+ 新增计划</button>`:`<button class="btn btn-sm" style="margin-top:8px;" onclick="currentMenu='factoryCalendar';renderSidebar();renderContent();">设置加班后排产</button>`}</td>`;
-      });
-      html += '</tr>';
-    });
-    html += '</tbody></table></div>';
-    const el = document.getElementById('prePlanGrid');
-    if(el) el.innerHTML = html;
-  };
-
-
-
-  /* ==================== V43.0 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
-     问题：提箱计划从“港口→工厂”改为“港口→RG堆场/Rio Claro/IRA”后，旧工厂到货监控任务没有同步撤回，导致动态运输计划发布时提示“已有未完成工厂到货计划”。
-     修复：编辑提箱计划时，如目的地从工厂改为非工厂，且门岗/卸货口尚未开始操作，则自动取消旧工厂监控任务；如已开始门岗/卸货执行，则禁止改为非工厂。
-  */
-  (function(){
-    function v4227IsFactoryDestination(dest){
-      const d = String(dest || '').trim();
-      return d === '工厂' || d.toLowerCase() === 'factory' || d.toUpperCase() === 'GWM';
-    }
-
-    function v4227FindFactoryTaskByPlan(plan){
-      if(!plan) return null;
-      return (transportTasks || []).find(t =>
-        t &&
-        t.to === '工厂' &&
-        !t.cancelled &&
-        (
-          String(t.sourcePlanId || '') === String(plan.id || '') ||
-          (String(t.containerId || '') === String(plan.containerId || '') && String(t.source || '') === 'pickupPlan') ||
-          (String(t.containerId || '') === String(plan.containerId || '') && String(t.estimatedArrival || '') === String(plan.arrivalDate || ''))
-        )
-      ) || null;
-    }
-
-    function v4227CancelFactoryTask(task, reason){
-      if(!task) return false;
-      if(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(task)){
-        return false;
-      }
-      task.cancelled = true;
-      task.status = 'cancelled';
-      task.operationStatus = 'cancelled';
-      task.cancelReason = reason || '提箱计划目的地变更，自动撤回工厂到货计划';
-      task.cancelTime = new Date().toISOString();
-      task.cancelUser = (currentUser && (currentUser.name || currentUser.email)) || '';
-      return true;
-    }
-
-    function v4227EnsureOrUpdateFactoryTask(plan){
-      if(typeof v4217EnsureFactoryReceivingTaskFromPickupPlan === 'function'){
-        return v4217EnsureFactoryReceivingTaskFromPickupPlan(plan);
-      }
-      return null;
-    }
-
-    function v4227SyncPickupPlanDestination(plan, oldDestination){
-      if(!plan) return true;
-      const wasFactory = v4227IsFactoryDestination(oldDestination);
-      const nowFactory = v4227IsFactoryDestination(plan.destination);
-      const oldTask = v4227FindFactoryTaskByPlan(plan);
-
-      if(wasFactory && !nowFactory && oldTask){
-        if(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(oldTask)){
-          alert('该集装箱已经进入门岗/卸货口执行流程，不能把目的地从工厂改为其他地点。');
-          plan.destination = oldDestination;
-          return false;
-        }
-        v4227CancelFactoryTask(oldTask, '提箱计划目的地从工厂改为' + (plan.destination || '-'));
-      }
-
-      if(nowFactory){
-        const task = v4227EnsureOrUpdateFactoryTask(plan);
-        if(task){
-          task.cancelled = false;
-          task.to = '工厂';
-          task.from = '港口';
-          task.estimatedArrival = plan.arrivalDate || task.estimatedArrival || '';
-          task.unloadingDock = plan.unloadingDock || task.unloadingDock || '';
-          task.carrier = plan.carrier || task.carrier || 'RG';
-          if(!task.operationStatus || task.operationStatus === 'cancelled') task.operationStatus = 'not_arrived';
-          if(!task.status || task.status === 'cancelled') task.status = plan.status === 'confirmed' ? 'in_transit' : 'planned';
-        }
-      }
-      return true;
-    }
-
-    window.modifyPlan = function(planId){
-      let plan = pickupPlans.find(p => p.id === planId);
-      if(!plan) return;
-
-      const old = {
-        arrivalDate: plan.arrivalDate,
-        carrier: plan.carrier,
-        destination: plan.destination,
-        unloadingDock: plan.unloadingDock,
-        status: plan.status,
-        needReconfirm: plan.needReconfirm
-      };
-
-      const newArrival = prompt('修改到货时间（格式：YYYY-MM-DDTHH:mm 或 YYYY/MM/DD HH:mm）', plan.arrivalDate || '');
-      if(newArrival === null) return;
-      const newCarrier = prompt('修改运输公司(RG/JSL)', plan.carrier || 'RG');
-      if(newCarrier === null) return;
-      const newDest = prompt('修改目的地（RG堆场/Rio Claro/IRA库房/工厂）', plan.destination || '');
-      if(newDest === null) return;
-      const newDock = prompt('修改卸货口（目的地为工厂时必填）', plan.unloadingDock || '');
-      if(newDock === null) return;
-
-      if(v4227IsFactoryDestination(newDest) && !String(newDock || '').trim()){
-        alert('目的地为工厂时，卸货口必填');
-        return;
-      }
-
-      if(newArrival) plan.arrivalDate = newArrival;
-      if(newCarrier && (newCarrier === 'RG' || newCarrier === 'JSL')) plan.carrier = newCarrier;
-      if(newDest) plan.destination = newDest;
-      plan.unloadingDock = String(newDock || '').trim();
-      plan.status = 'pending';
-      plan.needReconfirm = true;
-      plan.updatedAt = new Date().toISOString();
-      plan.updatedBy = (currentUser && (currentUser.name || currentUser.email)) || '';
-
-      const ok = v4227SyncPickupPlanDestination(plan, old.destination);
-      if(!ok){
-        plan.arrivalDate = old.arrivalDate;
-        plan.carrier = old.carrier;
-        plan.destination = old.destination;
-        plan.unloadingDock = old.unloadingDock;
-        plan.status = old.status;
-        plan.needReconfirm = old.needReconfirm;
-        return;
-      }
-
-      const viewState = typeof capturePickupPlanViewState === 'function' ? capturePickupPlanViewState() : null;
-      saveData();
-      if(typeof refreshPickupPlanTablesKeepState === 'function') refreshPickupPlanTablesKeepState(viewState);
-      else renderContent();
-      alert('计划已修改，关联的门岗/卸货口计划已同步更新，需运输公司重新确认。');
-    };
-
-    // 页面/数据加载后做一次清理：非工厂提箱计划不应保留未开始的工厂监控任务。
-    window.v4227CleanupStaleFactoryTasks = function(){
-      let changed = false;
-      (pickupPlans || []).forEach(plan => {
-        if(!plan || v4227IsFactoryDestination(plan.destination)) return;
-        const task = v4227FindFactoryTaskByPlan(plan);
-        if(task && !(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(task))){
-          if(v4227CancelFactoryTask(task, '提箱计划目的地不是工厂，自动清理残留工厂到货计划')) changed = true;
-        }
-      });
-      if(changed) saveData();
-      return changed;
-    };
-
-    const oldRenderGateOnly = window.renderFactoryGateOnly;
-    if(typeof oldRenderGateOnly === 'function'){
-      window.renderFactoryGateOnly = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before gate skipped', e); }
-        return oldRenderGateOnly.apply(this, arguments);
-      };
-    }
-    const oldRenderDock = window.renderDockMonitoring;
-    if(typeof oldRenderDock === 'function'){
-      window.renderDockMonitoring = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dock skipped', e); }
-        return oldRenderDock.apply(this, arguments);
-      };
-    }
-
-    // 动态运输计划发布前也先清理一次，避免旧残留任务继续阻挡新计划。
-    const oldPublishDynamicSingle = window.publishDynamicSingle;
-    if(typeof oldPublishDynamicSingle === 'function'){
-      window.publishDynamicSingle = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic publish skipped', e); }
-        return oldPublishDynamicSingle.apply(this, arguments);
-      };
-    }
-    const oldBatchPublishDynamic = window.batchPublishDynamic;
-    if(typeof oldBatchPublishDynamic === 'function'){
-      window.batchPublishDynamic = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic batch skipped', e); }
-        return oldBatchPublishDynamic.apply(this, arguments);
-      };
-    }
-  })();
-
-</script>
+  </script>
 
 <script>
 /* ==================== V42.9：生产保供看板最终数据源修复 ====================
@@ -8383,183 +6889,7 @@ let main=document.getElementById('mainContent');
 
 
 
-  /* ==================== V43.0 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
-     问题：提箱计划从“港口→工厂”改为“港口→RG堆场/Rio Claro/IRA”后，旧工厂到货监控任务没有同步撤回，导致动态运输计划发布时提示“已有未完成工厂到货计划”。
-     修复：编辑提箱计划时，如目的地从工厂改为非工厂，且门岗/卸货口尚未开始操作，则自动取消旧工厂监控任务；如已开始门岗/卸货执行，则禁止改为非工厂。
-  */
-  (function(){
-    function v4227IsFactoryDestination(dest){
-      const d = String(dest || '').trim();
-      return d === '工厂' || d.toLowerCase() === 'factory' || d.toUpperCase() === 'GWM';
-    }
-
-    function v4227FindFactoryTaskByPlan(plan){
-      if(!plan) return null;
-      return (transportTasks || []).find(t =>
-        t &&
-        t.to === '工厂' &&
-        !t.cancelled &&
-        (
-          String(t.sourcePlanId || '') === String(plan.id || '') ||
-          (String(t.containerId || '') === String(plan.containerId || '') && String(t.source || '') === 'pickupPlan') ||
-          (String(t.containerId || '') === String(plan.containerId || '') && String(t.estimatedArrival || '') === String(plan.arrivalDate || ''))
-        )
-      ) || null;
-    }
-
-    function v4227CancelFactoryTask(task, reason){
-      if(!task) return false;
-      if(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(task)){
-        return false;
-      }
-      task.cancelled = true;
-      task.status = 'cancelled';
-      task.operationStatus = 'cancelled';
-      task.cancelReason = reason || '提箱计划目的地变更，自动撤回工厂到货计划';
-      task.cancelTime = new Date().toISOString();
-      task.cancelUser = (currentUser && (currentUser.name || currentUser.email)) || '';
-      return true;
-    }
-
-    function v4227EnsureOrUpdateFactoryTask(plan){
-      if(typeof v4217EnsureFactoryReceivingTaskFromPickupPlan === 'function'){
-        return v4217EnsureFactoryReceivingTaskFromPickupPlan(plan);
-      }
-      return null;
-    }
-
-    function v4227SyncPickupPlanDestination(plan, oldDestination){
-      if(!plan) return true;
-      const wasFactory = v4227IsFactoryDestination(oldDestination);
-      const nowFactory = v4227IsFactoryDestination(plan.destination);
-      const oldTask = v4227FindFactoryTaskByPlan(plan);
-
-      if(wasFactory && !nowFactory && oldTask){
-        if(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(oldTask)){
-          alert('该集装箱已经进入门岗/卸货口执行流程，不能把目的地从工厂改为其他地点。');
-          plan.destination = oldDestination;
-          return false;
-        }
-        v4227CancelFactoryTask(oldTask, '提箱计划目的地从工厂改为' + (plan.destination || '-'));
-      }
-
-      if(nowFactory){
-        const task = v4227EnsureOrUpdateFactoryTask(plan);
-        if(task){
-          task.cancelled = false;
-          task.to = '工厂';
-          task.from = '港口';
-          task.estimatedArrival = plan.arrivalDate || task.estimatedArrival || '';
-          task.unloadingDock = plan.unloadingDock || task.unloadingDock || '';
-          task.carrier = plan.carrier || task.carrier || 'RG';
-          if(!task.operationStatus || task.operationStatus === 'cancelled') task.operationStatus = 'not_arrived';
-          if(!task.status || task.status === 'cancelled') task.status = plan.status === 'confirmed' ? 'in_transit' : 'planned';
-        }
-      }
-      return true;
-    }
-
-    window.modifyPlan = function(planId){
-      let plan = pickupPlans.find(p => p.id === planId);
-      if(!plan) return;
-
-      const old = {
-        arrivalDate: plan.arrivalDate,
-        carrier: plan.carrier,
-        destination: plan.destination,
-        unloadingDock: plan.unloadingDock,
-        status: plan.status,
-        needReconfirm: plan.needReconfirm
-      };
-
-      const newArrival = prompt('修改到货时间（格式：YYYY-MM-DDTHH:mm 或 YYYY/MM/DD HH:mm）', plan.arrivalDate || '');
-      if(newArrival === null) return;
-      const newCarrier = prompt('修改运输公司(RG/JSL)', plan.carrier || 'RG');
-      if(newCarrier === null) return;
-      const newDest = prompt('修改目的地（RG堆场/Rio Claro/IRA库房/工厂）', plan.destination || '');
-      if(newDest === null) return;
-      const newDock = prompt('修改卸货口（目的地为工厂时必填）', plan.unloadingDock || '');
-      if(newDock === null) return;
-
-      if(v4227IsFactoryDestination(newDest) && !String(newDock || '').trim()){
-        alert('目的地为工厂时，卸货口必填');
-        return;
-      }
-
-      if(newArrival) plan.arrivalDate = newArrival;
-      if(newCarrier && (newCarrier === 'RG' || newCarrier === 'JSL')) plan.carrier = newCarrier;
-      if(newDest) plan.destination = newDest;
-      plan.unloadingDock = String(newDock || '').trim();
-      plan.status = 'pending';
-      plan.needReconfirm = true;
-      plan.updatedAt = new Date().toISOString();
-      plan.updatedBy = (currentUser && (currentUser.name || currentUser.email)) || '';
-
-      const ok = v4227SyncPickupPlanDestination(plan, old.destination);
-      if(!ok){
-        plan.arrivalDate = old.arrivalDate;
-        plan.carrier = old.carrier;
-        plan.destination = old.destination;
-        plan.unloadingDock = old.unloadingDock;
-        plan.status = old.status;
-        plan.needReconfirm = old.needReconfirm;
-        return;
-      }
-
-      const viewState = typeof capturePickupPlanViewState === 'function' ? capturePickupPlanViewState() : null;
-      saveData();
-      if(typeof refreshPickupPlanTablesKeepState === 'function') refreshPickupPlanTablesKeepState(viewState);
-      else renderContent();
-      alert('计划已修改，关联的门岗/卸货口计划已同步更新，需运输公司重新确认。');
-    };
-
-    // 页面/数据加载后做一次清理：非工厂提箱计划不应保留未开始的工厂监控任务。
-    window.v4227CleanupStaleFactoryTasks = function(){
-      let changed = false;
-      (pickupPlans || []).forEach(plan => {
-        if(!plan || v4227IsFactoryDestination(plan.destination)) return;
-        const task = v4227FindFactoryTaskByPlan(plan);
-        if(task && !(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(task))){
-          if(v4227CancelFactoryTask(task, '提箱计划目的地不是工厂，自动清理残留工厂到货计划')) changed = true;
-        }
-      });
-      if(changed) saveData();
-      return changed;
-    };
-
-    const oldRenderGateOnly = window.renderFactoryGateOnly;
-    if(typeof oldRenderGateOnly === 'function'){
-      window.renderFactoryGateOnly = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before gate skipped', e); }
-        return oldRenderGateOnly.apply(this, arguments);
-      };
-    }
-    const oldRenderDock = window.renderDockMonitoring;
-    if(typeof oldRenderDock === 'function'){
-      window.renderDockMonitoring = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dock skipped', e); }
-        return oldRenderDock.apply(this, arguments);
-      };
-    }
-
-    // 动态运输计划发布前也先清理一次，避免旧残留任务继续阻挡新计划。
-    const oldPublishDynamicSingle = window.publishDynamicSingle;
-    if(typeof oldPublishDynamicSingle === 'function'){
-      window.publishDynamicSingle = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic publish skipped', e); }
-        return oldPublishDynamicSingle.apply(this, arguments);
-      };
-    }
-    const oldBatchPublishDynamic = window.batchPublishDynamic;
-    if(typeof oldBatchPublishDynamic === 'function'){
-      window.batchPublishDynamic = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic batch skipped', e); }
-        return oldBatchPublishDynamic.apply(this, arguments);
-      };
-    }
-  })();
-
-</script>
+  </script>
 
 <script>
   /* ==================== V42.23 生产计划维护：3个有效生产日 ====================
@@ -8624,183 +6954,7 @@ let main=document.getElementById('mainContent');
   };
 
 
-  /* ==================== V43.0 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
-     问题：提箱计划从“港口→工厂”改为“港口→RG堆场/Rio Claro/IRA”后，旧工厂到货监控任务没有同步撤回，导致动态运输计划发布时提示“已有未完成工厂到货计划”。
-     修复：编辑提箱计划时，如目的地从工厂改为非工厂，且门岗/卸货口尚未开始操作，则自动取消旧工厂监控任务；如已开始门岗/卸货执行，则禁止改为非工厂。
-  */
-  (function(){
-    function v4227IsFactoryDestination(dest){
-      const d = String(dest || '').trim();
-      return d === '工厂' || d.toLowerCase() === 'factory' || d.toUpperCase() === 'GWM';
-    }
-
-    function v4227FindFactoryTaskByPlan(plan){
-      if(!plan) return null;
-      return (transportTasks || []).find(t =>
-        t &&
-        t.to === '工厂' &&
-        !t.cancelled &&
-        (
-          String(t.sourcePlanId || '') === String(plan.id || '') ||
-          (String(t.containerId || '') === String(plan.containerId || '') && String(t.source || '') === 'pickupPlan') ||
-          (String(t.containerId || '') === String(plan.containerId || '') && String(t.estimatedArrival || '') === String(plan.arrivalDate || ''))
-        )
-      ) || null;
-    }
-
-    function v4227CancelFactoryTask(task, reason){
-      if(!task) return false;
-      if(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(task)){
-        return false;
-      }
-      task.cancelled = true;
-      task.status = 'cancelled';
-      task.operationStatus = 'cancelled';
-      task.cancelReason = reason || '提箱计划目的地变更，自动撤回工厂到货计划';
-      task.cancelTime = new Date().toISOString();
-      task.cancelUser = (currentUser && (currentUser.name || currentUser.email)) || '';
-      return true;
-    }
-
-    function v4227EnsureOrUpdateFactoryTask(plan){
-      if(typeof v4217EnsureFactoryReceivingTaskFromPickupPlan === 'function'){
-        return v4217EnsureFactoryReceivingTaskFromPickupPlan(plan);
-      }
-      return null;
-    }
-
-    function v4227SyncPickupPlanDestination(plan, oldDestination){
-      if(!plan) return true;
-      const wasFactory = v4227IsFactoryDestination(oldDestination);
-      const nowFactory = v4227IsFactoryDestination(plan.destination);
-      const oldTask = v4227FindFactoryTaskByPlan(plan);
-
-      if(wasFactory && !nowFactory && oldTask){
-        if(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(oldTask)){
-          alert('该集装箱已经进入门岗/卸货口执行流程，不能把目的地从工厂改为其他地点。');
-          plan.destination = oldDestination;
-          return false;
-        }
-        v4227CancelFactoryTask(oldTask, '提箱计划目的地从工厂改为' + (plan.destination || '-'));
-      }
-
-      if(nowFactory){
-        const task = v4227EnsureOrUpdateFactoryTask(plan);
-        if(task){
-          task.cancelled = false;
-          task.to = '工厂';
-          task.from = '港口';
-          task.estimatedArrival = plan.arrivalDate || task.estimatedArrival || '';
-          task.unloadingDock = plan.unloadingDock || task.unloadingDock || '';
-          task.carrier = plan.carrier || task.carrier || 'RG';
-          if(!task.operationStatus || task.operationStatus === 'cancelled') task.operationStatus = 'not_arrived';
-          if(!task.status || task.status === 'cancelled') task.status = plan.status === 'confirmed' ? 'in_transit' : 'planned';
-        }
-      }
-      return true;
-    }
-
-    window.modifyPlan = function(planId){
-      let plan = pickupPlans.find(p => p.id === planId);
-      if(!plan) return;
-
-      const old = {
-        arrivalDate: plan.arrivalDate,
-        carrier: plan.carrier,
-        destination: plan.destination,
-        unloadingDock: plan.unloadingDock,
-        status: plan.status,
-        needReconfirm: plan.needReconfirm
-      };
-
-      const newArrival = prompt('修改到货时间（格式：YYYY-MM-DDTHH:mm 或 YYYY/MM/DD HH:mm）', plan.arrivalDate || '');
-      if(newArrival === null) return;
-      const newCarrier = prompt('修改运输公司(RG/JSL)', plan.carrier || 'RG');
-      if(newCarrier === null) return;
-      const newDest = prompt('修改目的地（RG堆场/Rio Claro/IRA库房/工厂）', plan.destination || '');
-      if(newDest === null) return;
-      const newDock = prompt('修改卸货口（目的地为工厂时必填）', plan.unloadingDock || '');
-      if(newDock === null) return;
-
-      if(v4227IsFactoryDestination(newDest) && !String(newDock || '').trim()){
-        alert('目的地为工厂时，卸货口必填');
-        return;
-      }
-
-      if(newArrival) plan.arrivalDate = newArrival;
-      if(newCarrier && (newCarrier === 'RG' || newCarrier === 'JSL')) plan.carrier = newCarrier;
-      if(newDest) plan.destination = newDest;
-      plan.unloadingDock = String(newDock || '').trim();
-      plan.status = 'pending';
-      plan.needReconfirm = true;
-      plan.updatedAt = new Date().toISOString();
-      plan.updatedBy = (currentUser && (currentUser.name || currentUser.email)) || '';
-
-      const ok = v4227SyncPickupPlanDestination(plan, old.destination);
-      if(!ok){
-        plan.arrivalDate = old.arrivalDate;
-        plan.carrier = old.carrier;
-        plan.destination = old.destination;
-        plan.unloadingDock = old.unloadingDock;
-        plan.status = old.status;
-        plan.needReconfirm = old.needReconfirm;
-        return;
-      }
-
-      const viewState = typeof capturePickupPlanViewState === 'function' ? capturePickupPlanViewState() : null;
-      saveData();
-      if(typeof refreshPickupPlanTablesKeepState === 'function') refreshPickupPlanTablesKeepState(viewState);
-      else renderContent();
-      alert('计划已修改，关联的门岗/卸货口计划已同步更新，需运输公司重新确认。');
-    };
-
-    // 页面/数据加载后做一次清理：非工厂提箱计划不应保留未开始的工厂监控任务。
-    window.v4227CleanupStaleFactoryTasks = function(){
-      let changed = false;
-      (pickupPlans || []).forEach(plan => {
-        if(!plan || v4227IsFactoryDestination(plan.destination)) return;
-        const task = v4227FindFactoryTaskByPlan(plan);
-        if(task && !(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(task))){
-          if(v4227CancelFactoryTask(task, '提箱计划目的地不是工厂，自动清理残留工厂到货计划')) changed = true;
-        }
-      });
-      if(changed) saveData();
-      return changed;
-    };
-
-    const oldRenderGateOnly = window.renderFactoryGateOnly;
-    if(typeof oldRenderGateOnly === 'function'){
-      window.renderFactoryGateOnly = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before gate skipped', e); }
-        return oldRenderGateOnly.apply(this, arguments);
-      };
-    }
-    const oldRenderDock = window.renderDockMonitoring;
-    if(typeof oldRenderDock === 'function'){
-      window.renderDockMonitoring = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dock skipped', e); }
-        return oldRenderDock.apply(this, arguments);
-      };
-    }
-
-    // 动态运输计划发布前也先清理一次，避免旧残留任务继续阻挡新计划。
-    const oldPublishDynamicSingle = window.publishDynamicSingle;
-    if(typeof oldPublishDynamicSingle === 'function'){
-      window.publishDynamicSingle = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic publish skipped', e); }
-        return oldPublishDynamicSingle.apply(this, arguments);
-      };
-    }
-    const oldBatchPublishDynamic = window.batchPublishDynamic;
-    if(typeof oldBatchPublishDynamic === 'function'){
-      window.batchPublishDynamic = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic batch skipped', e); }
-        return oldBatchPublishDynamic.apply(this, arguments);
-      };
-    }
-  })();
-
-</script>
+  </script>
 
 <script>
   /* ==================== V42.24 工作台保供看板：同步工厂日历有效生产日 ====================
@@ -8875,183 +7029,7 @@ let main=document.getElementById('mainContent');
   })();
 
 
-  /* ==================== V43.0 提箱计划目的地变更同步工厂门岗/卸货计划 ====================
-     问题：提箱计划从“港口→工厂”改为“港口→RG堆场/Rio Claro/IRA”后，旧工厂到货监控任务没有同步撤回，导致动态运输计划发布时提示“已有未完成工厂到货计划”。
-     修复：编辑提箱计划时，如目的地从工厂改为非工厂，且门岗/卸货口尚未开始操作，则自动取消旧工厂监控任务；如已开始门岗/卸货执行，则禁止改为非工厂。
-  */
-  (function(){
-    function v4227IsFactoryDestination(dest){
-      const d = String(dest || '').trim();
-      return d === '工厂' || d.toLowerCase() === 'factory' || d.toUpperCase() === 'GWM';
-    }
-
-    function v4227FindFactoryTaskByPlan(plan){
-      if(!plan) return null;
-      return (transportTasks || []).find(t =>
-        t &&
-        t.to === '工厂' &&
-        !t.cancelled &&
-        (
-          String(t.sourcePlanId || '') === String(plan.id || '') ||
-          (String(t.containerId || '') === String(plan.containerId || '') && String(t.source || '') === 'pickupPlan') ||
-          (String(t.containerId || '') === String(plan.containerId || '') && String(t.estimatedArrival || '') === String(plan.arrivalDate || ''))
-        )
-      ) || null;
-    }
-
-    function v4227CancelFactoryTask(task, reason){
-      if(!task) return false;
-      if(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(task)){
-        return false;
-      }
-      task.cancelled = true;
-      task.status = 'cancelled';
-      task.operationStatus = 'cancelled';
-      task.cancelReason = reason || '提箱计划目的地变更，自动撤回工厂到货计划';
-      task.cancelTime = new Date().toISOString();
-      task.cancelUser = (currentUser && (currentUser.name || currentUser.email)) || '';
-      return true;
-    }
-
-    function v4227EnsureOrUpdateFactoryTask(plan){
-      if(typeof v4217EnsureFactoryReceivingTaskFromPickupPlan === 'function'){
-        return v4217EnsureFactoryReceivingTaskFromPickupPlan(plan);
-      }
-      return null;
-    }
-
-    function v4227SyncPickupPlanDestination(plan, oldDestination){
-      if(!plan) return true;
-      const wasFactory = v4227IsFactoryDestination(oldDestination);
-      const nowFactory = v4227IsFactoryDestination(plan.destination);
-      const oldTask = v4227FindFactoryTaskByPlan(plan);
-
-      if(wasFactory && !nowFactory && oldTask){
-        if(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(oldTask)){
-          alert('该集装箱已经进入门岗/卸货口执行流程，不能把目的地从工厂改为其他地点。');
-          plan.destination = oldDestination;
-          return false;
-        }
-        v4227CancelFactoryTask(oldTask, '提箱计划目的地从工厂改为' + (plan.destination || '-'));
-      }
-
-      if(nowFactory){
-        const task = v4227EnsureOrUpdateFactoryTask(plan);
-        if(task){
-          task.cancelled = false;
-          task.to = '工厂';
-          task.from = '港口';
-          task.estimatedArrival = plan.arrivalDate || task.estimatedArrival || '';
-          task.unloadingDock = plan.unloadingDock || task.unloadingDock || '';
-          task.carrier = plan.carrier || task.carrier || 'RG';
-          if(!task.operationStatus || task.operationStatus === 'cancelled') task.operationStatus = 'not_arrived';
-          if(!task.status || task.status === 'cancelled') task.status = plan.status === 'confirmed' ? 'in_transit' : 'planned';
-        }
-      }
-      return true;
-    }
-
-    window.modifyPlan = function(planId){
-      let plan = pickupPlans.find(p => p.id === planId);
-      if(!plan) return;
-
-      const old = {
-        arrivalDate: plan.arrivalDate,
-        carrier: plan.carrier,
-        destination: plan.destination,
-        unloadingDock: plan.unloadingDock,
-        status: plan.status,
-        needReconfirm: plan.needReconfirm
-      };
-
-      const newArrival = prompt('修改到货时间（格式：YYYY-MM-DDTHH:mm 或 YYYY/MM/DD HH:mm）', plan.arrivalDate || '');
-      if(newArrival === null) return;
-      const newCarrier = prompt('修改运输公司(RG/JSL)', plan.carrier || 'RG');
-      if(newCarrier === null) return;
-      const newDest = prompt('修改目的地（RG堆场/Rio Claro/IRA库房/工厂）', plan.destination || '');
-      if(newDest === null) return;
-      const newDock = prompt('修改卸货口（目的地为工厂时必填）', plan.unloadingDock || '');
-      if(newDock === null) return;
-
-      if(v4227IsFactoryDestination(newDest) && !String(newDock || '').trim()){
-        alert('目的地为工厂时，卸货口必填');
-        return;
-      }
-
-      if(newArrival) plan.arrivalDate = newArrival;
-      if(newCarrier && (newCarrier === 'RG' || newCarrier === 'JSL')) plan.carrier = newCarrier;
-      if(newDest) plan.destination = newDest;
-      plan.unloadingDock = String(newDock || '').trim();
-      plan.status = 'pending';
-      plan.needReconfirm = true;
-      plan.updatedAt = new Date().toISOString();
-      plan.updatedBy = (currentUser && (currentUser.name || currentUser.email)) || '';
-
-      const ok = v4227SyncPickupPlanDestination(plan, old.destination);
-      if(!ok){
-        plan.arrivalDate = old.arrivalDate;
-        plan.carrier = old.carrier;
-        plan.destination = old.destination;
-        plan.unloadingDock = old.unloadingDock;
-        plan.status = old.status;
-        plan.needReconfirm = old.needReconfirm;
-        return;
-      }
-
-      const viewState = typeof capturePickupPlanViewState === 'function' ? capturePickupPlanViewState() : null;
-      saveData();
-      if(typeof refreshPickupPlanTablesKeepState === 'function') refreshPickupPlanTablesKeepState(viewState);
-      else renderContent();
-      alert('计划已修改，关联的门岗/卸货口计划已同步更新，需运输公司重新确认。');
-    };
-
-    // 页面/数据加载后做一次清理：非工厂提箱计划不应保留未开始的工厂监控任务。
-    window.v4227CleanupStaleFactoryTasks = function(){
-      let changed = false;
-      (pickupPlans || []).forEach(plan => {
-        if(!plan || v4227IsFactoryDestination(plan.destination)) return;
-        const task = v4227FindFactoryTaskByPlan(plan);
-        if(task && !(typeof hasFactoryExecutionStarted === 'function' && hasFactoryExecutionStarted(task))){
-          if(v4227CancelFactoryTask(task, '提箱计划目的地不是工厂，自动清理残留工厂到货计划')) changed = true;
-        }
-      });
-      if(changed) saveData();
-      return changed;
-    };
-
-    const oldRenderGateOnly = window.renderFactoryGateOnly;
-    if(typeof oldRenderGateOnly === 'function'){
-      window.renderFactoryGateOnly = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before gate skipped', e); }
-        return oldRenderGateOnly.apply(this, arguments);
-      };
-    }
-    const oldRenderDock = window.renderDockMonitoring;
-    if(typeof oldRenderDock === 'function'){
-      window.renderDockMonitoring = function(container){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dock skipped', e); }
-        return oldRenderDock.apply(this, arguments);
-      };
-    }
-
-    // 动态运输计划发布前也先清理一次，避免旧残留任务继续阻挡新计划。
-    const oldPublishDynamicSingle = window.publishDynamicSingle;
-    if(typeof oldPublishDynamicSingle === 'function'){
-      window.publishDynamicSingle = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic publish skipped', e); }
-        return oldPublishDynamicSingle.apply(this, arguments);
-      };
-    }
-    const oldBatchPublishDynamic = window.batchPublishDynamic;
-    if(typeof oldBatchPublishDynamic === 'function'){
-      window.batchPublishDynamic = function(){
-        try{ window.v4227CleanupStaleFactoryTasks(); }catch(e){ console.warn('V43.0 cleanup before dynamic batch skipped', e); }
-        return oldBatchPublishDynamic.apply(this, arguments);
-      };
-    }
-  })();
-
-</script>
+  </script>
 
 
 <script>
@@ -15427,5 +13405,226 @@ ${preview}
 })();
 </script>
 
+<script>
+/* ==================== V47.1 Lean Performance Core ====================
+   安全精简与性能优化：
+   - 统一内存索引，消除页面渲染中的高频 Array.find/filter 全量扫描。
+   - 保存请求合并，单次操作触发的多次 saveData 只执行一次云端保存。
+   - 费用计算使用还箱索引和内存缓存，不再在每次保存时排序/序列化全部费用输入。
+   - 基础数据与费用报表分页渲染，避免数据量增加后一次创建数千个 DOM 单元格。
+*/
+(function(){
+  'use strict';
+  const W = window;
+  const VERSION = 'V47.1 Lean Performance Core';
+  const BASIC_PAGE_SIZE = 100;
+  const FEE_PAGE_SIZE = 80;
+  const A = v => Array.isArray(v) ? v : [];
+  const S = v => String(v == null ? '' : v).trim();
+  const U = v => S(v).toUpperCase();
+  const L = v => S(v).toLowerCase();
+  const esc = v => S(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  const nowIso = () => new Date().toISOString();
+  const todayStr = () => { try{return typeof getTodayStr==='function'?getTodayStr():new Date().toISOString().slice(0,10);}catch(_){return new Date().toISOString().slice(0,10);} };
+  const fmtD = v => { try{return typeof fmtDate==='function'?fmtDate(v):(S(v).slice(0,10)||'-');}catch(_){return S(v).slice(0,10)||'-';} };
+  const fmtDT = v => { try{return typeof fmtDateTime==='function'?fmtDateTime(v):(S(v)||'-');}catch(_){return S(v)||'-';} };
+
+  function rows(name){
+    try{
+      if(name==='containers') return typeof containers!=='undefined'&&Array.isArray(containers)?containers:A(W.containers);
+      if(name==='blList') return typeof blList!=='undefined'&&Array.isArray(blList)?blList:A(W.blList);
+      if(name==='containerBlMap') return typeof containerBlMap!=='undefined'&&Array.isArray(containerBlMap)?containerBlMap:A(W.containerBlMap);
+      if(name==='transportTasks') return typeof transportTasks!=='undefined'&&Array.isArray(transportTasks)?transportTasks:A(W.transportTasks);
+      if(name==='locationStock') return typeof locationStock!=='undefined'&&Array.isArray(locationStock)?locationStock:A(W.locationStock);
+      if(name==='returnRecords') return typeof returnRecords!=='undefined'&&Array.isArray(returnRecords)?returnRecords:A(W.returnRecords);
+      if(name==='pickupPlans') return typeof pickupPlans!=='undefined'&&Array.isArray(pickupPlans)?pickupPlans:A(W.pickupPlans);
+      if(name==='productionRecords') return typeof productionRecords!=='undefined'&&Array.isArray(productionRecords)?productionRecords:A(W.productionRecords);
+      if(name==='storageConfig') return typeof storageConfig!=='undefined'&&Array.isArray(storageConfig)?storageConfig:A(W.storageConfig);
+      if(name==='demurrageConfig') return typeof demurrageConfig!=='undefined'&&Array.isArray(demurrageConfig)?demurrageConfig:A(W.demurrageConfig);
+    }catch(_){ }
+    return [];
+  }
+
+  function normLoc(v){
+    const raw=S(v), s=raw.replace(/\s+/g,'').toLowerCase();
+    if(!s)return '';
+    if(s.includes('rioclaro'))return 'Rio Claro';
+    if(s.includes('ira'))return 'IRA库房';
+    if(s.includes('rg'))return 'RG堆场';
+    if(s.includes('工厂')||s.includes('factory')||s.includes('fabrica')||s.includes('fábrica')||s.includes('gwm'))return '工厂';
+    if(s.includes('港口')||s.includes('santos')||s.includes('porto'))return '港口';
+    if(['120b','132','140b','140c'].includes(s))return s.toUpperCase();
+    return raw;
+  }
+  function origin(t){return normLoc(t&&(t.from||t.origin||t.fromLocation));}
+  function dest(t){return normLoc(t&&(t.to||t.destination||t.location||t.dest));}
+  function cancelled(t){return !t||t.cancelled||['cancelled','archived','closed'].includes(L(t.status));}
+  function openTask(t){return !!(t&&!cancelled(t)&&!['completed','return_completed','produced'].includes(L(t.status)));}
+  function taskRank(t){
+    if(!t)return 0;
+    if(t.unloadFinishTime||t.unpackConfirmedAt||t.operationStatus==='unloaded')return 4;
+    if(t.unloadStartTime||t.operationStatus==='unloading')return 3;
+    if(t.waitingAreaTime||t.gateReleaseTime||t.operationStatus==='inside_waiting')return 2;
+    if(t.gateArrivalTime||t.operationStatus==='outside_parking'||t.operationStatus==='gate_arrived')return 1;
+    return 0;
+  }
+  function stamp(x){return Date.parse(x&&[x.updatedAt,x.returnConfirmedAt,x.returnDate,x.createdAt,x.publishedAt].find(Boolean)||0)||0;}
+  function pushMap(map,key,value){if(!key)return;const list=map.get(key);if(list)list.push(value);else map.set(key,[value]);}
+  function latest(list){return A(list).reduce((a,b)=>!a||stamp(b)>=stamp(a)?b:a,null);}
+
+  const IDX={revision:1,built:0,refs:null,containerById:new Map(),containerByNo:new Map(),tasksByContainerId:new Map(),tasksByContainerNo:new Map(),taskById:new Map(),taskByUid:new Map(),taskByRoute:new Map(),confirmedReturnById:new Map(),confirmedReturnByNo:new Map(),pendingReturnById:new Map(),pendingReturnByNo:new Map(),stockById:new Map(),producedIds:new Set(),blNosById:new Map(),blByKey:new Map(),blTextById:new Map(),iraById:new Map(),factoryTaskByBatchSeq:new Map(),sortedContainers:[],statusCache:new Map()};
+
+  function arrayRefs(){
+    const names=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords'];
+    return names.map(n=>{const r=rows(n);return [r,r.length,r.length?S(r[r.length-1]&&r[r.length-1].updatedAt):''];});
+  }
+  function refsChanged(next){
+    const old=IDX.refs;if(!old||old.length!==next.length)return true;
+    for(let i=0;i<next.length;i++)if(old[i][0]!==next[i][0]||old[i][1]!==next[i][1]||old[i][2]!==next[i][2])return true;
+    return false;
+  }
+  function invalidate(reason){
+    IDX.revision++;IDX.built=0;IDX.statusCache.clear();IDX.refs=null;
+    W.__ccDataRevisionV471=IDX.revision;W.__ccLastInvalidationV471=reason||'data_changed';
+    try{localStorage.removeItem('cc_lastFeeUpdate');localStorage.removeItem('cc_cachedFees');localStorage.removeItem('cc_feeInputSignatureV468');}catch(_){ }
+  }
+  function buildIndexes(force){
+    const refs=arrayRefs();
+    if(!force&&IDX.built===IDX.revision&&!refsChanged(refs))return IDX;
+    IDX.containerById=new Map();IDX.containerByNo=new Map();IDX.tasksByContainerId=new Map();IDX.tasksByContainerNo=new Map();IDX.taskById=new Map();IDX.taskByUid=new Map();IDX.taskByRoute=new Map();IDX.confirmedReturnById=new Map();IDX.confirmedReturnByNo=new Map();IDX.pendingReturnById=new Map();IDX.pendingReturnByNo=new Map();IDX.stockById=new Map();IDX.producedIds=new Set();IDX.blNosById=new Map();IDX.blByKey=new Map();IDX.blTextById=new Map();IDX.iraById=new Map();IDX.factoryTaskByBatchSeq=new Map();IDX.statusCache=new Map();
+    const cs=rows('containers');
+    cs.forEach(c=>{if(S(c.id))IDX.containerById.set(S(c.id),c);if(U(c.containerNo))IDX.containerByNo.set(U(c.containerNo),c);});
+    rows('blList').forEach(b=>{[b.blNo,b.houseBlNo].forEach(k=>{if(S(k))IDX.blByKey.set(S(k),b);});});
+    rows('containerBlMap').forEach(m=>{const id=S(m.containerId),no=S(m.blNo);if(!id||!no)return;pushMap(IDX.blNosById,id,no);});
+    IDX.blNosById.forEach((nos,id)=>{
+      const blText=[],ira=[];
+      nos.forEach(no=>{const b=IDX.blByKey.get(S(no));if(b&&b.carrier==='长荣')blText.push(`${S(b.masterBlNo)} ${S(b.houseBlNo)}`.trim());else blText.push(S(no));if(b&&S(b.iraNo))ira.push(S(b.iraNo));});
+      IDX.blTextById.set(id,[...new Set(blText.filter(Boolean))].join(','));IDX.iraById.set(id,[...new Set(ira)].join(','));
+    });
+    rows('transportTasks').forEach(t=>{
+      if(S(t.id))IDX.taskById.set(S(t.id),t);if(S(t.taskUid))IDX.taskByUid.set(S(t.taskUid),t);if(S(t.routeLegKey))IDX.taskByRoute.set(S(t.routeLegKey),t);
+      if(S(t.containerId))pushMap(IDX.tasksByContainerId,S(t.containerId),t);if(U(t.containerNo))pushMap(IDX.tasksByContainerNo,U(t.containerNo),t);
+      if(openTask(t)&&dest(t)==='工厂'){const key=U(t.batch)+'|'+S(t.containerSeq||t.seq);const old=IDX.factoryTaskByBatchSeq.get(key);if(!old||stamp(t)>=stamp(old))IDX.factoryTaskByBatchSeq.set(key,t);}
+    });
+    rows('returnRecords').forEach(r=>{
+      const id=S(r.containerId),no=U(r.containerNo);
+      if(r&&r.type==='return'&&r.isReturnConfirmed===true&&S(r.returnDate)){
+        const set=(map,key)=>{if(!key)return;const old=map.get(key);if(!old||stamp(r)>=stamp(old))map.set(key,r);};set(IDX.confirmedReturnById,id);set(IDX.confirmedReturnByNo,no);
+      }else if(r&&!r.isReturnConfirmed&&L(r.type||'return_needed')==='return_needed'){
+        if(id&&!IDX.pendingReturnById.has(id))IDX.pendingReturnById.set(id,r);if(no&&!IDX.pendingReturnByNo.has(no))IDX.pendingReturnByNo.set(no,r);
+      }
+    });
+    rows('locationStock').forEach(s=>{const id=S(s.containerId);if(!id)return;const old=IDX.stockById.get(id);if(!old||stamp(s)>=stamp(old))IDX.stockById.set(id,s);});
+    rows('productionRecords').forEach(p=>A(p.containerIds).forEach(id=>IDX.producedIds.add(S(id))));
+    IDX.sortedContainers=cs.slice().sort((a,b)=>S(a.batch).localeCompare(S(b.batch),'zh-CN',{numeric:true})||Number(a.containerSeq||a.seq||999)-Number(b.containerSeq||b.seq||999));
+    IDX.refs=refs;IDX.built=IDX.revision;return IDX;
+  }
+  function indexes(){return buildIndexes(false);}
+  W.rebuildPerformanceIndexesV471=()=>buildIndexes(true);
+  W.invalidatePerformanceIndexesV471=invalidate;
+
+  function containerOf(x){const I=indexes();return I.containerById.get(S(x&&x.containerId))||I.containerByNo.get(U(x&&x.containerNo))||null;}
+  function activeTasksFor(c){const I=indexes(),id=S(c&&c.id),no=U(c&&c.containerNo);const seen=new Set(),out=[];[...A(I.tasksByContainerId.get(id)),...A(I.tasksByContainerNo.get(no))].forEach(t=>{const k=S(t.taskUid||t.routeLegKey||t.id);if(k&&!seen.has(k)&&openTask(t)){seen.add(k);out.push(t);}});return out;}
+  function confirmedReturn(cOrId){const I=indexes();if(cOrId&&typeof cOrId==='object')return I.confirmedReturnById.get(S(cOrId.id))||I.confirmedReturnByNo.get(U(cOrId.containerNo))||null;return I.confirmedReturnById.get(S(cOrId))||null;}
+  function pendingReturn(c){const I=indexes();return I.pendingReturnById.get(S(c.id))||I.pendingReturnByNo.get(U(c.containerNo))||null;}
+  function fullStatus(c){
+    const I=indexes(),key=S(c&&c.id)||U(c&&c.containerNo);if(I.statusCache.has(key))return I.statusCache.get(key);
+    const customs=S(c&&c.customsStatus||c&&c.clearanceStatus||(c&&(c.customsCompleteTime||c.clearanceTime)?'已清关':'清关中'))||'清关中';
+    const t=latest(activeTasksFor(c));let result;
+    if(t){const r=taskRank(t),d=dest(t),st=L(t.status);if(st==='in_transit'){if(r===3)result={customs,loc:d,text:'卸货中',cls:'status-transport'};else if(r===2)result={customs,loc:d,text:'工厂内等待',cls:'status-warning'};else if(r===1)result={customs,loc:d,text:'已到门口',cls:'status-warning'};else result={customs,loc:'运输中',text:'运输中',cls:'status-transport'};}else if(st==='arrived')result={customs,loc:d,text:'已到达',cls:'status-at-location'};else if(st==='return_pending')result={customs,loc:d,text:'待还箱',cls:'status-return-pending'};}
+    if(!result){const p=pendingReturn(c);if(p)result={customs,loc:normLoc(p.location)||'待还箱',text:'待还箱',cls:'status-return-pending'};}
+    if(!result&&I.producedIds.has(S(c.id)))result={customs,loc:'已生产',text:'已完成',cls:'status-completed'};
+    if(!result){const r=confirmedReturn(c);if(r)result={customs,loc:normLoc(r.location)||'已还箱',text:'已完成',cls:'status-completed'};}
+    if(!result){const s=I.stockById.get(S(c.id));if(s)result={customs,loc:normLoc(s.location),text:'已到达',cls:'status-at-location'};}
+    if(!result&&c.actualPickupTime)result={customs,loc:'运输中',text:'运输中',cls:'status-transport'};
+    if(!result)result={customs,loc:'港口',text:customs,cls:customs==='已清关'?'status-ready':'status-clearing'};
+    I.statusCache.set(key,result);return result;
+  }
+
+  W.getContainerBlTextById=function(id){return indexes().blTextById.get(S(id))||'';};
+  W.getIraList=function(id){return indexes().iraById.get(S(id))||'';};
+  W.getTaskBlText=function(t){const c=containerOf(t);return W.getContainerBlTextById(S(t&&t.containerId)||S(c&&c.id))||S(t&&(t.blNo||t.bl||t.billOfLading))||'-';};
+  W.getConfirmedReturnRecord=function(id){return confirmedReturn(id);};
+  W.isContainerReturnConfirmed=function(id){return !!confirmedReturn(id);};
+  W.isProducedCompletedContainerId=function(id){return indexes().producedIds.has(S(id));};
+  W.getContainerFullStatus=function(c){const s=fullStatus(c);return{text:s.text,cls:s.cls,loc:s.loc};};
+  W.getContainerLocation=function(id){const c=indexes().containerById.get(S(id));return c?fullStatus(c).loc:'港口';};
+  W.v42TaskFor=function(batch,seq){return indexes().factoryTaskByBatchSeq.get(U(batch)+'|'+S(seq))||null;};
+  try{getContainerBlTextById=W.getContainerBlTextById;getIraList=W.getIraList;getTaskBlText=W.getTaskBlText;getConfirmedReturnRecord=W.getConfirmedReturnRecord;isContainerReturnConfirmed=W.isContainerReturnConfirmed;isProducedCompletedContainerId=W.isProducedCompletedContainerId;getContainerFullStatus=W.getContainerFullStatus;getContainerLocation=W.getContainerLocation;v42TaskFor=W.v42TaskFor;}catch(_){ }
+
+  function normalizeDate(v){if(!v)return'';const s=S(v),m=s.match(/(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);if(m)return`${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;const d=new Date(s);return Number.isNaN(d.getTime())?'':`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+  function dayDiff(a,b){a=normalizeDate(a);b=normalizeDate(b);if(!a||!b)return 0;const x=a.split('-').map(Number),y=b.split('-').map(Number);return Math.max(0,Math.round((Date.UTC(y[0],y[1]-1,y[2])-Date.UTC(x[0],x[1]-1,x[2]))/86400000));}
+  function minDate(a,b){a=normalizeDate(a);b=normalizeDate(b);return!a?b:!b?a:(a<=b?a:b);}
+  function demConfig(c){try{return typeof W.getDemurrageConfigByDate==='function'?W.getDemurrageConfigByDate(c,c.eta):null;}catch(_){return null;}}
+  function demBreakdown(c,reportDate){
+    const empty={total:0,days:0,freeDays:0,overtimeDays:0,ratePerDay:0,config:null,configMissing:false,returnRecord:null,returnDate:'',cutoffDate:'',eta:''};if(!c||!c.eta)return empty;
+    const eta=normalizeDate(c.eta),asOf=normalizeDate(reportDate||todayStr());if(!eta||!asOf)return empty;const cfg=demConfig(c),rr=confirmedReturn(c),rd=rr?normalizeDate(rr.returnDate):'',cut=rd?minDate(asOf,rd):asOf,days=dayDiff(eta,cut);if(!cfg)return{...empty,days,configMissing:true,returnRecord:rr,returnDate:rd,cutoffDate:cut,eta};const free=Math.max(0,Number(cfg.freeDays||0)),rate=Math.max(0,Number(cfg.ratePerDay||0)),over=Math.max(0,days-free);return{total:over*rate,days,freeDays:free,overtimeDays:over,ratePerDay:rate,config:cfg,configMissing:false,returnRecord:rr,returnDate:rd,cutoffDate:cut,eta};
+  }
+  function feeFor(c,date){
+    let sb={total:0,normal:0,abnormal:0,days:0,normalDays:0,abnormalDays:0,normalLimitDays:0,config:null};try{if(typeof W.calculateStorageFeeBreakdown==='function')sb=W.calculateStorageFeeBreakdown(c,date)||sb;}catch(_){ }
+    const dm=demBreakdown(c,date),remainingStorage=Math.max(0,Number(sb.normalLimitDays||0)-Number(sb.days||0)),remainingDem=dm.returnRecord||dm.configMissing?999:Math.max(0,dm.freeDays-dm.days);
+    return{storageFee:Number(sb.total||0),normalStorageFee:Number(sb.normal||0),abnormalStorageFee:Number(sb.abnormal||0),storageDays:Number(sb.days||0),storageNormalDays:Number(sb.normalDays||0),storageAbnormalDays:Number(sb.abnormalDays||0),storageRemainingDays:remainingStorage,demurrageFee:dm.total,demurrageDays:dm.days,demurrageFreeDays:dm.freeDays,demurrageOvertimeDays:dm.overtimeDays,demurrageRatePerDay:dm.ratePerDay,demurrageRemainingDays:remainingDem,demurrageConfigMissing:dm.configMissing,demurrageCutoffDate:dm.cutoffDate,demurrageReturnDate:dm.returnDate};
+  }
+  let feeCache={key:'',data:null,rowsKey:'',rows:null};
+  function feeKey(){const wc=(()=>{try{return warningConfig||W.warningConfig||{};}catch(_){return W.warningConfig||{};}})();return[todayStr(),IDX.revision,rows('storageConfig').length,rows('demurrageConfig').length,Number(wc.storageWarningDays||0),Number(wc.demurrageWarningDays||0)].join('|');}
+  function updateFees(force){
+    const key=feeKey();if(!force&&feeCache.key===key&&feeCache.data)return feeCache.data;buildIndexes(false);const cs=rows('containers'),wc=(()=>{try{return warningConfig||W.warningConfig||{};}catch(_){return W.warningConfig||{};}})();let totalStorage=0,totalNormalStorage=0,totalAbnormalStorage=0,totalDemurrage=0;const storageWarningList=[],demurrageWarningList=[],demurrageConfigMissingList=[],fees={};
+    cs.forEach(c=>{const f=feeFor(c,todayStr());fees[c.id]=f;let operational=true;try{operational=typeof isOperationalVisibleContainer==='function'?isOperationalVisibleContainer(c):true;}catch(_){ }if(operational){totalStorage+=f.storageFee;totalNormalStorage+=f.normalStorageFee;totalAbnormalStorage+=f.abnormalStorageFee;if(f.storageRemainingDays<=Number(wc.storageWarningDays||0)&&f.storageRemainingDays>0)storageWarningList.push({id:c.id,batch:c.batch,containerNo:c.containerNo,vessel:c.vessel,eta:c.eta,remainingDays:f.storageRemainingDays,fee:f.abnormalStorageFee,storageDays:f.storageDays,abnormalDays:f.storageAbnormalDays});}totalDemurrage+=f.demurrageFee;if(!confirmedReturn(c)){if(f.demurrageConfigMissing){const r={id:c.id,batch:c.batch,containerNo:c.containerNo,vessel:c.vessel,type:c.containerType,eta:c.eta,remainingDays:null,fee:0,missingConfig:true,issue:'费率未配置'};demurrageWarningList.push(r);demurrageConfigMissingList.push(r);}else if(f.demurrageRemainingDays<=Number(wc.demurrageWarningDays||0)&&f.demurrageRemainingDays>0)demurrageWarningList.push({id:c.id,batch:c.batch,containerNo:c.containerNo,vessel:c.vessel,type:c.containerType,eta:c.eta,remainingDays:f.demurrageRemainingDays,fee:f.demurrageFee,missingConfig:false});}});
+    const data={cacheVersion:'V47.1-memory',date:todayStr(),fees,totalStorage,totalNormalStorage,totalAbnormalStorage,totalDemurrage,storageWarningList,demurrageWarningList,demurrageConfigMissingList};feeCache={key,data,rowsKey:'',rows:null};try{cachedFeeData=data;}catch(_){ }W.cachedFeeData=data;try{localStorage.setItem('cc_lastFeeUpdate',todayStr());localStorage.setItem('cc_cachedFees',JSON.stringify({...data,fees:{}}));}catch(_){ }return data;
+  }
+  W.calculateDemurrageBreakdownV471=demBreakdown;W.calculateDemurrageFee=(c,d)=>demBreakdown(c,d).total;W.calculateFeesForContainer=feeFor;W.updateDailyFees=updateFees;W.invalidateAndRefreshFeesV468=W.invalidateAndRefreshFeesV469=function(){feeCache={key:'',data:null,rowsKey:'',rows:null};try{localStorage.removeItem('cc_lastFeeUpdate');localStorage.removeItem('cc_cachedFees');}catch(_){ }return updateFees(true);};
+  try{calculateDemurrageFee=W.calculateDemurrageFee;calculateFeesForContainer=W.calculateFeesForContainer;updateDailyFees=W.updateDailyFees;}catch(_){ }
+
+  // 多次保存请求合并为一次，避免同一操作连续上传完整数据快照。
+  const currentSave=W.saveData;
+  const rawSave=currentSave&&currentSave.__v468FeeAware&&typeof currentSave.__base==='function'?currentSave.__base:currentSave;
+  let saveTimer=null,saveDirty=false,saveRunning=null,saveWaiters=[],saveReasons=new Set();
+  async function flushSave(){
+    if(saveRunning)return saveRunning;if(!saveDirty)return true;saveDirty=false;if(saveTimer){clearTimeout(saveTimer);saveTimer=null;}const waiters=saveWaiters.splice(0),reason=[...saveReasons].join(',')||'coalesced_save';saveReasons.clear();
+    saveRunning=Promise.resolve().then(()=>typeof rawSave==='function'?rawSave.call(W,reason):true).then(r=>{waiters.forEach(x=>x.resolve(r));return r;}).catch(e=>{waiters.forEach(x=>x.reject(e));throw e;}).finally(()=>{saveRunning=null;if(saveDirty)setTimeout(flushSave,0);});return saveRunning;
+  }
+  function scheduleSave(reason){
+    invalidate(reason||'save');saveDirty=true;saveReasons.add(reason||'save');const p=new Promise((resolve,reject)=>saveWaiters.push({resolve,reject}));if(saveTimer)clearTimeout(saveTimer);saveTimer=setTimeout(flushSave,120);return p;
+  }
+  W.saveData=function(){return scheduleSave('saveData');};W.saveCloudState=function(){return scheduleSave('saveCloudState');};W.flushPendingSaveV471=flushSave;
+  try{saveData=W.saveData;saveCloudState=W.saveCloudState;}catch(_){ }
+  const oldPull=W.pullCloudStateAndRefresh;
+  if(typeof oldPull==='function'){
+    W.pullCloudStateAndRefresh=async function(){if(saveDirty||saveRunning)return false;const r=await oldPull.apply(this,arguments);invalidate('cloud_refresh');buildIndexes(true);return r;};
+    try{pullCloudStateAndRefresh=W.pullCloudStateAndRefresh;}catch(_){ }
+  }
+  const oldLoad=W.loadCloudState;
+  if(typeof oldLoad==='function')W.loadCloudState=async function(){const r=await oldLoad.apply(this,arguments);invalidate('cloud_load');buildIndexes(true);return r;};
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'&&saveDirty)flushSave();});
+
+  function pageBar(total,page,size,fn){const pages=Math.max(1,Math.ceil(total/size));page=Math.min(Math.max(1,page),pages);return `<div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin:10px 0;font-size:12px;color:#606266"><span>共 ${total} 条｜第 ${page}/${pages} 页</span><button class="btn btn-sm" ${page<=1?'disabled':''} onclick="${fn}(${page-1})">上一页</button><button class="btn btn-sm" ${page>=pages?'disabled':''} onclick="${fn}(${page+1})">下一页</button></div>`;}
+  function table(headers,body){return `<div class="table-wrapper"><table class="data-table"><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${body||`<tr><td colspan="${headers.length}" style="padding:22px;text-align:center;color:#909399">暂无数据</td></tr>`}</tbody></table></div>`;}
+
+  let basicPage=1,basicFilterKey='';
+  function renderBasicTable(page){
+    const box=document.getElementById('containerTable');if(!box)return;buildIndexes(false);const qb=L(document.getElementById('searchBatch')&&document.getElementById('searchBatch').value),qn=L(document.getElementById('searchContainer')&&document.getElementById('searchContainer').value),ql=normLoc(document.getElementById('searchLocation')&&document.getElementById('searchLocation').value),qs=S(document.getElementById('searchStatus')&&document.getElementById('searchStatus').value),fk=[qb,qn,ql,qs].join('|');if(fk!==basicFilterKey){basicFilterKey=fk;basicPage=1;}if(Number(page)>0)basicPage=Number(page);
+    const list=IDX.sortedContainers.filter(c=>{const st=fullStatus(c);return(!qb||L(c.batch).includes(qb))&&(!qn||L(c.containerNo).includes(qn))&&(!ql||st.loc===ql)&&(!qs||st.text===qs||st.customs===qs);});const pages=Math.max(1,Math.ceil(list.length/BASIC_PAGE_SIZE));basicPage=Math.min(Math.max(1,basicPage),pages);const start=(basicPage-1)*BASIC_PAGE_SIZE,slice=list.slice(start,start+BASIC_PAGE_SIZE);
+    const body=slice.map((c,i)=>{const st=fullStatus(c),bl=W.getContainerBlTextById(c.id)||'-',ira=W.getIraList(c.id)||'-';let lfd='-';try{lfd=typeof W.getDemurrageLastFreeDay==='function'?(W.getDemurrageLastFreeDay(c)||'-'):'-';}catch(_){ }return `<tr><td>${start+i+1}</td><td>${esc(c.batch||'-')}</td><td>${esc(c.containerSeq||c.seq||'-')}</td><td>${esc(c.containerNo||'-')}</td><td>${esc(c.vessel||c.carrier||'-')}</td><td>${esc(c.containerType||'-')}</td><td>${esc(fmtD(c.eta||c.arrivalDate))}</td><td>${esc(lfd)}</td><td>${esc(bl)}</td><td>${esc(ira)}</td><td><span class="status-badge ${st.customs==='已清关'?'status-ready':'status-clearing'}">${esc(st.customs)}</span></td><td><span class="status-badge status-pending">${esc(st.loc)}</span></td><td><span class="status-badge ${st.cls}">${esc(st.text)}</span></td><td><button class="btn btn-sm btn-warning" onclick="editContainer(${JSON.stringify(c.id)})">编辑</button> <button class="btn btn-sm btn-danger" onclick="deleteContainer(${JSON.stringify(c.id)})">删除</button></td></tr>`;}).join('');box.innerHTML=pageBar(list.length,basicPage,BASIC_PAGE_SIZE,'renderContainerTable')+table(['序号','批次','序号','集装箱号','船公司','箱型','到港','滞箱LFD','关联提单','IRA号','清关','位置','运输状态','操作'],body)+pageBar(list.length,basicPage,BASIC_PAGE_SIZE,'renderContainerTable');
+  }
+  function renderBasic(container){const main=container||document.getElementById('mainContent');if(!main)return;main.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📦 基础数据 <span class="status-badge status-ready">V47.1</span></span><div><button class="btn btn-primary" onclick="showAddContainer()">+ 新增</button><button class="btn export-btn" onclick="exportTemplate()">📥 导出模板</button><button class="btn btn-success" onclick="showImport()">📎 批量导入</button></div></div><div style="font-size:12px;color:#606266;margin-bottom:10px">已启用内存索引和分页，每页 ${BASIC_PAGE_SIZE} 条，查询与编辑不再扫描和渲染全部历史数据。</div><div class="search-bar"><input id="searchBatch" placeholder="批次"><input id="searchContainer" placeholder="集装箱号"><select id="searchLocation"><option value="">全部当前位置</option><option>港口</option><option>运输中</option><option>RG堆场</option><option>Rio Claro</option><option>IRA库房</option><option>工厂</option><option>已生产</option></select><select id="searchStatus"><option value="">全部运输状态</option><option>清关中</option><option>已清关</option><option>运输中</option><option>已到门口</option><option>工厂内等待</option><option>卸货中</option><option>待还箱</option><option>已完成</option></select><button class="btn btn-primary" onclick="renderContainerTable(1)">查询</button><button class="btn" onclick="clearContainerSearch()">重置</button></div><div id="containerTable"></div></div>`;renderBasicTable(1);}
+  W.renderContainers=renderBasic;W.renderContainerTable=renderBasicTable;W.clearContainerSearch=function(){['searchBatch','searchContainer','searchLocation','searchStatus'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});basicFilterKey='';renderBasicTable(1);};try{renderContainers=W.renderContainers;renderContainerTable=W.renderContainerTable;clearContainerSearch=W.clearContainerSearch;}catch(_){ }
+
+  let feePage=1,feeFilterKey='';
+  function feeRows(date){const key=[date,IDX.revision,rows('containers').length,rows('returnRecords').length,rows('storageConfig').length,rows('demurrageConfig').length].join('|');if(feeCache.rowsKey===key&&feeCache.rows)return feeCache.rows;const data=rows('containers').map(c=>{const f=feeFor(c,date),rr=confirmedReturn(c);let clearance='',pickup='';try{clearance=typeof getContainerClearanceCompleteDate==='function'?getContainerClearanceCompleteDate(c):'';pickup=c.actualPickupTime?(typeof getDatePart==='function'?getDatePart(c.actualPickupTime):normalizeDate(c.actualPickupTime)):'';}catch(_){ }return{...c,clearanceCompleteDate:clearance,pickupDate:pickup,returnDate:rr?normalizeDate(rr.returnDate):'',arrivalToClearanceDays:typeof getArrivalToClearanceDays==='function'?getArrivalToClearanceDays(c.eta,clearance):'-',clearanceToPickupDays:typeof getClearanceToPickupDays==='function'?getClearanceToPickupDays(clearance,pickup):'-',...f};});feeCache.rowsKey=key;feeCache.rows=data;return data;}
+  function renderFeeTable(page){const box=document.getElementById('feeTableV471');if(!box)return;const q=L(document.getElementById('feeSearchV471')&&document.getElementById('feeSearchV471').value),status=S(document.getElementById('feeRateStatusV471')&&document.getElementById('feeRateStatusV471').value),fk=q+'|'+status;if(fk!==feeFilterKey){feeFilterKey=fk;feePage=1;}if(Number(page)>0)feePage=Number(page);const all=feeRows(todayStr()),list=all.filter(c=>(!q||L([c.batch,c.containerNo,c.vessel,c.containerType].join(' ')).includes(q))&&(!status||(status==='missing'?c.demurrageConfigMissing:!c.demurrageConfigMissing)));const pages=Math.max(1,Math.ceil(list.length/FEE_PAGE_SIZE));feePage=Math.min(Math.max(1,feePage),pages);const start=(feePage-1)*FEE_PAGE_SIZE,slice=list.slice(start,start+FEE_PAGE_SIZE);const body=slice.map(c=>`<tr><td>${esc(c.batch||'-')}</td><td>${esc(c.containerNo||'-')}</td><td>${esc(c.vessel||'-')}</td><td>${esc(c.containerType||'-')}</td><td>${esc(fmtD(c.eta))}</td><td>${esc(c.clearanceCompleteDate?fmtD(c.clearanceCompleteDate):'-')}</td><td>${esc(c.arrivalToClearanceDays)}</td><td>${esc(c.pickupDate?fmtD(c.pickupDate):'-')}</td><td>${esc(c.clearanceToPickupDays)}</td><td>${esc(c.returnDate?fmtD(c.returnDate):'-')}</td><td>${Number(c.storageDays||0)}</td><td>R$ ${Number(c.normalStorageFee||0).toFixed(2)}</td><td>R$ ${Number(c.abnormalStorageFee||0).toFixed(2)}</td><td>R$ ${Number(c.storageFee||0).toFixed(2)}</td><td>${Number(c.demurrageDays||0)}</td><td>${Number(c.demurrageOvertimeDays||0)}</td><td>$ ${Number(c.demurrageRatePerDay||0).toFixed(2)}</td><td>$ ${Number(c.demurrageFee||0).toFixed(2)}</td><td><span class="status-badge ${c.demurrageConfigMissing?'status-danger':'status-success'}">${c.demurrageConfigMissing?'未配置':'已配置'}</span></td></tr>`).join('');box.innerHTML=pageBar(list.length,feePage,FEE_PAGE_SIZE,'renderFeeTableV471')+table(['批次','箱号','船公司','箱型','到港日期','清关完成时间','到港→清关(天)','提箱日期','清关→提箱(天)','还箱日期','堆存天数','正常堆存费','异常堆存费','堆存费合计','滞箱占用天数','超期天数','日费率','滞箱费','费率状态'],body)+pageBar(list.length,feePage,FEE_PAGE_SIZE,'renderFeeTableV471');}
+  function renderFee(container){const main=container||document.getElementById('mainContent');if(!main)return;const data=feeRows(todayStr()),sum=k=>data.reduce((n,x)=>n+Number(x[k]||0),0),missing=data.filter(x=>x.demurrageConfigMissing&&!x.returnDate).length;main.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📈 费用报表 <span class="status-badge status-ready">V47.1</span></span><button class="btn export-btn" onclick="exportFeeReport()">📥 导出Excel</button></div><div class="stats-grid"><div class="stat-card"><div class="stat-number">R$ ${sum('normalStorageFee').toFixed(2)}</div><div class="stat-label">正常堆存费</div></div><div class="stat-card warning-card"><div class="stat-number warning-number">R$ ${sum('abnormalStorageFee').toFixed(2)}</div><div class="stat-label">异常堆存费</div></div><div class="stat-card"><div class="stat-number">R$ ${sum('storageFee').toFixed(2)}</div><div class="stat-label">堆存费合计</div></div><div class="stat-card"><div class="stat-number">$ ${sum('demurrageFee').toFixed(2)}</div><div class="stat-label">滞箱费总额</div></div><div class="stat-card danger-card"><div class="stat-number danger-number">${missing}</div><div class="stat-label">滞箱费率未配置</div></div></div><div class="search-bar"><input id="feeSearchV471" placeholder="批次 / 箱号 / 船公司"><select id="feeRateStatusV471"><option value="">全部费率状态</option><option value="ok">已配置</option><option value="missing">未配置</option></select><button class="btn btn-primary" onclick="renderFeeTableV471(1)">查询</button></div><div style="font-size:12px;color:#606266;margin:6px 0">费用汇总计算全部数据，明细按每页 ${FEE_PAGE_SIZE} 条显示，Excel仍导出全部记录。</div><div id="feeTableV471"></div></div>`;renderFeeTable(1);}
+  W.renderFeeReport=renderFee;W.renderFeeTableV471=renderFeeTable;try{renderFeeReport=W.renderFeeReport;}catch(_){ }
+  W.exportFeeReport=function(){const date=todayStr(),data=feeRows(date).map(c=>({批次:c.batch,集装箱号:c.containerNo,船公司:c.vessel,箱型:c.containerType||'-',到港日期:fmtD(c.eta),清关完成时间:c.clearanceCompleteDate?fmtD(c.clearanceCompleteDate):'-',到港到清关完成用时_天:c.arrivalToClearanceDays,提箱日期:c.pickupDate?fmtD(c.pickupDate):'-',清关完成到提箱间隔_天:c.clearanceToPickupDays,还箱日期:c.returnDate?fmtD(c.returnDate):'-',堆存天数:c.storageDays,正常堆存费_雷亚尔:Number(c.normalStorageFee||0).toFixed(2),异常堆存费_雷亚尔:Number(c.abnormalStorageFee||0).toFixed(2),堆存费合计_雷亚尔:Number(c.storageFee||0).toFixed(2),滞箱占用天数:c.demurrageDays,滞箱超期天数:c.demurrageOvertimeDays,滞箱日费率_美元:Number(c.demurrageRatePerDay||0).toFixed(2),滞箱费_美元:Number(c.demurrageFee||0).toFixed(2),滞箱费率状态:c.demurrageConfigMissing?'未配置':'已配置'}));if(typeof XLSX==='undefined'){alert('Excel组件未加载');return;}const ws=XLSX.utils.json_to_sheet(data),wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'费用报表');XLSX.writeFile(wb,`费用报表_${date}.xlsx`);};
+
+  // 浏览器布局优化，降低长表滚动和重绘成本。
+  const style=document.createElement('style');style.textContent='.table-wrapper{contain:layout style paint}.data-table tbody{contain:layout style}.data-table td,.data-table th{white-space:nowrap}.btn[disabled]{opacity:.45;cursor:not-allowed}';document.head.appendChild(style);
+  buildIndexes(true);updateFees(true);
+  function updateVersion(){try{document.title='Sistema Inteligente de Monitoramento de Contêineres V47.1';document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V4[5-7]\.|Notebook Stable|Safe Core|State Integrity|Lean Performance/i.test(S(el.textContent)))el.textContent='V47.1 Lean Core';});}catch(_){ }}
+  updateVersion();document.addEventListener('DOMContentLoaded',()=>setTimeout(updateVersion,1200));setTimeout(updateVersion,2600);
+  W.__v471PerformanceStatus=function(){const I=indexes();return{version:VERSION,revision:IDX.revision,containers:I.containerById.size,tasks:I.taskById.size,confirmedReturns:I.confirmedReturnById.size,produced:I.producedIds.size,saveDirty,saveRunning:!!saveRunning,basicPageSize:BASIC_PAGE_SIZE,feePageSize:FEE_PAGE_SIZE};};
+  console.log(VERSION+' loaded: indexed lookups, coalesced saves, paginated tables, memory fee cache.');
+})();
+
+</script>
 </body>
 </html>
