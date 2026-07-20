@@ -13821,11 +13821,11 @@ ${preview}
 
 
 <script>
-/* ==================== V47.3 Safe Transaction Core：多账户并发保存 + 完整性校验 + 自动回退 ==================== */
+/* ==================== V47.4 Restore Integrity Core：多账户并发保存 + 完整性校验 + 自动回退 ==================== */
 (function(){
   'use strict';
   const W=window;
-  const VERSION='V47.3 Safe Transaction Core';
+  const VERSION='V47.4 Restore Integrity Core';
   const BASE_ID=(typeof CLOUD_STATE_ID!=='undefined'?CLOUD_STATE_ID:'container-monitoring-main');
   const MANIFEST_ID=BASE_ID+':v473:manifest';
   const LAST_GOOD_ID=BASE_ID+':v473:last_good';
@@ -14013,9 +14013,16 @@ ${preview}
     }catch(e){console.error('V47.3 load failed',e);hint('云端数据校验失败');return false;}
   }
   async function pull(reason){
+    if(W.__v474RestoreInProgress || Date.now()<N(W.__v474RestoreCooldownUntil)){pendingPull=true;return false;}
     if(saveDirty||saveRunning){pendingPull=true;return false;}try{if(typeof isCurrentPageRefreshLocked==='function'&&isCurrentPageRefreshLocked()||typeof isModalOpen==='function'&&isModalOpen()||typeof isUserActivelyEditing==='function'&&isUserActivelyEditing()){pendingPull=true;hint('云端有新数据，完成当前操作后同步');return false;}const r=await readBestCurrent();if(!r)return false;if(currentManifest&&r.manifest.generation===currentManifest.generation)return true;const old=baseline&&baseline.counts,cur=counts(r.state),deleted=N(r.manifest&&r.manifest.deletionCount);if(old&&old.containers>=20&&cur.containers===0&&!r.manifest.destructiveAuthorized){console.error('V47.3 rejected zero remote state');hint('已拦截异常清零版本');return false;}const ui=captureUi();apply(r.state,r.manifest,'sync');render(ui);hint('已同步最新云端数据');return true;}catch(e){console.error('V47.3 pull failed',e);hint('同步失败，继续保留当前完整数据');return false;}
   }
-  function startRealtime(){const client=sb();if(!client)return;try{if(realtime473)client.removeChannel(realtime473);}catch(_){ }realtime473=client.channel('cms_v473_'+TAB_ID).on('postgres_changes',{event:'*',schema:'public',table:'app_state',filter:'id=eq.'+BASE_ID},()=>setTimeout(()=>pull('realtime'),500)).subscribe(status=>{if(status==='SUBSCRIBED')hint('安全实时同步已开启');else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT')hint('实时同步异常，已启用轮询');});if(poller473)clearInterval(poller473);poller473=setInterval(()=>{if(typeof cloudUser!=='undefined'&&cloudUser&&document.visibilityState==='visible')pull('polling');},45000);try{if(typeof BroadcastChannel!=='undefined'){if(channel473)channel473.close();channel473=new BroadcastChannel('cms-v473-'+BASE_ID);channel473.onmessage=e=>{if(e.data&&e.data.from!==TAB_ID)pull('broadcast');};}}catch(_){}}
+  function stopLegacySync(){
+    const client=sb();
+    try{if(typeof realtimePullTimer!=='undefined'&&realtimePullTimer){clearTimeout(realtimePullTimer);realtimePullTimer=null;}}catch(_){}
+    try{if(typeof realtimeChannel!=='undefined'&&realtimeChannel&&client){client.removeChannel(realtimeChannel);realtimeChannel=null;}}catch(_){}
+    try{if(W.__cloudFallbackPoller){clearInterval(W.__cloudFallbackPoller);W.__cloudFallbackPoller=null;}}catch(_){}
+  }
+  function startRealtime(){const client=sb();if(!client)return;stopLegacySync();try{if(realtime473)client.removeChannel(realtime473);}catch(_){ }realtime473=client.channel('cms_v473_'+TAB_ID).on('postgres_changes',{event:'*',schema:'public',table:'app_state',filter:'id=eq.'+BASE_ID},()=>setTimeout(()=>pull('realtime'),500)).subscribe(status=>{if(status==='SUBSCRIBED')hint('安全实时同步已开启');else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT')hint('实时同步异常，已启用轮询');});if(poller473)clearInterval(poller473);poller473=setInterval(()=>{if(typeof cloudUser!=='undefined'&&cloudUser&&document.visibilityState==='visible')pull('polling');},45000);try{if(typeof BroadcastChannel!=='undefined'){if(channel473)channel473.close();channel473=new BroadcastChannel('cms-v473-'+BASE_ID);channel473.onmessage=e=>{if(e.data&&e.data.from!==TAB_ID)pull('broadcast');};}}catch(_){}}
 
   async function transact(reason,mutate,msg){const before=clone(state()),ui=captureUi();try{const r=mutate();if(r===false)return false;try{if(typeof W.normalizeStateV455==='function')W.normalizeStateV455(true);}catch(_){ }render(ui);hint((msg||'操作完成')+'，正在安全保存…');const ok=await queue(reason);if(!ok){apply(before,currentManifest,'rollback_local');render(ui);return false;}hint((msg||'操作完成')+'，已保存');return true;}catch(e){apply(before,currentManifest,'rollback_exception');render(ui);alert('操作失败：'+(e.message||e));return false;}}
   function decode(k){try{let s=S(k);while(s.length%4)s+='=';return JSON.parse(decodeURIComponent(escape(atob(s))));}catch(_){return{id:k};}}
@@ -14044,20 +14051,126 @@ ${preview}
   W.loadCloudState=load;W.pullCloudStateAndRefresh=pull;W.startRealtimeSync=startRealtime;
   try{saveData=W.saveData;saveCloudState=W.saveCloudState;loadCloudState=W.loadCloudState;pullCloudStateAndRefresh=W.pullCloudStateAndRefresh;startRealtimeSync=W.startRealtimeSync;}catch(_){ }
 
-  W.renderAutoBackupCenterV434=async function(container){const client=sb();container.innerHTML='<div class="card"><div class="card-header"><span class="card-title">🛡️ 自动备份中心 V47.3</span><span class="status-badge status-success">已验证版本备份</span></div><div style="line-height:1.8;color:#606266">每次保存先写入独立版本并完成分片数量、记录数量和校验和验证，通过后才发布。每日备份指向已验证的不可变版本。</div><div id="v473BackupList" style="margin-top:14px">正在读取...</div></div>';const box=document.getElementById('v473BackupList');if(!client||!box)return;const {data,error}=await client.from('app_state').select('id,data,updated_at,updated_by').like('id',DAILY_PREFIX+'%').order('id',{ascending:false}).limit(30);if(error){box.innerHTML='读取备份失败：'+error.message;return;}const list=A(data);if(!list.length){box.innerHTML='<div class="empty-state">暂无V47.3每日备份。下一次成功保存后会自动创建。</div>';return;}box.innerHTML='<table class="data-table"><thead><tr><th>日期</th><th>版本</th><th>基础数据</th><th>业务数据总量</th><th>创建时间</th><th>操作</th></tr></thead><tbody>'+list.map(r=>'<tr><td><b>'+r.id.replace(DAILY_PREFIX,'')+'</b></td><td>'+S(r.data&&r.data.version||'-')+'</td><td>'+N(r.data&&r.data.counts&&r.data.counts.containers)+'</td><td>'+N(r.data&&r.data.coreScore)+'</td><td>'+S(typeof formatDateTime==='function'?formatDateTime(r.updated_at):r.updated_at)+'</td><td><button class="btn btn-secondary" onclick="downloadV473Backup(\''+r.id+'\')">下载</button> <button class="btn btn-danger" onclick="restoreV473Backup(\''+r.id+'\')">恢复</button></td></tr>').join('')+'</tbody></table>';};
+  W.renderAutoBackupCenterV434=async function(container){const client=sb();container.innerHTML='<div class="card"><div class="card-header"><span class="card-title">🛡️ 自动备份中心 V47.4</span><span class="status-badge status-success">已验证版本备份</span></div><div style="line-height:1.8;color:#606266">每次保存先写入独立版本并完成分片数量、记录数量和校验和验证，通过后才发布。每日备份指向已验证的不可变版本。</div><div id="v473BackupList" style="margin-top:14px">正在读取...</div></div>';const box=document.getElementById('v473BackupList');if(!client||!box)return;const {data,error}=await client.from('app_state').select('id,data,updated_at,updated_by').like('id',DAILY_PREFIX+'%').order('id',{ascending:false}).limit(30);if(error){box.innerHTML='读取备份失败：'+error.message;return;}const list=A(data);if(!list.length){box.innerHTML='<div class="empty-state">暂无V47.4每日备份。下一次成功保存后会自动创建。</div>';return;}box.innerHTML='<table class="data-table"><thead><tr><th>日期</th><th>版本</th><th>基础数据</th><th>业务数据总量</th><th>创建时间</th><th>操作</th></tr></thead><tbody>'+list.map(r=>'<tr><td><b>'+r.id.replace(DAILY_PREFIX,'')+'</b></td><td>'+S(r.data&&r.data.version||'-')+'</td><td>'+N(r.data&&r.data.counts&&r.data.counts.containers)+'</td><td>'+N(r.data&&r.data.coreScore)+'</td><td>'+S(typeof formatDateTime==='function'?formatDateTime(r.updated_at):r.updated_at)+'</td><td><button class="btn btn-secondary" onclick="downloadV473Backup(\''+r.id+'\')">下载</button> <button class="btn btn-danger" onclick="restoreV473Backup(\''+r.id+'\')">恢复</button></td></tr>').join('')+'</tbody></table>';};
   W.downloadV473Backup=async function(id){const row=await manifestRow(id);if(!row)return alert('读取备份失败');const r=await readGeneration(row.data,false);if(!r)return alert('备份完整性校验失败');const blob=new Blob([JSON.stringify(r.state,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='container_backup_v473_'+id.replace(DAILY_PREFIX,'')+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
   W.restoreV473Backup=async function(id){if(!confirm('确认恢复该备份？恢复将作为新的已验证版本发布，当前版本仍保留用于回退。'))return;const row=await manifestRow(id);if(!row)return alert('读取备份失败');const r=await readGeneration(row.data,false);if(!r)return alert('备份完整性校验失败，禁止恢复');W.__v473AllowDestructive=true;try{const ok=await persist('restore_'+id,{state:r.state,replace:true});if(ok){render(captureUi());alert('备份恢复完成。');}}finally{W.__v473AllowDestructive=false;}};
   W.downloadV455Backup=W.downloadV473Backup;W.restoreV455Backup=W.restoreV473Backup;
   const oldMissing=W.restoreMissingBatchesV456;if(typeof oldMissing==='function')W.restoreMissingBatchesV456=async function(){const r=await oldMissing.apply(this,arguments);await queue('restore_missing_batches_v473');return r;};
 
+  W.persistAuthoritativeV474=async function(reason,restoreState){
+    W.__v473AllowDestructive=true;
+    W.__v474RestoreInProgress=true;
+    try{return await persist(reason||'authoritative_restore_v474',{state:clone(restoreState),replace:true});}
+    finally{W.__v473AllowDestructive=false;}
+  };
+  W.snapshotStateV474=function(){return clone(state());};
+  W.stopLegacySyncV474=stopLegacySync;
   W.__v473Status=function(){return{version:VERSION,tab:TAB_ID,generation:currentManifest&&currentManifest.generation||'',revision:currentManifest&&currentManifest.revision||0,baseline:baseline&&baseline.counts||null,saveDirty,saveRunning,pendingPull};};
   W.__v473ValidateCloud=async function(){const r=await readBestCurrent();return r?{ok:true,generation:r.manifest.generation,counts:counts(r.state),version:r.manifest.version}:{ok:false};};
-  function updateVersion(){try{document.title='Sistema Inteligente de Monitoramento de Contêineres V47.3';document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.[0-2]|Lean Core|Warning Integrity/i.test(S(el.textContent)))el.textContent='V47.3 Safe Transaction Core';});}catch(_){}}
+  function updateVersion(){try{document.title='Sistema Inteligente de Monitoramento de Contêineres V47.4';document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.[0-3]|Lean Core|Warning Integrity|Safe Transaction Core/i.test(S(el.textContent)))el.textContent='V47.4 Restore Integrity Core';});}catch(_){}}
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'&&saveDirty)flush();else if(document.visibilityState==='visible'&&pendingPull){pendingPull=false;pull('visible');}});
   updateVersion();document.addEventListener('DOMContentLoaded',()=>setTimeout(updateVersion,1000));setTimeout(updateVersion,2500);
-  console.log(VERSION+' loaded: distributed write lock, validated immutable generations, tombstones, rollback and multi-account merge.');
+  console.log(VERSION+' loaded: authoritative restore, legacy sync isolation, validated transactions and multi-account merge.');
 })();
 
 </script>
+
+<script>
+/* ==================== V47.4 Restore Integrity Patch：备份恢复只允许走已验证权威事务 ==================== */
+(function(){
+  'use strict';
+  const W=window;
+  const ARRAY_KEYS=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig'];
+  const A=v=>Array.isArray(v)?v:[];
+  const N=v=>Number(v||0);
+  const clone=v=>JSON.parse(JSON.stringify(v));
+  function counts(st){const o={};ARRAY_KEYS.forEach(k=>o[k]=A(st&&st[k]).length);o.core=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans'].reduce((n,k)=>n+A(st&&st[k]).length,0);return o;}
+  function normalizedBackup(raw){
+    let st=raw&&raw.backupMeta?Object.fromEntries(Object.entries(raw).filter(([k])=>k!=='backupMeta')):raw;
+    if(st&&st.data&&typeof st.data==='object'&&!Array.isArray(st.data)&&!st.containers)st=st.data;
+    if(st&&st.state&&typeof st.state==='object'&&!Array.isArray(st.state)&&!st.containers)st=st.state;
+    st=clone(st||{});
+    ARRAY_KEYS.forEach(k=>st[k]=A(st[k]));
+    st.nextIds=st.nextIds&&typeof st.nextIds==='object'?st.nextIds:{container:1,task:1,plan:1,production:1,stock:1};
+    st.warningConfig=st.warningConfig&&typeof st.warningConfig==='object'?st.warningConfig:{storageWarningDays:5,demurrageWarningDays:7};
+    st.version='V47.4 Restore Integrity Core';
+    st.updatedAt=new Date().toISOString();
+    return st;
+  }
+  function clearLegacyTimers(){
+    try{if(typeof W.stopLegacySyncV474==='function')W.stopLegacySyncV474();}catch(_){}
+    try{if(W.__cloudFallbackPoller){clearInterval(W.__cloudFallbackPoller);W.__cloudFallbackPoller=null;}}catch(_){}
+    try{localStorage.removeItem('cc_lastFeeUpdate');localStorage.removeItem('cc_cachedFees');}catch(_){}
+  }
+  async function validateExpected(expected){
+    if(typeof W.__v473ValidateCloud!=='function')return true;
+    const cloud=await W.__v473ValidateCloud();
+    if(!cloud||!cloud.ok)return false;
+    const got=cloud.counts||{};
+    for(const k of ['containers','transportTasks','pickupPlans','returnRecords','blList']){
+      if(N(got[k])!==N(expected[k]))return false;
+    }
+    return true;
+  }
+  W.confirmRestoreJsonV433=async function(){
+    const raw=W.__pendingRestoreJsonV433;
+    if(!raw)return alert('请先选择并预览备份JSON。');
+    const restored=normalizedBackup(raw),after=counts(restored);
+    if(after.core===0)return alert('备份文件没有有效业务数据，禁止恢复。');
+    const before=counts(typeof W.snapshotStateV474==='function'?W.snapshotStateV474():{});
+    if(!confirm('确认将该备份作为新的云端主版本？\n\n基础数据：'+before.containers+' → '+after.containers+'\n运输任务：'+before.transportTasks+' → '+after.transportTasks+'\n提箱计划：'+before.pickupPlans+' → '+after.pickupPlans+'\n还箱记录：'+before.returnRecords+' → '+after.returnRecords+'\n\n恢复期间其他页面会暂停同步，完整校验通过后才发布。'))return;
+    if(typeof W.persistAuthoritativeV474!=='function')return alert('未找到V47.4安全恢复引擎，请确认部署文件版本。');
+    const old=typeof W.snapshotStateV474==='function'?W.snapshotStateV474():null;
+    clearLegacyTimers();
+    W.__v474RestoreInProgress=true;
+    W.__v474RestoreCooldownUntil=Date.now()+12000;
+    try{
+      if(typeof showRealtimeSyncHint==='function')showRealtimeSyncHint('正在恢复并校验备份，请勿关闭页面…');
+      const ok=await W.persistAuthoritativeV474('restore_json_authoritative_v474',restored);
+      if(!ok)throw new Error('云端权威版本发布失败');
+      const valid=await validateExpected(after);
+      if(!valid)throw new Error('恢复后云端记录数量校验不一致');
+      try{if(typeof clearLegacyBusinessCache==='function')clearLegacyBusinessCache();}catch(_){}
+      try{if(typeof W.invalidatePerformanceIndexesV471==='function')W.invalidatePerformanceIndexesV471('restore_v474');}catch(_){}
+      currentMenu='dashboard';
+      if(typeof renderSidebar==='function')renderSidebar();
+      if(typeof renderContent==='function')renderContent();
+      if(typeof applyLanguage==='function')applyLanguage();
+      W.__pendingRestoreJsonV433=null;
+      alert('数据已成功恢复并通过云端完整性校验。\n\n恢复版本已经成为唯一主版本，旧同步通道不会再覆盖本次恢复数据。');
+    }catch(e){
+      console.error('V47.4 restore failed',e);
+      if(old&&typeof applyCloudState==='function')try{applyCloudState(old);}catch(_){}
+      if(typeof renderSidebar==='function')renderSidebar();
+      if(typeof renderContent==='function')renderContent();
+      alert('数据恢复失败：'+(e.message||e)+'\n系统没有发布未通过校验的版本。');
+    }finally{
+      W.__v474RestoreInProgress=false;
+      setTimeout(()=>{
+        W.__v474RestoreCooldownUntil=0;
+        clearLegacyTimers();
+        try{if(typeof W.startRealtimeSync==='function')W.startRealtimeSync();else if(typeof startRealtimeSync==='function')startRealtimeSync();}catch(_){}
+        try{if(typeof W.pullCloudStateAndRefresh==='function')W.pullCloudStateAndRefresh('restore_v474_final_check');}catch(_){}
+      },12500);
+    }
+  };
+
+  // 云端每日备份恢复同样加入同步隔离和最终验证。
+  const previousRestore=W.restoreV473Backup;
+  if(typeof previousRestore==='function'){
+    W.restoreV473Backup=async function(id){
+      clearLegacyTimers();
+      W.__v474RestoreInProgress=true;
+      W.__v474RestoreCooldownUntil=Date.now()+10000;
+      try{return await previousRestore.call(this,id);}
+      finally{W.__v474RestoreInProgress=false;setTimeout(()=>{W.__v474RestoreCooldownUntil=0;clearLegacyTimers();try{W.startRealtimeSync&&W.startRealtimeSync();}catch(_){}},10500);}
+    };
+    W.restoreV455Backup=W.restoreV473Backup;
+  }
+  clearLegacyTimers();
+  console.log('V47.4 Restore Integrity Patch loaded');
+})();
+</script>
+
 </body>
 </html>
