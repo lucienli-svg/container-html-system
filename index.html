@@ -13626,5 +13626,438 @@ ${preview}
 })();
 
 </script>
+
+<script>
+/* ==================== V47.2 费用预警完整性修复 ====================
+   规则：
+   1. 堆存费预警只针对尚未实际提箱的集装箱；已提箱立即退出预警。
+   2. 滞箱费预警只针对尚未确认真实还箱的集装箱；提箱不终止滞箱费预警。
+   3. 已超期记录继续显示为“正在产生费用”，不因剩余天数为 0 而消失。
+   4. 兼容历史数据：从基础数据、提箱计划和运输任务综合识别实际提箱时间。
+*/
+(function(){
+  'use strict';
+  const W=window;
+  const VERSION='V47.2 Warning Integrity';
+  const arr=v=>Array.isArray(v)?v:[];
+  const txt=v=>String(v==null?'':v).trim();
+  const upper=v=>txt(v).toUpperCase();
+  const num=v=>Number(v)||0;
+  const today=()=>{try{return typeof getTodayStr==='function'?getTodayStr():new Date().toISOString().slice(0,10);}catch(_){return new Date().toISOString().slice(0,10);}};
+  const normDate=v=>{
+    if(!v)return'';
+    const s=txt(v),m=s.match(/(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
+    if(m)return`${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+    const d=new Date(s);return Number.isNaN(d.getTime())?'':`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  };
+  const sourceRows=name=>{
+    try{
+      if(name==='containers')return typeof containers!=='undefined'&&Array.isArray(containers)?containers:arr(W.containers);
+      if(name==='pickupPlans')return typeof pickupPlans!=='undefined'&&Array.isArray(pickupPlans)?pickupPlans:arr(W.pickupPlans);
+      if(name==='transportTasks')return typeof transportTasks!=='undefined'&&Array.isArray(transportTasks)?transportTasks:arr(W.transportTasks);
+      if(name==='returnRecords')return typeof returnRecords!=='undefined'&&Array.isArray(returnRecords)?returnRecords:arr(W.returnRecords);
+    }catch(_){ }
+    return [];
+  };
+  function earlier(a,b){a=normDate(a);b=normDate(b);return!a?b:!b?a:(a<=b?a:b);}
+  function putEarliest(map,key,value){key=txt(key);value=normDate(value);if(!key||!value)return;map.set(key,earlier(map.get(key),value));}
+  let lifecycleCache={key:'',maps:null};
+  function lifecycleKey(){
+    const lists=['containers','pickupPlans','transportTasks','returnRecords'].map(name=>sourceRows(name));
+    return [num(W.__ccDataRevisionV471),...lists.map(x=>x.length)].join('|');
+  }
+  function buildLifecycleMaps(force){
+    const key=lifecycleKey();
+    if(!force&&lifecycleCache.maps&&lifecycleCache.key===key)return lifecycleCache.maps;
+    const pickupById=new Map(),pickupByNo=new Map(),returnById=new Map(),returnByNo=new Map();
+    sourceRows('containers').forEach(c=>{putEarliest(pickupById,c.id,c.actualPickupTime);putEarliest(pickupByNo,upper(c.containerNo),c.actualPickupTime);});
+    sourceRows('pickupPlans').forEach(p=>{
+      const confirmed=txt(p.status).toLowerCase()==='confirmed'||!!p.actualPickupTime;
+      if(!confirmed)return;
+      putEarliest(pickupById,p.containerId,p.actualPickupTime||p.pickupTime);
+      putEarliest(pickupByNo,upper(p.containerNo),p.actualPickupTime||p.pickupTime);
+    });
+    sourceRows('transportTasks').forEach(t=>{
+      if(t.cancelled)return;
+      putEarliest(pickupById,t.containerId,t.actualPickupTime||t.pickupTime);
+      putEarliest(pickupByNo,upper(t.containerNo),t.actualPickupTime||t.pickupTime);
+    });
+    sourceRows('returnRecords').forEach(r=>{
+      if(!r||r.type!=='return'||r.isReturnConfirmed!==true||!normDate(r.returnDate))return;
+      const save=(map,key)=>{key=txt(key);if(!key)return;const old=map.get(key);if(!old||normDate(r.returnDate)>=normDate(old.returnDate))map.set(key,r);};
+      save(returnById,r.containerId);save(returnByNo,upper(r.containerNo));
+    });
+    const maps={pickupById,pickupByNo,returnById,returnByNo};
+    lifecycleCache={key,maps};
+    return maps;
+  }
+  function resolvedPickup(c,maps){return maps.pickupById.get(txt(c&&c.id))||maps.pickupByNo.get(upper(c&&c.containerNo))||'';}
+  function resolvedReturn(c,maps){
+    let r=maps.returnById.get(txt(c&&c.id))||maps.returnByNo.get(upper(c&&c.containerNo))||null;
+    if(!r&&typeof W.getConfirmedReturnRecord==='function')try{r=W.getConfirmedReturnRecord(c&&c.id)||null;}catch(_){ }
+    return r;
+  }
+  function operational(c){try{return typeof isOperationalVisibleContainer==='function'?isOperationalVisibleContainer(c):true;}catch(_){return true;}}
+  function warningCfg(){try{return typeof warningConfig!=='undefined'&&warningConfig?warningConfig:(W.warningConfig||{});}catch(_){return W.warningConfig||{};}}
+  function statusRank(x){return x.warningType==='accruing'?0:x.missingConfig?1:x.warningType==='due_today'?2:3;}
+  function sortWarnings(list){return list.sort((a,b)=>statusRank(a)-statusRank(b)||num(a.remainingDays)-num(b.remainingDays)||txt(a.batch).localeCompare(txt(b.batch),'zh-CN',{numeric:true}));}
+
+  const baseCalculate=typeof W.calculateFeesForContainer==='function'?W.calculateFeesForContainer:null;
+  const baseUpdate=typeof W.updateDailyFees==='function'?W.updateDailyFees:null;
+
+  function resolvedContainer(c,maps){const pickup=resolvedPickup(c,maps);return pickup&&!c.actualPickupTime?Object.assign({},c,{actualPickupTime:pickup}):c;}
+  function calculateV472(c,date,maps){
+    maps=maps||buildLifecycleMaps();
+    const rc=resolvedContainer(c,maps);
+    return baseCalculate?baseCalculate(rc,date):{storageFee:0,normalStorageFee:0,abnormalStorageFee:0,storageDays:0,storageAbnormalDays:0,storageRemainingDays:0,demurrageFee:0,demurrageRemainingDays:0,demurrageOvertimeDays:0,demurrageConfigMissing:false};
+  }
+
+  function updateV472(force){
+    const base=(baseUpdate&&baseUpdate!==updateV472?baseUpdate(force):null)||{};
+    const maps=buildLifecycleMaps(force===true),wc=warningCfg(),date=today(),fees={};
+    let totalStorage=0,totalNormalStorage=0,totalAbnormalStorage=0,totalDemurrage=0;
+    const storageWarningList=[],demurrageWarningList=[],demurrageConfigMissingList=[];
+    sourceRows('containers').forEach(c=>{
+      const pickup=resolvedPickup(c,maps),rr=resolvedReturn(c,maps),rc=resolvedContainer(c,maps);
+      const f=calculateV472(c,date,maps);fees[c.id]=f;
+      if(operational(c)){
+        totalStorage+=num(f.storageFee);totalNormalStorage+=num(f.normalStorageFee);totalAbnormalStorage+=num(f.abnormalStorageFee);
+      }
+      totalDemurrage+=num(f.demurrageFee);
+
+      // 堆存费：实际提箱是唯一退出预警条件。
+      if(!pickup&&operational(c)&&c.eta){
+        let sb=null;try{if(typeof W.calculateStorageFeeBreakdown==='function')sb=W.calculateStorageFeeBreakdown(rc,date);}catch(_){ }
+        const hasConfig=!!(sb&&sb.config),remaining=Math.max(0,num(sb&&sb.normalLimitDays)-num(sb&&sb.days));
+        const overdue=Math.max(0,num(sb&&sb.abnormalDays));
+        if(hasConfig&&overdue>0){
+          storageWarningList.push({id:c.id,batch:c.batch,containerNo:c.containerNo,vessel:c.vessel,eta:c.eta,remainingDays:0,overdueDays:overdue,fee:num(f.abnormalStorageFee),storageDays:num(f.storageDays),abnormalDays:overdue,warningType:'accruing',issue:'正在产生异常堆存费'});
+        }else if(hasConfig&&remaining<=num(wc.storageWarningDays)){
+          storageWarningList.push({id:c.id,batch:c.batch,containerNo:c.containerNo,vessel:c.vessel,eta:c.eta,remainingDays:remaining,overdueDays:0,fee:num(f.abnormalStorageFee),storageDays:num(f.storageDays),abnormalDays:0,warningType:remaining===0?'due_today':'upcoming',issue:remaining===0?'今日正常期到期':'即将产生异常堆存费'});
+        }
+      }
+
+      // 滞箱费：真实还箱是唯一退出预警条件。
+      if(!rr&&c.eta){
+        if(f.demurrageConfigMissing){
+          const row={id:c.id,batch:c.batch,containerNo:c.containerNo,vessel:c.vessel,type:c.containerType,eta:c.eta,remainingDays:null,overdueDays:0,fee:0,missingConfig:true,warningType:'missing',issue:'费率未配置'};
+          demurrageWarningList.push(row);demurrageConfigMissingList.push(row);
+        }else if(num(f.demurrageOvertimeDays)>0){
+          demurrageWarningList.push({id:c.id,batch:c.batch,containerNo:c.containerNo,vessel:c.vessel,type:c.containerType,eta:c.eta,remainingDays:0,overdueDays:num(f.demurrageOvertimeDays),fee:num(f.demurrageFee),missingConfig:false,warningType:'accruing',issue:'正在产生滞箱费'});
+        }else if(num(f.demurrageRemainingDays)<=num(wc.demurrageWarningDays)){
+          const rem=Math.max(0,num(f.demurrageRemainingDays));
+          demurrageWarningList.push({id:c.id,batch:c.batch,containerNo:c.containerNo,vessel:c.vessel,type:c.containerType,eta:c.eta,remainingDays:rem,overdueDays:0,fee:num(f.demurrageFee),missingConfig:false,warningType:rem===0?'due_today':'upcoming',issue:rem===0?'今日免费期到期':'即将产生滞箱费'});
+        }
+      }
+    });
+    sortWarnings(storageWarningList);sortWarnings(demurrageWarningList);
+    const data=Object.assign({},base,{cacheVersion:'V47.2-warning-integrity',date,fees,totalStorage,totalNormalStorage,totalAbnormalStorage,totalDemurrage,storageWarningList,demurrageWarningList,demurrageConfigMissingList});
+    try{cachedFeeData=data;}catch(_){ }
+    W.cachedFeeData=data;
+    try{localStorage.setItem('cc_lastFeeUpdate',date);localStorage.setItem('cc_cachedFees',JSON.stringify(Object.assign({},data,{fees:{}})));}catch(_){ }
+    return data;
+  }
+
+  W.resolveActualPickupV472=function(c){return resolvedPickup(c,buildLifecycleMaps());};
+  W.calculateFeesForContainer=function(c,date){return calculateV472(c,date,buildLifecycleMaps());};
+  W.updateDailyFees=updateV472;
+  W.invalidateAndRefreshFeesV468=W.invalidateAndRefreshFeesV469=W.invalidateAndRefreshFeesV472=function(){
+    try{localStorage.removeItem('cc_lastFeeUpdate');localStorage.removeItem('cc_cachedFees');localStorage.removeItem('cc_feeInputSignatureV468');}catch(_){ }
+    return updateV472(true);
+  };
+  try{calculateFeesForContainer=W.calculateFeesForContainer;updateDailyFees=W.updateDailyFees;}catch(_){ }
+
+  function statusBadge(item){
+    if(item.missingConfig)return'<span class="status-badge status-danger">费率未配置</span>';
+    if(item.warningType==='accruing')return`<span class="status-badge status-danger">${item.issue||'正在产生费用'}</span>`;
+    if(item.warningType==='due_today')return`<span class="status-badge status-warning">${item.issue||'今日到期'}</span>`;
+    return`<span class="status-badge status-warning">${item.issue||'即将产生费用'}</span>`;
+  }
+  function timeText(item){
+    if(item.missingConfig)return'-';
+    if(item.warningType==='accruing')return`已超期 ${num(item.overdueDays)} 天`;
+    if(num(item.remainingDays)===0)return'今日到期';
+    return`剩余 ${num(item.remainingDays)} 天`;
+  }
+  W.showWarningDetail=function(type){
+    const data=updateV472(false),list=type==='storage'?arr(data.storageWarningList):arr(data.demurrageWarningList);
+    const title=type==='storage'?'⚠️ 异常堆存费预警明细':'⚠️ 滞箱费预警明细';
+    if(!list.length){alert('暂无预警集装箱');return;}
+    const headers=type==='storage'?['批次','集装箱号','船公司','到港日期','预警状态','期限','当前异常堆存费']:['批次','集装箱号','船公司','箱型','到港日期','预警状态','期限','当前滞箱费'];
+    const titleEl=document.getElementById('modalTitle'),bodyEl=document.getElementById('modalBody');if(!titleEl||!bodyEl)return;
+    titleEl.innerText=title;bodyEl.innerHTML=`<div style="margin-bottom:15px;"><button class="btn export-btn" onclick="exportWarningList('${type}')">📥 导出Excel</button></div><div id="warningDetailTable"></div>`;
+    if(typeof openModal==='function')openModal();
+    if(typeof renderTable==='function')renderTable('warningDetailTable',headers,list,item=>{
+      const tr=document.createElement('tr'),time=timeText(item),fee=num(item.fee).toFixed(2);
+      tr.innerHTML=type==='storage'?`<td>${item.batch||'-'}</td><td>${item.containerNo||'-'}</td><td>${item.vessel||'-'}</td><td>${typeof fmtDate==='function'?fmtDate(item.eta):normDate(item.eta)}</td><td>${statusBadge(item)}</td><td style="text-align:center;">${time}</td><td style="text-align:center;color:${item.warningType==='accruing'?'#f56c6c':'#e6a23c'};font-weight:600;">R$ ${fee}</td>`:`<td>${item.batch||'-'}</td><td>${item.containerNo||'-'}</td><td>${item.vessel||'-'}</td><td>${item.type||'-'}</td><td>${typeof fmtDate==='function'?fmtDate(item.eta):normDate(item.eta)}</td><td>${statusBadge(item)}</td><td style="text-align:center;">${time}</td><td style="text-align:center;color:#f56c6c;font-weight:600;">$ ${fee}</td>`;
+      return tr;
+    });
+    if(typeof applyLanguage==='function')applyLanguage();
+  };
+  W.exportWarningList=function(type){
+    const data=updateV472(false),list=type==='storage'?arr(data.storageWarningList):arr(data.demurrageWarningList);
+    if(typeof XLSX==='undefined'){alert('Excel组件未加载');return;}
+    const wsData=type==='storage'?[['批次','集装箱号','船公司','到港日期','预警状态','期限','当前异常堆存费(雷亚尔)']]:[['批次','集装箱号','船公司','箱型','到港日期','预警状态','期限','当前滞箱费(美元)']];
+    list.forEach(item=>{const date=typeof fmtDate==='function'?fmtDate(item.eta):normDate(item.eta);if(type==='storage')wsData.push([item.batch,item.containerNo,item.vessel,date,item.issue||'',timeText(item),num(item.fee).toFixed(2)]);else wsData.push([item.batch,item.containerNo,item.vessel,item.type||'-',date,item.issue||'',timeText(item),num(item.fee).toFixed(2)]);});
+    const ws=XLSX.utils.aoa_to_sheet(wsData),wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,type==='storage'?'堆存费预警':'滞箱费预警');XLSX.writeFile(wb,`${type}_预警列表_${today()}.xlsx`);
+  };
+  try{showWarningDetail=W.showWarningDetail;exportWarningList=W.exportWarningList;}catch(_){ }
+
+  function updateVersion(){
+    try{
+      document.title='Sistema Inteligente de Monitoramento de Contêineres V47.2';
+      document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.1|Lean Core/i.test(txt(el.textContent)))el.textContent='V47.2 Warning Integrity';});
+    }catch(_){ }
+  }
+  updateV472(true);updateVersion();
+  document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>{updateV472(true);updateVersion();},900));
+  setTimeout(()=>updateV472(true),2200);
+  setTimeout(()=>updateV472(true),5000);
+  setTimeout(updateVersion,2500);
+  W.__v472WarningStatus=function(){const d=updateV472(false);return{version:VERSION,storageWarnings:arr(d.storageWarningList).length,demurrageWarnings:arr(d.demurrageWarningList).length,storageAccruing:arr(d.storageWarningList).filter(x=>x.warningType==='accruing').length,demurrageAccruing:arr(d.demurrageWarningList).filter(x=>x.warningType==='accruing').length};};
+  console.log(VERSION+' loaded: pickup closes storage warnings; confirmed return closes demurrage warnings; overdue items remain visible.');
+})();
+</script>
+
+
+<script>
+/* ==================== V47.3 Safe Transaction Core：多账户并发保存 + 完整性校验 + 自动回退 ==================== */
+(function(){
+  'use strict';
+  const W=window;
+  const VERSION='V47.3 Safe Transaction Core';
+  const BASE_ID=(typeof CLOUD_STATE_ID!=='undefined'?CLOUD_STATE_ID:'container-monitoring-main');
+  const MANIFEST_ID=BASE_ID+':v473:manifest';
+  const LAST_GOOD_ID=BASE_ID+':v473:last_good';
+  const ROLLBACK_ID=BASE_ID+':v473:rollback';
+  const LOCK_ID=BASE_ID+':v473:write_lock';
+  const DAILY_PREFIX=BASE_ID+':v473:daily:';
+  const HISTORY_PREFIX=BASE_ID+':v473:history:';
+  const GEN_PREFIX=BASE_ID+':v473:g:';
+  const LEGACY_MANIFEST_ID=BASE_ID+':v455:manifest';
+  const LEGACY_DAILY_PREFIX=BASE_ID+':v455:daily:';
+  const LEGACY_GEN_PREFIX=BASE_ID+':v455:g:';
+  const CHUNK_SIZE=250, UPSERT_BATCH=30, LOCK_TTL=120000, LOCK_WAIT=60000;
+  const ARRAY_MODULES=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig'];
+  const OBJECT_MODULES=['nextIds','warningConfig'];
+  const CORE_MODULES=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans'];
+  const LEGACY_LOAD=W.loadCloudState;
+  const TAB_ID=(function(){
+    try{let x=sessionStorage.getItem('cms_v473_tab');if(!x){x='tab-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,9);sessionStorage.setItem('cms_v473_tab',x);}return x;}catch(_){return 'tab-'+Math.random().toString(36).slice(2,10);}
+  })();
+  let baseline=null,currentManifest=null,saveChain=Promise.resolve(true),saveDirty=false,saveTimer=null,saveWaiters=[],saveReasons=new Set(),saveRunning=false,pendingPull=false,realtime473=null,poller473=null,channel473=null;
+
+  const A=v=>Array.isArray(v)?v:[];
+  const S=v=>String(v==null?'':v).trim();
+  const U=v=>S(v).toUpperCase();
+  const N=v=>Number(v||0);
+  const now=()=>new Date().toISOString();
+  const day=v=>S(v||now()).slice(0,10);
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  const clone=v=>JSON.parse(JSON.stringify(v));
+  function user(){return (typeof cloudUser!=='undefined'&&cloudUser&&cloudUser.email)||(typeof currentUser!=='undefined'&&currentUser&&(currentUser.email||currentUser.name))||'unknown';}
+  function hint(s){try{if(typeof showRealtimeSyncHint==='function')showRealtimeSyncHint(s);}catch(_){}}
+  function sb(){try{return typeof initSupabaseClient==='function'?initSupabaseClient():null;}catch(_){return null;}}
+  function stable(v){
+    if(v===null||typeof v!=='object')return JSON.stringify(v);
+    if(Array.isArray(v))return '['+v.map(stable).join(',')+']';
+    return '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+stable(v[k])).join(',')+'}';
+  }
+  function hashText(str){let h=2166136261;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619);}return ('00000000'+(h>>>0).toString(16)).slice(-8);}
+  const checksum=v=>hashText(stable(v));
+  function coreScore(st){return CORE_MODULES.reduce((n,k)=>n+A(st&&st[k]).length,0);}
+  function allScore(st){return ARRAY_MODULES.reduce((n,k)=>n+A(st&&st[k]).length,0);}
+  function counts(st){const o={};ARRAY_MODULES.forEach(k=>o[k]=A(st&&st[k]).length);o.core=coreScore(st);o.total=allScore(st);return o;}
+  function timestamp(x){if(!x||typeof x!=='object')return 0;const v=x.updatedAt||x.updated_at||x.modifiedAt||x.returnConfirmedAt||x.confirmedAt||x.actualArrival||x.createdAt||x.created_at||'';const t=Date.parse(v);return Number.isFinite(t)?t:0;}
+  function recordKey(module,x){
+    if(!x||typeof x!=='object')return '';
+    if(module==='containers')return U(x.containerNo)||('ID:'+S(x.id));
+    if(module==='blList')return U(x.blNo||x.houseBlNo||x.masterBlNo)||('ID:'+S(x.id));
+    if(module==='containerBlMap')return S(x.containerId)+'|'+U(x.blNo||x.houseBlNo||x.masterBlNo);
+    if(module==='transportTasks')return S(x.taskUid)||S(x.routeLegKey)||(S(x.sourcePlanId)?'PLAN:'+S(x.sourcePlanId):'')||(S(x.id)?'ID:'+S(x.id):'')||[U(x.containerNo),S(x.containerId),U(x.from||x.origin),U(x.to||x.destination),day(x.estimatedArrival||x.arrivalDate)].join('|');
+    if(module==='locationStock')return S(x.containerId)||U(x.containerNo)||('ID:'+S(x.id));
+    if(module==='returnRecords')return S(x.id)||[S(x.containerId),U(x.type),U(x.location),day(x.returnDate||x.unpackDate||x.createdAt)].join('|');
+    if(module==='pickupPlans')return S(x.planUid)||S(x.id)||[S(x.containerId),U(x.containerNo),day(x.arrivalDate),U(x.destination)].join('|');
+    if(module==='productionRecords')return S(x.id)||[U(x.batch),day(x.date),U(x.workshop||x.area)].join('|');
+    if(module==='productionPlans')return S(x.id)||[day(x.date),U(x.workshop||x.area),U(x.batch),S(x.order||x.planOrder)].join('|');
+    if(module==='factoryCalendar')return day(x.date)||S(x.id);
+    if(module==='storageConfig')return S(x.id)||[day(x.effectiveFrom||x.startDate),day(x.effectiveTo||x.endDate),S(x.fixedDays),S(x.fixedRate),S(x.overtimeRate)].join('|');
+    if(module==='demurrageConfig')return S(x.id)||[U(x.vessel||x.carrier||x.shippingCompany),U(x.containerType||x.type),day(x.effectiveFrom||x.startDate),day(x.effectiveTo||x.endDate),S(x.freeDays),S(x.ratePerDay)].join('|');
+    return S(x.id)||checksum(x);
+  }
+  function state(){
+    try{if(typeof W.prepareStateForSaveV4513==='function')W.prepareStateForSaveV4513();}catch(e){console.warn('V47.3 prepare skipped',e);}
+    const get=(name,fallback)=>{try{const v=eval(name);return v===undefined?fallback:v;}catch(_){return W[name]===undefined?fallback:W[name];}};
+    return {containers:A(get('containers',[])),blList:A(get('blList',[])),containerBlMap:A(get('containerBlMap',[])),transportTasks:A(get('transportTasks',[])),locationStock:A(get('locationStock',[])),returnRecords:A(get('returnRecords',[])),pickupPlans:A(get('pickupPlans',[])),productionRecords:A(get('productionRecords',[])),productionPlans:A(get('productionPlans',[])),factoryCalendar:A(get('factoryCalendar',[])),storageConfig:A(get('storageConfig',[])),demurrageConfig:A(get('demurrageConfig',[])),nextIds:get('nextIds',{container:1,task:1,plan:1,production:1,stock:1})||{},warningConfig:get('warningConfig',{storageWarningDays:5,demurrageWarningDays:7})||{},version:VERSION,updatedAt:now(),updatedBy:user()};
+  }
+  function apply(st,manifest,source){
+    if(!st||typeof st!=='object'||coreScore(st)===0)return false;
+    containers=A(st.containers);blList=A(st.blList);containerBlMap=A(st.containerBlMap);transportTasks=A(st.transportTasks);locationStock=A(st.locationStock);returnRecords=A(st.returnRecords);pickupPlans=A(st.pickupPlans);productionRecords=A(st.productionRecords);productionPlans=A(st.productionPlans);factoryCalendar=A(st.factoryCalendar);storageConfig=A(st.storageConfig);demurrageConfig=A(st.demurrageConfig);nextIds=st.nextIds||{container:1,task:1,plan:1,production:1,stock:1};warningConfig=st.warningConfig||{storageWarningDays:5,demurrageWarningDays:7};
+    try{if(typeof W.normalizeStateV455==='function')W.normalizeStateV455(false);}catch(_){ }
+    try{if(typeof updateContainerStatus==='function')updateContainerStatus();}catch(_){ }
+    try{if(typeof W.invalidatePerformanceIndexesV471==='function')W.invalidatePerformanceIndexesV471('v473_'+(source||'apply'));if(typeof W.rebuildPerformanceIndexesV471==='function')W.rebuildPerformanceIndexesV471();}catch(_){ }
+    try{if(typeof W.invalidateAndRefreshFeesV472==='function')W.invalidateAndRefreshFeesV472();else if(typeof updateDailyFees==='function')updateDailyFees(true);}catch(_){ }
+    setBaseline(st,manifest);
+    return true;
+  }
+  function makeBaseline(st,manifest){
+    const b={generation:manifest&&manifest.generation||'',counts:counts(st),modules:{}};
+    ARRAY_MODULES.forEach(name=>{const m=new Map();A(st[name]).forEach(x=>{const k=recordKey(name,x);if(k)m.set(k,{hash:checksum(x),time:timestamp(x)});});b.modules[name]=m;});
+    b.objects={};OBJECT_MODULES.forEach(name=>b.objects[name]=checksum(st[name]||{}));return b;
+  }
+  function setBaseline(st,manifest){baseline=makeBaseline(st,manifest||{});currentManifest=manifest||null;try{sessionStorage.setItem('cms_v473_head',JSON.stringify({generation:baseline.generation,counts:baseline.counts,at:now()}));}catch(_){}}
+  function split(list){const a=A(list),out=[];for(let i=0;i<a.length;i+=CHUNK_SIZE)out.push(a.slice(i,i+CHUNK_SIZE));if(!out.length)out.push([]);return out;}
+  function generation(){return Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);}
+  function normalizeTombstones(v){const out={};ARRAY_MODULES.forEach(m=>{out[m]={};const src=v&&v[m]||{};Object.keys(src).forEach(k=>{const x=src[k];if(x&&x.deletedAt)out[m][k]={deletedAt:x.deletedAt,deletedBy:x.deletedBy||''};});});return out;}
+  function mergeTombstones(a,b){const out=normalizeTombstones(a);const bb=normalizeTombstones(b);ARRAY_MODULES.forEach(m=>Object.keys(bb[m]).forEach(k=>{if(!out[m][k]||Date.parse(bb[m][k].deletedAt||0)>=Date.parse(out[m][k].deletedAt||0))out[m][k]=bb[m][k];}));return out;}
+  function prepareLocal(local,commitAt,tombstones){
+    const out=clone(local),t=mergeTombstones(tombstones,{}),by=user();
+    ARRAY_MODULES.forEach(name=>{
+      const bm=baseline&&baseline.modules[name]||new Map(),present=new Set();
+      out[name]=A(out[name]).map(raw=>{const x=clone(raw),k=recordKey(name,x);if(!k)return x;present.add(k);const old=bm.get(k),changed=!old||old.hash!==checksum(x);if(changed){x.updatedAt=commitAt;x.updatedBy=by;const tomb=t[name][k];if(tomb&&Date.parse(commitAt)>Date.parse(tomb.deletedAt||0))delete t[name][k];}return x;});
+      bm.forEach((_,k)=>{if(!present.has(k))t[name][k]={deletedAt:commitAt,deletedBy:by};});
+    });
+    out.updatedAt=commitAt;out.updatedBy=by;out.version=VERSION;return{state:out,tombstones:t};
+  }
+  function mergeStates(remote,local,remoteTombs,localTombs,commitAt){
+    if(!remote)return{state:local,tombstones:localTombs};
+    const tombs=mergeTombstones(remoteTombs,localTombs),merged={...remote,...local};
+    ARRAY_MODULES.forEach(name=>{
+      const rm=new Map(),lm=new Map(),bm=baseline&&baseline.modules[name]||new Map();
+      A(remote[name]).forEach(x=>{const k=recordKey(name,x);if(k)rm.set(k,x);});A(local[name]).forEach(x=>{const k=recordKey(name,x);if(k)lm.set(k,x);});
+      const keys=new Set([...rm.keys(),...lm.keys(),...Object.keys(tombs[name]||{})]),out=[];
+      keys.forEach(k=>{
+        const r=rm.get(k),l=lm.get(k),b=bm.get(k),lh=l?checksum(l):'',rh=r?checksum(r):'',lc=b?!l||lh!==b.hash:!!l,rc=b?!r||rh!==b.hash:!!r;
+        let chosen=null;
+        if(l&&lc&&r&&rc)chosen=timestamp(l)>=timestamp(r)?l:r;
+        else if(l&&lc)chosen=l;
+        else if(r)chosen=r;
+        else if(l)chosen=l;
+        const tomb=tombs[name]&&tombs[name][k];
+        if(tomb){const tt=Date.parse(tomb.deletedAt||0)||0;if(!chosen||tt>=timestamp(chosen))chosen=null;else delete tombs[name][k];}
+        if(chosen)out.push(clone(chosen));
+      });
+      merged[name]=out;
+    });
+    merged.nextIds={...(remote.nextIds||{}),...(local.nextIds||{})};Object.keys(merged.nextIds).forEach(k=>merged.nextIds[k]=Math.max(N(remote.nextIds&&remote.nextIds[k]),N(local.nextIds&&local.nextIds[k]),1));
+    const localWarningChanged=!baseline||baseline.objects.warningConfig!==checksum(local.warningConfig||{});merged.warningConfig=localWarningChanged?{...(remote.warningConfig||{}),...(local.warningConfig||{})}:{...(local.warningConfig||{}),...(remote.warningConfig||{})};
+    merged.updatedAt=commitAt;merged.updatedBy=user();merged.version=VERSION;return{state:merged,tombstones:tombs};
+  }
+  function dangerous(local,reason){
+    if(!baseline)return'';const b=baseline.counts,c=counts(local),r=S(reason).toLowerCase();const auth=/restore|import|recovery|authoritative/i.test(r)||W.__v473AllowDestructive===true;
+    if(b.containers>=20&&c.containers===0&&!auth)return'基础数据由 '+b.containers+' 条变为0，系统已阻止覆盖云端。';
+    if(b.core>=200&&c.core<Math.floor(b.core*0.45)&&!auth)return'业务数据总量异常下降：'+b.core+' → '+c.core+'，系统已阻止保存。';
+    for(const m of ['containers','transportTasks','pickupPlans','returnRecords'])if(b[m]>=50&&c[m]===0&&!auth)return m+' 数据由 '+b[m]+' 条变为0，系统已阻止保存。';
+    return'';
+  }
+  async function batchWrite(client,rows){for(let i=0;i<rows.length;i+=UPSERT_BATCH){const {error}=await client.from('app_state').upsert(rows.slice(i,i+UPSERT_BATCH));if(error)throw error;}}
+  function buildCommit(st,tombstones,parent,reason,opts){
+    const createdAt=now(),gen=generation(),rows=[],modules={};
+    ARRAY_MODULES.forEach(name=>{const parts=split(st[name]),chunkChecksums=[];parts.forEach((items,index)=>{const ch=checksum(items);chunkChecksums.push(ch);rows.push({id:GEN_PREFIX+gen+':chunk:'+name+':'+index,data:{version:VERSION,generation:gen,module:name,index,items,checksum:ch},updated_by:user(),updated_at:createdAt});});modules[name]={type:'array',length:A(st[name]).length,chunks:parts.length,checksum:checksum(A(st[name])),chunkChecksums};});
+    OBJECT_MODULES.forEach(name=>{const value=st[name]||{},ch=checksum(value);rows.push({id:GEN_PREFIX+gen+':chunk:'+name+':0',data:{version:VERSION,generation:gen,module:name,index:0,value,checksum:ch},updated_by:user(),updated_at:createdAt});modules[name]={type:'object',chunks:1,checksum:ch,chunkChecksums:[ch]};});
+    const manifest={version:VERSION,mode:'verified_generation_transaction',generation:gen,parentGeneration:parent&&parent.generation||'',revision:Math.max(N(parent&&parent.revision)+1,Date.now()),reason:reason||'save',updatedAt:createdAt,updatedBy:user(),chunkSize:CHUNK_SIZE,modules,counts:counts(st),score:allScore(st),coreScore:coreScore(st),tombstones:normalizeTombstones(tombstones),destructiveAuthorized:!!(opts&&opts.destructiveAuthorized)};
+    manifest.deletionCount=ARRAY_MODULES.reduce((n,k)=>n+Object.keys(manifest.tombstones[k]||{}).length,0);manifest.commitChecksum=checksum({generation:gen,parentGeneration:manifest.parentGeneration,revision:manifest.revision,modules:manifest.modules,counts:manifest.counts,tombstones:manifest.tombstones});return{manifest,rows};
+  }
+  async function readGeneration(manifest,legacy){
+    if(!manifest||!manifest.generation||!manifest.modules)return null;const client=sb();if(!client)return null;const prefix=(legacy?LEGACY_GEN_PREFIX:GEN_PREFIX)+manifest.generation+':chunk:';const {data,error}=await client.from('app_state').select('id,data').like('id',prefix+'%');if(error)throw error;const grouped={};A(data).forEach(row=>{const d=row.data||{};if(d.module)(grouped[d.module]||(grouped[d.module]=[])).push(d);});const st={version:manifest.version||VERSION,updatedAt:manifest.updatedAt||'',updatedBy:manifest.updatedBy||''};
+    for(const name of ARRAY_MODULES){const meta=manifest.modules[name];if(!meta)return null;const expected=Math.max(0,N(meta.chunks)),parts=A(grouped[name]).filter(x=>N(x.index)<expected).sort((a,b)=>N(a.index)-N(b.index));if(parts.length!==expected)return null;for(let i=0;i<expected;i++){if(N(parts[i].index)!==i)return null;if(!legacy){const ch=checksum(A(parts[i].items));if(ch!==parts[i].checksum||meta.chunkChecksums&&meta.chunkChecksums[i]!==ch)return null;}}const full=parts.flatMap(x=>A(x.items));if(full.length!==N(meta.length))return null;if(!legacy&&meta.checksum!==checksum(full))return null;st[name]=full;}
+    for(const name of OBJECT_MODULES){const meta=manifest.modules[name];if(!meta)return null;const parts=A(grouped[name]).sort((a,b)=>N(a.index)-N(b.index));if(parts.length<1)return null;const value=parts[0].value||{};if(!legacy){const ch=checksum(value);if(ch!==parts[0].checksum||meta.checksum!==ch)return null;}st[name]=value;}
+    if(manifest.counts)for(const name of ARRAY_MODULES)if(N(manifest.counts[name])!==A(st[name]).length)return null;if(manifest.coreScore!==undefined&&N(manifest.coreScore)!==coreScore(st))return null;if(manifest.score!==undefined&&N(manifest.score)!==allScore(st))return null;if(coreScore(st)===0)return null;return{state:st,manifest};
+  }
+  async function manifestRow(id){const client=sb();if(!client)return null;const {data,error}=await client.from('app_state').select('id,data,updated_at,updated_by').eq('id',id).maybeSingle();if(error)throw error;return data||null;}
+  async function readPointer(id){const row=await manifestRow(id);if(!row||!row.data)return null;const r=await readGeneration(row.data,false);if(r)r.row=row;return r;}
+  async function readBestCurrent(){
+    for(const id of [MANIFEST_ID,LAST_GOOD_ID,ROLLBACK_ID]){try{const r=await readPointer(id);if(r)return r;}catch(e){console.warn('V47.3 pointer invalid',id,e);}}
+    const client=sb();if(client){try{const {data}=await client.from('app_state').select('id,data,updated_at').like('id',HISTORY_PREFIX+'%').order('updated_at',{ascending:false}).limit(20);for(const row of A(data)){try{const r=await readGeneration(row.data,false);if(r){r.row=row;return r;}}catch(_){}}}catch(e){console.warn(e);}}
+    return null;
+  }
+  async function readLegacyValidated(){
+    const client=sb();if(!client)return null;const candidates=[];try{const cur=await manifestRow(LEGACY_MANIFEST_ID);if(cur)candidates.push(cur);const {data}=await client.from('app_state').select('id,data,updated_at').like('id',LEGACY_DAILY_PREFIX+'%').order('updated_at',{ascending:false}).limit(30);A(data).forEach(x=>candidates.push(x));}catch(e){console.warn(e);}for(const row of candidates){try{const r=await readGeneration(row.data,true);if(r)return r;}catch(_){}}return null;
+  }
+  async function acquireLock(reason){
+    const client=sb();if(!client)throw new Error('Supabase未连接');const owner=TAB_ID+'|'+user()+'|'+Math.random().toString(36).slice(2,7),deadline=Date.now()+LOCK_WAIT;
+    while(Date.now()<deadline){const t=now(),payload={owner,reason:S(reason),acquiredAt:t,expiresAt:new Date(Date.now()+LOCK_TTL).toISOString()};const {error}=await client.from('app_state').insert({id:LOCK_ID,data:payload,updated_by:owner,updated_at:t});if(!error){let timer=setInterval(async()=>{try{const n=now();await client.from('app_state').update({data:{...payload,expiresAt:new Date(Date.now()+LOCK_TTL).toISOString()},updated_at:n}).eq('id',LOCK_ID).eq('updated_by',owner);}catch(_){ }},25000);return{owner,timer};}
+      const row=await manifestRow(LOCK_ID);const expires=Date.parse(row&&row.data&&row.data.expiresAt||row&&row.updated_at||0);if(row&&expires&&expires<Date.now()-3000){try{await client.from('app_state').delete().eq('id',LOCK_ID).eq('updated_by',row.updated_by);}catch(_){ }}await sleep(300+Math.floor(Math.random()*450));
+    }throw new Error('其他用户正在保存数据，等待云端写入锁超时，请稍后重试。');
+  }
+  async function assertLock(lock){const row=await manifestRow(LOCK_ID);if(!row||row.updated_by!==lock.owner||row.data&&row.data.owner!==lock.owner)throw new Error('云端写入锁已失效，提交已取消。');}
+  async function releaseLock(lock){if(!lock)return;clearInterval(lock.timer);try{const client=sb();if(client)await client.from('app_state').delete().eq('id',LOCK_ID).eq('updated_by',lock.owner);}catch(_){}}
+  async function publishCommit(commit,previous){
+    const client=sb(),m=commit.manifest,t=now(),by=user();await batchWrite(client,commit.rows);const verified=await readGeneration(m,false);if(!verified)throw new Error('分片写入后的完整性校验失败，主版本未切换。');await assertLock(W.__v473ActiveLock);
+    const {error:he}=await client.from('app_state').upsert({id:HISTORY_PREFIX+m.generation,data:m,updated_by:by,updated_at:t});if(he)throw he;
+    if(previous&&previous.generation){const {error:re}=await client.from('app_state').upsert({id:ROLLBACK_ID,data:previous,updated_by:by,updated_at:t});if(re)console.warn('V47.3 rollback pointer skipped',re);}
+    const {error:cm}=await client.from('app_state').upsert({id:MANIFEST_ID,data:m,updated_by:by,updated_at:t});if(cm)throw cm;
+    const aux=[];
+    const {error:lg}=await client.from('app_state').upsert({id:LAST_GOOD_ID,data:m,updated_by:by,updated_at:t});if(lg)aux.push(lg);
+    const {error:dy}=await client.from('app_state').upsert({id:DAILY_PREFIX+day(t),data:m,updated_by:by,updated_at:t});if(dy)aux.push(dy);
+    const {error:bp}=await client.from('app_state').upsert({id:BASE_ID,data:{version:VERSION,storageMode:'v473_verified_transaction',manifestId:MANIFEST_ID,generation:m.generation,revision:m.revision,updatedAt:t,score:m.score,coreScore:m.coreScore},updated_by:by,updated_at:t});if(bp)aux.push(bp);
+    if(aux.length)console.warn('V47.3 auxiliary pointers need retry',aux);
+    return verified;
+  }
+  async function persist(reason,options){
+    const client=sb();if(!client||(typeof cloudUser!=='undefined'&&!cloudUser))return false;const local=options&&options.state?clone(options.state):clone(state()),msg=dangerous(local,reason);if(msg){hint(msg);alert(msg);return false;}let lock=null;
+    try{hint('等待云端保存锁…');lock=await acquireLock(reason);W.__v473ActiveLock=lock;hint('正在合并最新云端数据…');const remote=await readBestCurrent(),remoteState=remote&&remote.state||null,remoteManifest=remote&&remote.manifest||null,commitAt=now();let prepared=prepareLocal(local,commitAt,remoteManifest&&remoteManifest.tombstones||{}),final;
+      if(options&&options.replace){const tombs=mergeTombstones(remoteManifest&&remoteManifest.tombstones||{},prepared.tombstones);if(remoteState)ARRAY_MODULES.forEach(name=>{const keep=new Set(A(prepared.state[name]).map(x=>recordKey(name,x)));A(remoteState[name]).forEach(x=>{const k=recordKey(name,x);if(k&&!keep.has(k))tombs[name][k]={deletedAt:commitAt,deletedBy:user()};});});final={state:prepared.state,tombstones:tombs};}
+      else final=mergeStates(remoteState,prepared.state,remoteManifest&&remoteManifest.tombstones||{},prepared.tombstones,commitAt);
+      if(coreScore(final.state)===0)throw new Error('禁止提交空业务数据。');const commit=buildCommit(final.state,final.tombstones,remoteManifest,reason,{destructiveAuthorized:!!(options&&options.replace)});hint('正在写入并校验云端版本…');const verified=await publishCommit(commit,remoteManifest);apply(verified.state,verified.manifest,'save');hint('云端保存完成');try{if(channel473)channel473.postMessage({generation:verified.manifest.generation,from:TAB_ID});}catch(_){ }return true;
+    }catch(e){console.error('V47.3 save failed',e);hint('保存失败');alert('云端安全保存失败：'+(e.message||e)+'\n主版本未被不完整数据覆盖，请稍后重试。');return false;}finally{await releaseLock(lock);W.__v473ActiveLock=null;if(pendingPull){pendingPull=false;setTimeout(()=>pull('after_save'),300);}}
+  }
+  function flush(){if(saveRunning)return saveChain;if(!saveDirty)return Promise.resolve(true);saveDirty=false;if(saveTimer){clearTimeout(saveTimer);saveTimer=null;}const waiters=saveWaiters.splice(0),reason=[...saveReasons].join(',')||'coalesced_save';saveReasons.clear();saveRunning=true;saveChain=saveChain.catch(()=>false).then(()=>persist(reason)).then(ok=>{waiters.forEach(w=>w.resolve(ok));return ok;}).catch(e=>{waiters.forEach(w=>w.reject(e));throw e;}).finally(()=>{saveRunning=false;if(saveDirty)setTimeout(flush,0);});return saveChain;}
+  function queue(reason){saveDirty=true;saveReasons.add(reason||'save');const p=new Promise((resolve,reject)=>saveWaiters.push({resolve,reject}));if(saveTimer)clearTimeout(saveTimer);saveTimer=setTimeout(flush,180);return p;}
+  function captureUi(){try{return typeof W.captureCurrentUiStateV4513==='function'?W.captureCurrentUiStateV4513():typeof captureCurrentUiState==='function'?captureCurrentUiState():{scrollY:scrollY};}catch(_){return{scrollY:scrollY};}}
+  function render(ui){try{if(typeof renderSidebar==='function')renderSidebar();if(typeof renderContent==='function')renderContent();if(typeof applyLanguage==='function')applyLanguage();if(typeof W.restoreCurrentUiStateV4513==='function')setTimeout(()=>W.restoreCurrentUiStateV4513(ui),0);else setTimeout(()=>scrollTo(0,ui&&ui.scrollY||0),0);}catch(e){console.warn(e);}}
+  async function load(){
+    try{hint('正在验证云端数据…');let r=await readBestCurrent();if(!r)r=await readLegacyValidated();if(r){apply(r.state,r.manifest,r.manifest&&String(r.manifest.version).includes('V47.3')?'cloud':'legacy_validated');if(!String(r.manifest&&r.manifest.version||'').includes('V47.3'))setTimeout(()=>queue('migrate_validated_legacy'),400);hint('云端数据已通过完整性校验');return true;}
+      if(typeof LEGACY_LOAD==='function'){const ok=await LEGACY_LOAD();if(ok&&coreScore(state())>0){setBaseline(state(),null);setTimeout(()=>queue('migrate_legacy_loader'),400);return true;}}
+      return false;
+    }catch(e){console.error('V47.3 load failed',e);hint('云端数据校验失败');return false;}
+  }
+  async function pull(reason){
+    if(saveDirty||saveRunning){pendingPull=true;return false;}try{if(typeof isCurrentPageRefreshLocked==='function'&&isCurrentPageRefreshLocked()||typeof isModalOpen==='function'&&isModalOpen()||typeof isUserActivelyEditing==='function'&&isUserActivelyEditing()){pendingPull=true;hint('云端有新数据，完成当前操作后同步');return false;}const r=await readBestCurrent();if(!r)return false;if(currentManifest&&r.manifest.generation===currentManifest.generation)return true;const old=baseline&&baseline.counts,cur=counts(r.state),deleted=N(r.manifest&&r.manifest.deletionCount);if(old&&old.containers>=20&&cur.containers===0&&!r.manifest.destructiveAuthorized){console.error('V47.3 rejected zero remote state');hint('已拦截异常清零版本');return false;}const ui=captureUi();apply(r.state,r.manifest,'sync');render(ui);hint('已同步最新云端数据');return true;}catch(e){console.error('V47.3 pull failed',e);hint('同步失败，继续保留当前完整数据');return false;}
+  }
+  function startRealtime(){const client=sb();if(!client)return;try{if(realtime473)client.removeChannel(realtime473);}catch(_){ }realtime473=client.channel('cms_v473_'+TAB_ID).on('postgres_changes',{event:'*',schema:'public',table:'app_state',filter:'id=eq.'+BASE_ID},()=>setTimeout(()=>pull('realtime'),500)).subscribe(status=>{if(status==='SUBSCRIBED')hint('安全实时同步已开启');else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT')hint('实时同步异常，已启用轮询');});if(poller473)clearInterval(poller473);poller473=setInterval(()=>{if(typeof cloudUser!=='undefined'&&cloudUser&&document.visibilityState==='visible')pull('polling');},45000);try{if(typeof BroadcastChannel!=='undefined'){if(channel473)channel473.close();channel473=new BroadcastChannel('cms-v473-'+BASE_ID);channel473.onmessage=e=>{if(e.data&&e.data.from!==TAB_ID)pull('broadcast');};}}catch(_){}}
+
+  async function transact(reason,mutate,msg){const before=clone(state()),ui=captureUi();try{const r=mutate();if(r===false)return false;try{if(typeof W.normalizeStateV455==='function')W.normalizeStateV455(true);}catch(_){ }render(ui);hint((msg||'操作完成')+'，正在安全保存…');const ok=await queue(reason);if(!ok){apply(before,currentManifest,'rollback_local');render(ui);return false;}hint((msg||'操作完成')+'，已保存');return true;}catch(e){apply(before,currentManifest,'rollback_exception');render(ui);alert('操作失败：'+(e.message||e));return false;}}
+  function decode(k){try{let s=S(k);while(s.length%4)s+='=';return JSON.parse(decodeURIComponent(escape(atob(s))));}catch(_){return{id:k};}}
+  function planFor(k){const x=typeof k==='object'?k:decode(k),list=A(pickupPlans).filter(p=>p&&!p.cancelled&&p.status!=='cancelled');let m=x.containerNo?list.filter(p=>U(p.containerNo)===U(x.containerNo)):[];if(!m.length&&x.containerId!=null)m=list.filter(p=>S(p.containerId)===S(x.containerId));if(!m.length&&x.id!=null)m=list.filter(p=>S(p.id)===S(x.id));if(x.batch&&m.length>1){const z=m.filter(p=>U(p.batch)===U(x.batch));if(z.length)m=z;}if(x.seq&&m.length>1){const z=m.filter(p=>S(p.containerSeq||p.seq)===S(x.seq));if(z.length)m=z;}return m.find(p=>p.status!=='confirmed')||m[0]||null;}
+  function contFor(p){return A(containers).find(c=>S(c.id)===S(p.containerId)||U(c.containerNo)===U(p.containerNo));}
+  function factoryDest(v){const d=U(v);return d==='工厂'||d==='FACTORY'||d==='GWM';}
+  function ensureTask(p,c){const same=A(transportTasks).filter(t=>t&&!t.cancelled&&t.status!=='cancelled'&&S(t.sourcePlanId)===S(p.id)),done=t=>!!(t&&(t.unloadFinishTime||t.unpackConfirmedAt||['return_pending','completed'].includes(t.status)||t.operationStatus==='unloaded')),started=t=>!!(t&&(t.actualArrival||t.gateArrivalTime||t.gateReleaseTime||t.waitingAreaTime||t.unloadStartTime));let t=same.find(x=>x.status==='in_transit'&&!done(x))||same.find(x=>!started(x)&&!done(x));if(!t){const executing=same.find(x=>started(x)&&!done(x));if(executing)return executing;const ids=A(transportTasks).map(x=>N(x&&x.id)).filter(Number.isFinite);nextIds.task=Math.max(N(nextIds.task||1),ids.length?Math.max(...ids)+1:1);t={id:nextIds.task++,taskUid:'task-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,7),source:'pickupPlan',createdAt:now()};transportTasks.push(t);}['actualArrival','arrivalConfirmedAt','arrivalConfirmedBy','gateArrivalTime','gateReleaseTime','waitingAreaTime','unloadStartTime','unloadFinishTime','unpackConfirmedAt','unpackConfirmedBy','returnConfirmedAt'].forEach(k=>t[k]='');Object.assign(t,{source:'pickupPlan',sourcePlanId:p.id,containerId:p.containerId,containerNo:p.containerNo||(c&&c.containerNo)||'',containerSeq:(c&&c.containerSeq)||p.containerSeq||'',batch:p.batch||(c&&c.batch)||'',from:'港口',to:p.destination,destination:p.destination,carrier:p.carrier||'RG',status:'in_transit',estimatedArrival:p.arrivalDate||'',arrivalDate:p.arrivalDate||'',unloadingDock:p.unloadingDock||'',actualPickupTime:p.actualPickupTime||'',cancelled:false,cancelReason:'',operationStatus:factoryDest(p.destination)?'not_arrived':'',updatedAt:now()});return t;}
+  function taskFor(k,preferred){const x=typeof k==='object'?k:decode(k),list=A(transportTasks).filter(t=>t&&!t.cancelled&&t.status!=='cancelled');let m=x.containerNo?list.filter(t=>U(t.containerNo)===U(x.containerNo)):[];if(!m.length&&x.containerId!=null)m=list.filter(t=>S(t.containerId)===S(x.containerId));if(!m.length&&x.id!=null)m=list.filter(t=>S(t.id)===S(x.id));if(x.to&&m.length>1){const z=m.filter(t=>U(t.to||t.destination)===U(x.to));if(z.length)m=z;}if(preferred){const z=m.filter(t=>t.status===preferred);if(z.length)m=z;}m.sort((a,b)=>timestamp(b)-timestamp(a));return m[0]||null;}
+  function stock(cid,loc,t){if(cid==null||!loc||loc==='运输中')return;let x=A(locationStock).find(s=>S(s.containerId)===S(cid));if(x)Object.assign(x,{location:loc,time:t||now(),updatedAt:now()});else{locationStock.push({id:nextIds.stock||Date.now(),containerId:cid,location:loc,time:t||now(),updatedAt:now()});nextIds.stock=N(nextIds.stock||1)+1;}}
+
+  W.confirmPickupTaskByKeyV455=W.confirmPickupTaskByKeyV451=W.confirmPickupTaskByKeyV45=W.confirmPickupTaskByKey=async function(key){const p=planFor(key);if(!p)return alert('找不到提箱计划，请刷新后重试。');const actual=document.getElementById('pickupTimeKey_'+key)?.value||document.getElementById('pickupTime_'+p.id)?.value||p.actualPickupTime||'';if(!actual)return alert('请填写实际提箱日期');return transact('confirm_pickup_'+(p.containerNo||''),()=>{const c=contFor(p);p.status='confirmed';p.actualPickupTime=actual;p.needReconfirm=false;p.updatedAt=now();p.updatedBy=user();if(c){c.actualPickupTime=actual;c.updatedAt=now();}ensureTask(p,c);return true;},'已确认提箱 '+(p.containerNo||''));};
+  W.confirmPickupTask=function(id){const p=planFor({id});if(!p)return alert('找不到计划，请刷新后重试。');const key=btoa(unescape(encodeURIComponent(JSON.stringify({id:p.id,containerId:p.containerId,containerNo:p.containerNo||''})))).replace(/=+$/,'');return W.confirmPickupTaskByKeyV455(key);};
+  W.doArrivalByKeyV455=W.doArrivalByKeyV452=async function(key){const t=taskFor(key,'in_transit')||taskFor(key);if(!t)return alert('未找到运输任务，请刷新后重试。');return transact('confirm_arrival_'+(t.containerNo||''),()=>{const ts=now();t.status='arrived';t.actualArrival=t.actualArrival||ts;t.arrivalConfirmedAt=ts;t.arrivalConfirmedBy=user();t.updatedAt=ts;stock(t.containerId,t.to||t.destination,ts);return true;},'已确认到达 '+(t.to||t.destination||''));};
+  W.doArrival=W.confirmArrivalOnly=function(id){return W.doArrivalByKeyV455({id});};
+  W.doUnpackByKeyV455=W.doUnpackByKeyV452=async function(key){const t=taskFor(key,'arrived')||taskFor(key);if(!t)return alert('未找到到达任务，请刷新后重试。');return transact('confirm_unpack_'+(t.containerNo||''),()=>{const loc=t.to||t.destination;if(A(returnRecords).some(r=>S(r.containerId)===S(t.containerId)&&U(r.location)===U(loc)&&r.unpackDate))return alert('该集装箱已完成掏箱'),false;const origin=U(t.from||t.origin),need=factoryDest(loc)&&(origin==='港口'||origin==='RG堆场');returnRecords.push({id:'return-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6),containerId:t.containerId,containerNo:t.containerNo,location:loc,type:need?'return_needed':'unpack',unpackDate:day(),isReturnConfirmed:!need,fromLocation:t.from||t.origin,createdAt:now(),updatedAt:now()});t.status=need?'return_pending':'completed';t.unpackConfirmedAt=now();t.updatedAt=now();stock(t.containerId,loc,now());return true;},'已确认掏箱 '+(t.containerNo||''));};
+  W.doUnpack=function(id){return W.doUnpackByKeyV455({id});};
+  function mapTask(id){const raw=W.__v453TaskKeys&&W.__v453TaskKeys[id];return taskFor(raw||{id});}
+  async function gate(id,kind){const t=mapTask(id);if(!t)return alert('未找到工厂到货任务，请刷新后重试。');const labels={gate:'已确认到达门口',release:'已放行进厂',start:'已开始卸货',finish:'已确认掏箱完成'};return transact(kind+'_'+(t.containerNo||''),()=>{const ts=typeof nowLocalInput==='function'?nowLocalInput():now();if(kind==='gate'){t.truckPlate=document.getElementById('gatePlate_'+id)?.value.trim()||t.truckPlate||'';t.driverName=document.getElementById('gateDriver_'+id)?.value.trim()||t.driverName||'';t.driverPhone=document.getElementById('gatePhone_'+id)?.value.trim()||t.driverPhone||'';t.gateArrivalTime=t.gateArrivalTime||ts;t.operationStatus='outside_parking';}if(kind==='release'){t.gateReleaseTime=t.gateReleaseTime||ts;t.waitingAreaTime=t.waitingAreaTime||ts;t.operationStatus='inside_waiting';}if(kind==='start'){t.unloadStartTime=t.unloadStartTime||ts;t.operationStatus='unloading';}if(kind==='finish'){t.unloadFinishTime=t.unloadFinishTime||ts;t.operationStatus='unloaded';t.status=['港口','RG堆场'].includes(t.from||t.origin)?'return_pending':'completed';stock(t.containerId,'工厂',ts);}t.updatedAt=now();return true;},labels[kind]);}
+  W.confirmGateArrivalByKeyV453=id=>gate(id,'gate');W.releaseFromGateByKeyV453=id=>gate(id,'release');W.startUnloadingByKeyV453=id=>gate(id,'start');W.finishUnloadingByKeyV453=id=>gate(id,'finish');
+  function gateDirect(id,kind){const t=taskFor({id});if(!t)return alert('未找到工厂到货任务，请刷新后重试。');const map='v473_'+Math.random().toString(36).slice(2);W.__v453TaskKeys=W.__v453TaskKeys||{};W.__v453TaskKeys[map]=btoa(unescape(encodeURIComponent(JSON.stringify({id:t.id,containerId:t.containerId,containerNo:t.containerNo||'',to:t.to||t.destination||''})))).replace(/=+$/,'');return gate(map,kind);}
+  W.confirmGateArrival=id=>gateDirect(id,'gate');W.releaseFromGate=id=>gateDirect(id,'release');W.startUnloading=id=>gateDirect(id,'start');W.finishUnloading=id=>gateDirect(id,'finish');
+  W.calibrateContainerStatusesV455=W.calibrateContainerStatusesV454=()=>transact('manual_status_calibration',()=>{if(typeof W.normalizeStateV455==='function')W.normalizeStateV455(true);return true;},'状态校准完成');
+
+  W.queueSaveV473=queue;W.queueSaveV455=queue;W.queueSystemSaveV4513=queue;W.queueCloudPersistV435=queue;W.saveData=function(reason){return queue(reason||'saveData');};W.saveCloudState=function(reason){return queue(reason||'saveCloudState');};W.saveCloudStateV45=W.saveCloudStateV44=W.saveCloudStateV442=W.saveCloudState;W.flushPendingSaveV473=flush;W.flushPendingSaveV471=flush;
+  W.saveAndRenderContentKeepState=function(){const ui=captureUi();return queue('save_and_render').then(ok=>{if(ok)render(ui);return ok;});};
+  W.loadCloudState=load;W.pullCloudStateAndRefresh=pull;W.startRealtimeSync=startRealtime;
+  try{saveData=W.saveData;saveCloudState=W.saveCloudState;loadCloudState=W.loadCloudState;pullCloudStateAndRefresh=W.pullCloudStateAndRefresh;startRealtimeSync=W.startRealtimeSync;}catch(_){ }
+
+  W.renderAutoBackupCenterV434=async function(container){const client=sb();container.innerHTML='<div class="card"><div class="card-header"><span class="card-title">🛡️ 自动备份中心 V47.3</span><span class="status-badge status-success">已验证版本备份</span></div><div style="line-height:1.8;color:#606266">每次保存先写入独立版本并完成分片数量、记录数量和校验和验证，通过后才发布。每日备份指向已验证的不可变版本。</div><div id="v473BackupList" style="margin-top:14px">正在读取...</div></div>';const box=document.getElementById('v473BackupList');if(!client||!box)return;const {data,error}=await client.from('app_state').select('id,data,updated_at,updated_by').like('id',DAILY_PREFIX+'%').order('id',{ascending:false}).limit(30);if(error){box.innerHTML='读取备份失败：'+error.message;return;}const list=A(data);if(!list.length){box.innerHTML='<div class="empty-state">暂无V47.3每日备份。下一次成功保存后会自动创建。</div>';return;}box.innerHTML='<table class="data-table"><thead><tr><th>日期</th><th>版本</th><th>基础数据</th><th>业务数据总量</th><th>创建时间</th><th>操作</th></tr></thead><tbody>'+list.map(r=>'<tr><td><b>'+r.id.replace(DAILY_PREFIX,'')+'</b></td><td>'+S(r.data&&r.data.version||'-')+'</td><td>'+N(r.data&&r.data.counts&&r.data.counts.containers)+'</td><td>'+N(r.data&&r.data.coreScore)+'</td><td>'+S(typeof formatDateTime==='function'?formatDateTime(r.updated_at):r.updated_at)+'</td><td><button class="btn btn-secondary" onclick="downloadV473Backup(\''+r.id+'\')">下载</button> <button class="btn btn-danger" onclick="restoreV473Backup(\''+r.id+'\')">恢复</button></td></tr>').join('')+'</tbody></table>';};
+  W.downloadV473Backup=async function(id){const row=await manifestRow(id);if(!row)return alert('读取备份失败');const r=await readGeneration(row.data,false);if(!r)return alert('备份完整性校验失败');const blob=new Blob([JSON.stringify(r.state,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='container_backup_v473_'+id.replace(DAILY_PREFIX,'')+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
+  W.restoreV473Backup=async function(id){if(!confirm('确认恢复该备份？恢复将作为新的已验证版本发布，当前版本仍保留用于回退。'))return;const row=await manifestRow(id);if(!row)return alert('读取备份失败');const r=await readGeneration(row.data,false);if(!r)return alert('备份完整性校验失败，禁止恢复');W.__v473AllowDestructive=true;try{const ok=await persist('restore_'+id,{state:r.state,replace:true});if(ok){render(captureUi());alert('备份恢复完成。');}}finally{W.__v473AllowDestructive=false;}};
+  W.downloadV455Backup=W.downloadV473Backup;W.restoreV455Backup=W.restoreV473Backup;
+  const oldMissing=W.restoreMissingBatchesV456;if(typeof oldMissing==='function')W.restoreMissingBatchesV456=async function(){const r=await oldMissing.apply(this,arguments);await queue('restore_missing_batches_v473');return r;};
+
+  W.__v473Status=function(){return{version:VERSION,tab:TAB_ID,generation:currentManifest&&currentManifest.generation||'',revision:currentManifest&&currentManifest.revision||0,baseline:baseline&&baseline.counts||null,saveDirty,saveRunning,pendingPull};};
+  W.__v473ValidateCloud=async function(){const r=await readBestCurrent();return r?{ok:true,generation:r.manifest.generation,counts:counts(r.state),version:r.manifest.version}:{ok:false};};
+  function updateVersion(){try{document.title='Sistema Inteligente de Monitoramento de Contêineres V47.3';document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.[0-2]|Lean Core|Warning Integrity/i.test(S(el.textContent)))el.textContent='V47.3 Safe Transaction Core';});}catch(_){}}
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'&&saveDirty)flush();else if(document.visibilityState==='visible'&&pendingPull){pendingPull=false;pull('visible');}});
+  updateVersion();document.addEventListener('DOMContentLoaded',()=>setTimeout(updateVersion,1000));setTimeout(updateVersion,2500);
+  console.log(VERSION+' loaded: distributed write lock, validated immutable generations, tombstones, rollback and multi-account merge.');
+})();
+
+</script>
 </body>
 </html>
