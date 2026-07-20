@@ -14285,5 +14285,411 @@ ${preview}
 })();
 </script>
 
+
+
+<script>
+/* ==================== V47.6 Unpack Task Integrity：确认掏箱精确任务与安全保存 ==================== */
+(function(){
+  'use strict';
+  const W=window;
+  const VERSION='V47.6 Unpack Task Integrity';
+  const S=v=>String(v==null?'':v).trim();
+  const U=v=>S(v).toUpperCase();
+  const A=v=>Array.isArray(v)?v:[];
+  const clone=v=>JSON.parse(JSON.stringify(v));
+  const busy=new Set();
+
+  function listTasks(){try{return A(transportTasks);}catch(_){return A(W.transportTasks);}}
+  function listReturns(){try{return A(returnRecords);}catch(_){return A(W.returnRecords);}}
+  function listStock(){try{return A(locationStock);}catch(_){return A(W.locationStock);}}
+  function now(){return new Date().toISOString();}
+  function day(){return now().slice(0,10);}
+  function dest(t){return S(t&&(t.to||t.destination));}
+  function origin(t){return S(t&&(t.from||t.origin));}
+  function active(t){return !!(t&&!t.cancelled&&S(t.status)!=='cancelled');}
+  function stamp(t){const n=Date.parse(t&&(t.updatedAt||t.updated_at||t.actualArrival||t.createdAt||t.created_at||''));return Number.isFinite(n)?n:0;}
+
+  function decode(ref){
+    if(ref&&typeof ref==='object'){
+      if(Object.keys(ref).length===1&&Object.prototype.hasOwnProperty.call(ref,'id')&&typeof ref.id==='string'){
+        const inner=decode(ref.id);
+        if(inner&&(inner.taskUid||inner.routeLegKey||inner.containerId||inner.containerNo||S(inner.id)!==S(ref.id)))return inner;
+      }
+      return ref;
+    }
+    const s=S(ref);if(!s)return{};
+    try{let p=s;while(p.length%4)p+='=';const o=JSON.parse(decodeURIComponent(escape(atob(p))));if(o&&typeof o==='object')return o;}catch(_){ }
+    return{id:s};
+  }
+
+  function resolve(ref,mode){
+    const k=decode(ref), all=listTasks().filter(active);
+    let m=[];
+    if(k.taskUid)m=all.filter(t=>S(t.taskUid)===S(k.taskUid));
+    if(!m.length&&k.routeLegKey)m=all.filter(t=>S(t.routeLegKey)===S(k.routeLegKey));
+    if(!m.length&&k.id!==undefined&&k.id!==null)m=all.filter(t=>S(t.id)===S(k.id));
+    if(!m.length&&k.containerId!==undefined&&k.containerId!==null)m=all.filter(t=>S(t.containerId)===S(k.containerId));
+    if(!m.length&&k.containerNo)m=all.filter(t=>U(t.containerNo)===U(k.containerNo));
+    if(k.to&&m.length>1){const z=m.filter(t=>U(dest(t))===U(k.to));if(z.length)m=z;}
+    if(k.from&&m.length>1){const z=m.filter(t=>U(origin(t))===U(k.from));if(z.length)m=z;}
+    const preferred=mode==='factoryFinish'?['in_transit','arrived']:['in_transit','arrived'];
+    m.sort((a,b)=>{
+      const ai=preferred.includes(S(a.status))?0:1,bi=preferred.includes(S(b.status))?0:1;
+      if(ai!==bi)return ai-bi;
+      if(mode==='factoryFinish'){
+        const ar=(a.operationStatus==='unloading'||a.unloadStartTime)?0:1;
+        const br=(b.operationStatus==='unloading'||b.unloadStartTime)?0:1;
+        if(ar!==br)return ar-br;
+      }
+      return stamp(b)-stamp(a);
+    });
+    return m[0]||null;
+  }
+
+  function routeMatch(r,t){
+    if(!r||!t)return false;
+    if(t.taskUid&&S(r.sourceTaskUid)===S(t.taskUid))return true;
+    if(t.routeLegKey&&S(r.sourceRouteLegKey)===S(t.routeLegKey))return true;
+    return false;
+  }
+  function ensurePendingReturn(t,ts){
+    const rs=listReturns();
+    const need=['RIO CLARO','IRA库房','工厂'].map(U).includes(U(dest(t)))&&['港口','RG堆场'].map(U).includes(U(origin(t)));
+    if(!need)return false;
+    const confirmed=rs.find(r=>r&&r.type==='return'&&r.isReturnConfirmed&&r.returnDate&&routeMatch(r,t));
+    if(confirmed)return false;
+    let r=rs.find(x=>x&&!x.isReturnConfirmed&&S(x.type||'return_needed')==='return_needed'&&routeMatch(x,t));
+    if(!r){
+      let rid;
+      try{rid=(nextIds&&nextIds.returnRecord)||('return-'+Date.now().toString(36));if(nextIds&&Number.isFinite(Number(rid)))nextIds.returnRecord=Number(rid)+1;}catch(_){rid='return-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6);}
+      r={id:rid,type:'return_needed',containerId:t.containerId,containerNo:t.containerNo||'',batch:t.batch||'',blNo:t.blNo||'',iraNo:t.iraNo||'',location:dest(t),unpackDate:day(),isReturnConfirmed:false,fromLocation:origin(t),sourceTaskUid:t.taskUid||'',sourceRouteLegKey:t.routeLegKey||'',createdAt:ts,updatedAt:ts,createdBy:'V47.6'};
+      rs.push(r);
+    }else{
+      Object.assign(r,{containerId:t.containerId,containerNo:t.containerNo||r.containerNo||'',batch:t.batch||r.batch||'',location:dest(t),unpackDate:r.unpackDate||day(),fromLocation:origin(t),sourceTaskUid:t.taskUid||r.sourceTaskUid||'',sourceRouteLegKey:t.routeLegKey||r.sourceRouteLegKey||'',updatedAt:ts});
+    }
+    return true;
+  }
+  function ensureUnpackRecord(t,ts){
+    const rs=listReturns();
+    let r=rs.find(x=>x&&S(x.type)==='unpack'&&routeMatch(x,t));
+    if(!r){
+      r={id:'unpack-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6),type:'unpack',containerId:t.containerId,containerNo:t.containerNo||'',batch:t.batch||'',location:dest(t),unpackDate:day(),isReturnConfirmed:true,fromLocation:origin(t),sourceTaskUid:t.taskUid||'',sourceRouteLegKey:t.routeLegKey||'',createdAt:ts,updatedAt:ts,createdBy:'V47.6'};
+      rs.push(r);
+    }
+  }
+  function setStock(t,ts){
+    const loc=dest(t);if(!loc||loc==='运输中')return;
+    const stocks=listStock();let s=stocks.find(x=>S(x.containerId)===S(t.containerId));
+    if(s)Object.assign(s,{location:loc,time:ts,updatedAt:ts,isActive:true});
+    else{
+      let id=Date.now();try{id=(nextIds&&nextIds.stock)||id;if(nextIds)nextIds.stock=Number(id)+1;}catch(_){ }
+      stocks.push({id,containerId:t.containerId,location:loc,time:ts,updatedAt:ts,isActive:true});
+    }
+  }
+
+  function snapshot(){
+    let ni={};try{ni=clone(nextIds||{});}catch(_){ }
+    return{tasks:clone(listTasks()),returns:clone(listReturns()),stock:clone(listStock()),nextIds:ni};
+  }
+  function restore(s){
+    const replace=(target,data)=>{if(Array.isArray(target)){target.splice(0,target.length,...data);}};
+    try{replace(transportTasks,s.tasks);}catch(_){replace(W.transportTasks,s.tasks);}
+    try{replace(returnRecords,s.returns);}catch(_){replace(W.returnRecords,s.returns);}
+    try{replace(locationStock,s.stock);}catch(_){replace(W.locationStock,s.stock);}
+    try{Object.keys(nextIds||{}).forEach(k=>delete nextIds[k]);Object.assign(nextIds,s.nextIds||{});}catch(_){ }
+  }
+  function render(){try{if(typeof W.renderContent==='function')W.renderContent();else if(typeof renderContent==='function')renderContent();}catch(e){console.warn('V47.6 render skipped',e);}}
+  function hint(msg){try{if(typeof showRealtimeSyncHint==='function')showRealtimeSyncHint(msg);}catch(_){ }}
+
+  async function commit(ref,mode){
+    const t=resolve(ref,mode);
+    if(!t){alert(mode==='factoryFinish'?'未找到当前卸货任务，请刷新后重试。':'未找到当前待掏箱运输任务，请刷新后重试。');return false;}
+    const lock=S(t.taskUid||t.routeLegKey||t.id||t.containerNo);
+    if(busy.has(lock)){alert('该任务正在处理中，请勿重复点击。');return false;}
+    busy.add(lock);
+    const before=snapshot();
+    try{
+      const ts=now();
+      t.actualArrival=t.actualArrival||ts;
+      t.arrivalConfirmedAt=t.arrivalConfirmedAt||ts;
+      t.unloadStartTime=t.unloadStartTime||ts;
+      t.unloadFinishTime=t.unloadFinishTime||ts;
+      t.unpackConfirmedAt=t.unpackConfirmedAt||ts;
+      t.unpackConfirmedBy=t.unpackConfirmedBy||((typeof currentUser!=='undefined'&&currentUser&&(currentUser.name||currentUser.email))||'');
+      t.operationStatus='unloaded';
+      const pending=ensurePendingReturn(t,ts);
+      if(pending)t.status='return_pending';
+      else{t.status='completed';ensureUnpackRecord(t,ts);}
+      t.updatedAt=ts;t.updatedBy=t.unpackConfirmedBy;t.cc476UnpackFixed=true;
+      setStock(t,ts);
+      try{if(typeof W.normalizeStateV455==='function')W.normalizeStateV455(true);}catch(_){ }
+      render();hint('确认掏箱完成，正在安全保存…');
+      const saver=W.queueSaveV473||W.queueSaveV455||W.saveData;
+      if(typeof saver!=='function')throw new Error('安全保存函数未加载');
+      const ok=await saver.call(W,'confirm_unpack_v476_'+(t.containerNo||t.id||''));
+      if(ok===false)throw new Error('云端保存失败');
+      hint('确认掏箱完成，已保存');
+      return true;
+    }catch(e){
+      console.error('V47.6 unpack failed',e);restore(before);render();alert('确认掏箱失败，本次操作已撤销：'+(e&&e.message||e));return false;
+    }finally{busy.delete(lock);}
+  }
+
+  // Rio Claro / IRA等到货掏箱确认。
+  W.doUnpack=function(ref){return commit(ref,'locationUnpack');};
+  W.doUnpackByKeyV476=W.doUnpack;
+
+  // 工厂卸货口“确认掏箱完成”。直接解析当前运输腿，不再经过旧版mapId包装链路。
+  W.finishUnloading=function(ref){return commit(ref,'factoryFinish');};
+  W.finishUnloadingByKeyV476=W.finishUnloading;
+
+  W.__v476ResolveUnpackTask=function(ref,mode){const t=resolve(ref,mode||'locationUnpack');return t?{ok:true,id:t.id,taskUid:t.taskUid||'',routeLegKey:t.routeLegKey||'',containerNo:t.containerNo||'',status:t.status||'',operationStatus:t.operationStatus||'',to:dest(t)}:{ok:false,decoded:decode(ref),taskCount:listTasks().length};};
+
+  function version(){
+    try{document.title='Sistema Inteligente de Monitoramento de Contêineres V47.6';document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.[0-5]|Task Reference Integrity|Restore Integrity Core/i.test(S(el.textContent)))el.textContent=VERSION;});}catch(_){ }
+  }
+  const oldRender=W.renderContent;
+  if(typeof oldRender==='function'){
+    W.renderContent=function(){const r=oldRender.apply(this,arguments);setTimeout(version,0);return r;};
+    try{renderContent=W.renderContent;}catch(_){ }
+  }
+  version();document.addEventListener('DOMContentLoaded',()=>setTimeout(version,500));
+  console.log(VERSION+' loaded: unpack actions resolve and persist the exact current transport leg.');
+})();
+</script>
+
+<script>
+/* ==================== V47.7 Workflow Reference Integrity：全流程任务/计划引用统一 ==================== */
+(function(){
+  'use strict';
+  const W=window;
+  const VERSION='V47.7 Workflow Reference Integrity';
+  const A=v=>Array.isArray(v)?v:[];
+  const S=v=>String(v==null?'':v).trim();
+  const U=v=>S(v).toUpperCase();
+  const clone=v=>JSON.parse(JSON.stringify(v));
+  const now=()=>new Date().toISOString();
+  const busy=new Set();
+  const refs=new Map();
+
+  function enc(obj){
+    try{return btoa(unescape(encodeURIComponent(JSON.stringify(obj)))).replace(/=+$/,'');}
+    catch(_){return S(obj&&obj.id||'');}
+  }
+  function dec(ref){
+    if(ref&&typeof ref==='object'){
+      if(Object.keys(ref).length===1&&Object.prototype.hasOwnProperty.call(ref,'id')&&typeof ref.id==='string'){
+        const inner=dec(ref.id);
+        if(inner&&(inner.taskUid||inner.routeLegKey||inner.planUid||inner.containerNo||S(inner.id)!==S(ref.id)))return inner;
+      }
+      return ref;
+    }
+    const s=S(ref);if(!s)return{};
+    if(refs.has(s))return refs.get(s);
+    try{let p=s;while(p.length%4)p+='=';const o=JSON.parse(decodeURIComponent(escape(atob(p))));if(o&&typeof o==='object')return o;}catch(_){ }
+    return{id:s};
+  }
+  function token(kind,x){
+    const o={kind,id:x&&x.id};
+    if(kind==='task')Object.assign(o,{taskUid:x.taskUid||'',routeLegKey:x.routeLegKey||'',containerId:x.containerId,containerNo:x.containerNo||'',from:x.from||x.origin||'',to:x.to||x.destination||'',sourcePlanId:x.sourcePlanId||''});
+    if(kind==='plan')Object.assign(o,{planUid:x.planUid||'',containerId:x.containerId,containerNo:x.containerNo||'',batch:x.batch||'',destination:x.destination||''});
+    if(kind==='container')Object.assign(o,{containerId:x.id,containerNo:x.containerNo||'',batch:x.batch||''});
+    const k=enc(o);refs.set(k,o);return k;
+  }
+  function tasks(){try{return A(transportTasks);}catch(_){return A(W.transportTasks);}}
+  function plans(){try{return A(pickupPlans);}catch(_){return A(W.pickupPlans);}}
+  function containersList(){try{return A(containers);}catch(_){return A(W.containers);}}
+  function returnsList(){try{return A(returnRecords);}catch(_){return A(W.returnRecords);}}
+  function stocks(){try{return A(locationStock);}catch(_){return A(W.locationStock);}}
+  function activeTask(t){return !!(t&&!t.cancelled&&S(t.status)!=='cancelled'&&!t.archivedAt);}
+  function taskTime(t){const n=Date.parse(t&&(t.updatedAt||t.unloadFinishTime||t.actualArrival||t.gateReleaseTime||t.gateArrivalTime||t.publishedAt||t.createdAt||''));return Number.isFinite(n)?n:0;}
+  function dest(t){return S(t&&(t.to||t.destination));}
+  function origin(t){return S(t&&(t.from||t.origin));}
+  function factoryRoute(t){return ['工厂','IRA库房'].includes(dest(t));}
+  function taskRank(t){
+    let r=({not_arrived:0,arrived:0,outside_parking:1,gate_arrived:1,inside_waiting:2,unloading:3,unloaded:4})[S(t&&t.operationStatus)]||0;
+    if(t&&t.gateArrivalTime)r=Math.max(r,1);
+    if(t&&(t.gateReleaseTime||t.waitingAreaTime))r=Math.max(r,2);
+    if(t&&t.unloadStartTime)r=Math.max(r,3);
+    if(t&&(t.unloadFinishTime||t.unpackConfirmedAt||['return_pending','completed','return_completed'].includes(S(t.status))))r=Math.max(r,4);
+    return r;
+  }
+  function finished(t){return taskRank(t)>=4||['return_pending','completed','return_completed'].includes(S(t&&t.status));}
+  function resolveTask(ref){
+    const k=dec(ref), all=tasks().filter(activeTask);let m=[];
+    if(k.taskUid)m=all.filter(t=>S(t.taskUid)===S(k.taskUid));
+    if(!m.length&&k.routeLegKey)m=all.filter(t=>S(t.routeLegKey)===S(k.routeLegKey));
+    if(!m.length&&k.id!==undefined&&k.id!==null)m=all.filter(t=>S(t.id)===S(k.id));
+    if(!m.length&&k.sourcePlanId)m=all.filter(t=>S(t.sourcePlanId)===S(k.sourcePlanId));
+    if(!m.length&&k.containerId!==undefined&&k.containerId!==null)m=all.filter(t=>S(t.containerId)===S(k.containerId));
+    if(!m.length&&k.containerNo)m=all.filter(t=>U(t.containerNo)===U(k.containerNo));
+    if(k.to&&m.length>1){const z=m.filter(t=>U(dest(t))===U(k.to));if(z.length)m=z;}
+    if(k.from&&m.length>1){const z=m.filter(t=>U(origin(t))===U(k.from));if(z.length)m=z;}
+    m.sort((a,b)=>taskRank(b)-taskRank(a)||taskTime(b)-taskTime(a));
+    return m[0]||null;
+  }
+  function resolvePlan(ref){
+    const k=dec(ref), all=plans().filter(p=>p&&p.status!=='cancelled'&&!p.cancelled);let m=[];
+    if(k.planUid)m=all.filter(p=>S(p.planUid)===S(k.planUid));
+    if(!m.length&&k.id!==undefined&&k.id!==null)m=all.filter(p=>S(p.id)===S(k.id));
+    if(!m.length&&k.containerId!==undefined&&k.containerId!==null)m=all.filter(p=>S(p.containerId)===S(k.containerId));
+    if(!m.length&&k.containerNo)m=all.filter(p=>U(p.containerNo)===U(k.containerNo));
+    if(k.destination&&m.length>1){const z=m.filter(p=>U(p.destination)===U(k.destination));if(z.length)m=z;}
+    m.sort((a,b)=>Date.parse(b.updatedAt||b.createdAt||0)-Date.parse(a.updatedAt||a.createdAt||0));
+    return m.find(p=>p.status!=='confirmed')||m[0]||null;
+  }
+  function resolveContainer(ref){
+    const k=dec(ref), all=containersList();
+    return all.find(c=>k.containerId!==undefined&&S(c.id)===S(k.containerId))||all.find(c=>k.id!==undefined&&S(c.id)===S(k.id))||all.find(c=>k.containerNo&&U(c.containerNo)===U(k.containerNo))||null;
+  }
+  function currentUserName(){try{return (currentUser&&(currentUser.name||currentUser.email))||(cloudUser&&cloudUser.email)||'';}catch(_){return'';}}
+  function snapshot(){
+    let ni={};try{ni=clone(nextIds||{});}catch(_){ }
+    return{containers:clone(containersList()),plans:clone(plans()),tasks:clone(tasks()),returns:clone(returnsList()),stocks:clone(stocks()),nextIds:ni};
+  }
+  function restore(s){
+    const repl=(a,b)=>{if(Array.isArray(a))a.splice(0,a.length,...b);};
+    try{repl(containers,s.containers);repl(pickupPlans,s.plans);repl(transportTasks,s.tasks);repl(returnRecords,s.returns);repl(locationStock,s.stocks);Object.keys(nextIds||{}).forEach(k=>delete nextIds[k]);Object.assign(nextIds,s.nextIds||{});}catch(e){console.error(e);}
+  }
+  function render(){try{if(typeof renderContent==='function')renderContent();else if(typeof W.renderContent==='function')W.renderContent();}catch(e){console.warn('V47.7 render skipped',e);}}
+  function hint(x){try{if(typeof showRealtimeSyncHint==='function')showRealtimeSyncHint(x);}catch(_){ }}
+  async function safeCommit(key,reason,mutate,message){
+    if(busy.has(key)){alert('该任务正在处理中，请勿重复点击。');return false;}
+    busy.add(key);const before=snapshot();
+    try{
+      const r=mutate();if(r===false)return false;
+      try{if(typeof W.normalizeStateV455==='function')W.normalizeStateV455(true);}catch(_){ }
+      render();hint((message||'操作完成')+'，正在安全保存…');
+      const save=W.queueSaveV473||W.queueSaveV455||W.saveData;if(typeof save!=='function')throw new Error('安全保存函数未加载');
+      const ok=await save.call(W,reason);if(ok===false)throw new Error('云端保存失败');
+      hint((message||'操作完成')+'，已保存');return true;
+    }catch(e){console.error('V47.7 commit failed',e);restore(before);render();alert((message||'操作')+'失败，本次操作已撤销：'+(e&&e.message||e));return false;}
+    finally{busy.delete(key);}
+  }
+  function nextTaskId(){
+    let n=1;try{n=Math.max(Number(nextIds.task||1),1);const used=new Set(tasks().map(t=>S(t.id)));while(used.has(S(n)))n++;nextIds.task=n+1;}catch(_){n=Date.now();}return n;
+  }
+  function uid(prefix){try{return prefix+'_'+crypto.randomUUID();}catch(_){return prefix+'_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,9);}}
+  function ensurePickupTask(p,c,actual){
+    const same=tasks().filter(t=>activeTask(t)&&S(t.sourcePlanId)===S(p.id)&&!finished(t));
+    let t=same.find(x=>S(x.status)==='in_transit')||same.sort((a,b)=>taskTime(b)-taskTime(a))[0];
+    if(!t){t={id:nextTaskId(),taskUid:uid('task'),source:'pickupPlan',createdAt:now()};tasks().push(t);}
+    if(!t.taskUid)t.taskUid=uid('task');
+    const d=S(p.destination),f=['工厂','IRA库房'].includes(d);
+    Object.assign(t,{containerId:p.containerId,containerNo:p.containerNo||(c&&c.containerNo)||'',containerSeq:(c&&c.containerSeq)||p.containerSeq||'',batch:p.batch||(c&&c.batch)||'',from:'港口',to:d,destination:d,carrier:p.carrier||'RG',status:'in_transit',operationStatus:f?'not_arrived':'',estimatedArrival:p.arrivalDate||'',arrivalDate:p.arrivalDate||'',unloadingDock:d==='IRA库房'?'IRA库房':(p.unloadingDock||''),source:'pickupPlan',sourcePlanId:p.id,planUid:p.planUid||'',actualPickupTime:actual,cancelled:false,updatedAt:now(),publishedAt:t.publishedAt||now()});
+    t.routeLegKey=t.routeLegKey||['PLAN',S(p.planUid||p.id),S(p.containerId),U(d)].join('|');
+    return t;
+  }
+
+  async function confirmPickup(ref){
+    const p=resolvePlan(ref);if(!p){alert('未找到当前提箱计划，请刷新后重试。');return false;}
+    const tk=token('plan',p);
+    const actual=document.getElementById('pickupTimeRef_'+tk)?.value||document.getElementById('pickupTimeKey_'+tk)?.value||document.getElementById('pickupTime_'+S(p.id))?.value||p.actualPickupTime||'';
+    if(!actual){alert('请填写实际提箱日期');return false;}
+    return safeCommit('plan:'+S(p.planUid||p.id),'confirm_pickup_v477_'+(p.containerNo||p.id),()=>{
+      const c=resolveContainer({containerId:p.containerId,containerNo:p.containerNo});
+      p.planUid=p.planUid||uid('plan');p.status='confirmed';p.actualPickupTime=actual;p.needReconfirm=false;p.updatedAt=now();p.updatedBy=currentUserName();
+      if(c){c.actualPickupTime=actual;c.updatedAt=now();}
+      ensurePickupTask(p,c,actual);return true;
+    },'确认提箱');
+  }
+  W.confirmPickupTask=W.confirmPickupTaskByKey=W.confirmPickupTaskByKeyV45=W.confirmPickupTaskByKeyV451=W.confirmPickupTaskByKeyV455=W.confirmPickupTaskByRefV477=confirmPickup;
+
+  const baseDoArrival=W.doArrival;
+  const baseDoUnpack=W.doUnpack;
+  const baseFinish=W.finishUnloading;
+  async function gateAction(ref,kind){
+    const t=resolveTask(ref);if(!t||!factoryRoute(t)){alert('未找到当前工厂/IRA到货任务，请刷新后重试。');return false;}
+    const r=taskRank(t),key=S(t.taskUid||t.routeLegKey||t.id);
+    if(kind==='gate'&&r>=1){alert('该任务已经完成门岗到达确认。');return false;}
+    if(kind==='release'&&r<1){alert('请先确认车辆到达门岗。');return false;}
+    if(kind==='release'&&r>=2){alert('该任务已经放行进入等待区。');return false;}
+    if(kind==='start'&&r<2){alert('车辆尚未进入等待区，不能开始卸货。');return false;}
+    if(kind==='start'&&r>=3){alert('该任务已经开始卸货。');return false;}
+    if(kind==='finish'){
+      if(r<3){alert('请先确认到达卸货口并开始卸货。');return false;}
+      if(r>=4){alert('该任务已经完成掏箱。');return false;}
+      return baseFinish?baseFinish(token('task',t)):false;
+    }
+    return safeCommit('task:'+key,'factory_'+kind+'_v477_'+(t.containerNo||t.id),()=>{
+      const ts=(typeof nowLocalInput==='function'?nowLocalInput():now());
+      if(kind==='gate'){
+        t.truckPlate=document.getElementById('gatePlate_'+S(t.id))?.value.trim()||t.truckPlate||'';
+        t.driverName=document.getElementById('gateDriver_'+S(t.id))?.value.trim()||t.driverName||'';
+        t.driverPhone=document.getElementById('gatePhone_'+S(t.id))?.value.trim()||t.driverPhone||'';
+        t.gateArrivalTime=t.gateArrivalTime||ts;t.actualArrival=t.actualArrival||ts;t.operationStatus='outside_parking';t.status='in_transit';
+      }else if(kind==='release'){
+        t.gateReleaseTime=t.gateReleaseTime||ts;t.waitingAreaTime=t.waitingAreaTime||ts;t.operationStatus='inside_waiting';t.status='in_transit';
+      }else if(kind==='start'){
+        t.unloadStartTime=t.unloadStartTime||ts;t.operationStatus='unloading';t.status='in_transit';
+      }
+      t.updatedAt=now();t.updatedBy=currentUserName();return true;
+    },kind==='gate'?'门岗确认':kind==='release'?'门岗放行':'开始卸货');
+  }
+  W.confirmGateArrival=W.confirmGateArrivalByKeyV453=ref=>gateAction(ref,'gate');
+  W.releaseFromGate=W.releaseFromGateByKeyV453=ref=>gateAction(ref,'release');
+  W.startUnloading=W.startUnloadingByKeyV453=ref=>gateAction(ref,'start');
+  W.finishUnloading=W.finishUnloadingByKeyV453=W.finishUnloadingByKeyV476=ref=>gateAction(ref,'finish');
+  W.doArrival=W.confirmArrivalOnly=function(ref){const t=resolveTask(ref);if(!t){alert('未找到当前运输任务，请刷新后重试。');return false;}if(dest(t)!=='RG堆场'){alert('该任务不属于RG堆场到达确认，请在对应收货板块操作。');return false;}return baseDoArrival?baseDoArrival(token('task',t)):false;};
+  W.doUnpack=function(ref){const t=resolveTask(ref);if(!t){alert('未找到当前待掏箱任务，请刷新后重试。');return false;}if(!['Rio Claro','工厂','IRA库房'].includes(dest(t))){alert('该任务不属于掏箱确认流程。');return false;}return baseDoUnpack?baseDoUnpack(token('task',t)):false;};
+
+  const basePublishSingle=W.publishSingle;
+  const baseModifyPlan=W.modifyPlan;
+  const baseCancelPlan=W.cancelPlan;
+  W.publishPickupByRefV477=function(ref){const c=resolveContainer(ref);if(!c){alert('未找到待发布集装箱，请刷新后重试。');return false;}return typeof basePublishSingle==='function'?basePublishSingle.call(W,c.id):false;};
+  W.togglePickupDockByRefV477=function(ref){const c=resolveContainer(ref);if(!c)return false;const d=document.getElementById('dest_'+S(c.id))?.value,box=document.getElementById('dock_'+S(c.id)),hintEl=document.getElementById('dockHint_'+S(c.id));if(!box)return false;box.placeholder=d==='工厂'?'必填，如120B':'如120B';box.style.borderColor=d==='工厂'?'#f56c6c':'';if(hintEl){hintEl.textContent=d==='工厂'?'到工厂必填':'非工厂可不填';hintEl.style.color=d==='工厂'?'#f56c6c':'#909399';}return true;};
+  W.modifyPlanByRefV477=function(ref){const p=resolvePlan(ref);if(!p){alert('未找到提箱计划，请刷新后重试。');return false;}return typeof baseModifyPlan==='function'?baseModifyPlan.call(W,p.id):false;};
+  W.cancelPlanByRefV477=function(ref){const p=resolvePlan(ref);if(!p){alert('未找到提箱计划，请刷新后重试。');return false;}return typeof baseCancelPlan==='function'?baseCancelPlan.call(W,p.id):false;};
+
+  function patchPickupDom(){
+    document.querySelectorAll('#pickupTable tbody tr').forEach(row=>{
+      const cb=row.querySelector('.pickup-checkbox');if(!cb)return;const c=resolveContainer({containerId:cb.dataset.id,containerNo:row.cells&&row.cells[3]&&row.cells[3].textContent});if(!c)return;const k=token('container',c);
+      const b=[...row.querySelectorAll('button')].find(x=>S(x.textContent).includes('发布'));if(b){b.removeAttribute('onclick');b.onclick=()=>W.publishPickupByRefV477(k);}
+      const sel=row.querySelector('select[id^="dest_"]');if(sel){sel.removeAttribute('onchange');sel.onchange=()=>W.togglePickupDockByRefV477(k);}
+    });
+    document.querySelectorAll('#publishedPlans tbody tr').forEach(row=>{
+      const no=S(row.cells&&row.cells[2]&&row.cells[2].textContent),d=S(row.cells&&row.cells[6]&&row.cells[6].textContent);let p=plans().filter(x=>x&&x.status!=='cancelled'&&U(x.containerNo)===U(no));if(d){const z=p.filter(x=>U(x.destination)===U(d));if(z.length)p=z;}p.sort((a,b)=>Date.parse(b.updatedAt||b.createdAt||0)-Date.parse(a.updatedAt||a.createdAt||0));if(!p.length)return;const k=token('plan',p[0]);
+      [...row.querySelectorAll('button')].forEach(b=>{const txt=S(b.textContent);b.removeAttribute('onclick');if(txt.includes('编辑'))b.onclick=()=>W.modifyPlanByRefV477(k);else if(txt.includes('取消'))b.onclick=()=>W.cancelPlanByRefV477(k);});
+    });
+  }
+  const baseRenderPickup=typeof W.renderPickupPlan==='function'?W.renderPickupPlan:(typeof renderPickupPlan==='function'?renderPickupPlan:null);
+  if(baseRenderPickup){W.renderPickupPlan=function(){const r=baseRenderPickup.apply(this,arguments);setTimeout(patchPickupDom,0);return r;};try{renderPickupPlan=W.renderPickupPlan;}catch(_){ }}
+  const baseFilterPickup=W.filterPickupTable;if(baseFilterPickup)W.filterPickupTable=function(){const r=baseFilterPickup.apply(this,arguments);setTimeout(patchPickupDom,0);return r;};
+  const baseClearPickup=W.clearPickupSearch;if(baseClearPickup)W.clearPickupSearch=function(){const r=baseClearPickup.apply(this,arguments);setTimeout(patchPickupDom,0);return r;};
+
+  const baseEditDynamic=W.editDynamicTask,baseWithdrawDynamic=W.withdrawDynamicTask,baseCopyDynamic=W.copyDynamicTask,basePublishDynamic=W.publishDynamicSingle;
+  W.editDynamicTaskByRefV477=function(ref){const t=resolveTask(ref);if(!t){alert('未找到运输任务，请刷新后重试。');return false;}return baseEditDynamic?baseEditDynamic.call(W,t.id):false;};
+  W.withdrawDynamicTaskByRefV477=function(ref){const t=resolveTask(ref);if(!t){alert('未找到运输任务，请刷新后重试。');return false;}return baseWithdrawDynamic?baseWithdrawDynamic.call(W,t.id):false;};
+  W.copyDynamicTaskByRefV477=function(ref){const t=resolveTask(ref);if(!t){alert('未找到运输任务，请刷新后重试。');return false;}return baseCopyDynamic?baseCopyDynamic.call(W,t.id):false;};
+  W.publishDynamicByRefV477=function(ref,fromLoc){const c=resolveContainer(ref);if(!c){alert('未找到待发布集装箱，请刷新后重试。');return false;}return basePublishDynamic?basePublishDynamic.call(W,c.id,fromLoc):false;};
+  W.toggleDynamicDockByRefV477=function(ref){const c=resolveContainer(ref);if(!c)return false;const d=document.getElementById('dynDest_'+S(c.id))?.value||'工厂',box=document.getElementById('dynDock_'+S(c.id));if(box)box.placeholder=d==='工厂'?'工厂必填':'可不填';return true;};
+
+  W.v45ActionCell=function(item){
+    if(item.type==='pending'){const p=resolvePlan(item)||item,k=token('plan',p);return `<input type="date" id="pickupTimeRef_${k}" class="form-control" style="width:125px;margin-bottom:4px;"><br><button class="btn btn-sm btn-success" onclick="confirmPickupTaskByRefV477('${k}')">确认提箱</button>`;}
+    const t=resolveTask(item)||item,k=token('task',t);return `<button class="btn btn-sm btn-warning" onclick="editDynamicTaskByRefV477('${k}')">编辑</button>`;
+  };
+
+  function patchDynamicDom(){
+    document.querySelectorAll('#dynamicTable tbody tr').forEach(row=>{const cb=row.querySelector('.dynamic-checkbox');if(!cb)return;const c=resolveContainer({containerId:cb.dataset.id,containerNo:row.cells&&row.cells[3]&&row.cells[3].textContent});if(!c)return;const k=token('container',c),loc=cb.dataset.loc||'';const b=[...row.querySelectorAll('button')].find(x=>S(x.textContent).includes('发布'));if(b){b.removeAttribute('onclick');b.onclick=()=>W.publishDynamicByRefV477(k,loc);}const sel=row.querySelector('select[id^="dynDest_"]');if(sel){sel.removeAttribute('onchange');sel.onchange=()=>W.toggleDynamicDockByRefV477(k);}});
+    document.querySelectorAll('#publishedDynamic tbody tr').forEach(row=>{const no=S(row.cells&&row.cells[2]&&row.cells[2].textContent),f=S(row.cells&&row.cells[5]&&row.cells[5].textContent),d=S(row.cells&&row.cells[6]&&row.cells[6].textContent);let m=tasks().filter(t=>activeTask(t)&&U(t.containerNo)===U(no));if(f){const z=m.filter(t=>U(origin(t))===U(f));if(z.length)m=z;}if(d){const z=m.filter(t=>U(dest(t))===U(d));if(z.length)m=z;}m.sort((a,b)=>taskTime(b)-taskTime(a));if(!m.length)return;const k=token('task',m[0]);[...row.querySelectorAll('button')].forEach(b=>{const txt=S(b.textContent);b.removeAttribute('onclick');if(txt.includes('编辑'))b.onclick=()=>W.editDynamicTaskByRefV477(k);else if(txt.includes('撤回'))b.onclick=()=>W.withdrawDynamicTaskByRefV477(k);else if(txt.includes('复制'))b.onclick=()=>W.copyDynamicTaskByRefV477(k);});});
+  }
+  const baseRenderDynamic=typeof W.renderDynamicPlan==='function'?W.renderDynamicPlan:(typeof renderDynamicPlan==='function'?renderDynamicPlan:null);
+  if(baseRenderDynamic){W.renderDynamicPlan=function(){const r=baseRenderDynamic.apply(this,arguments);setTimeout(patchDynamicDom,0);return r;};try{renderDynamicPlan=W.renderDynamicPlan;}catch(_){ }}
+  const baseFilterDynamic=W.filterDynamicList;if(baseFilterDynamic)W.filterDynamicList=function(){const r=baseFilterDynamic.apply(this,arguments);setTimeout(patchDynamicDom,0);return r;};
+  const baseResetDynamic=W.resetDynamicFilter;if(baseResetDynamic)W.resetDynamicFilter=function(){const r=baseResetDynamic.apply(this,arguments);setTimeout(patchDynamicDom,0);return r;};
+
+  W.__v477AuditReference=function(){
+    const result={tasks:tasks().length,plans:plans().length,containers:containersList().length,duplicateTaskIds:[],missingTaskUid:[],missingRouteLegKey:[],stringIds:{tasks:0,plans:0,containers:0}};
+    const seen=new Set();tasks().forEach(t=>{const id=S(t.id);if(seen.has(id))result.duplicateTaskIds.push(id);seen.add(id);if(!t.taskUid)result.missingTaskUid.push(id);if(!t.routeLegKey)result.missingRouteLegKey.push(id);if(typeof t.id==='string')result.stringIds.tasks++;});plans().forEach(p=>{if(typeof p.id==='string')result.stringIds.plans++;});containersList().forEach(c=>{if(typeof c.id==='string')result.stringIds.containers++;});return result;
+  };
+  W.__v477Resolve=function(ref,kind){const x=kind==='plan'?resolvePlan(ref):kind==='container'?resolveContainer(ref):resolveTask(ref);return x?{ok:true,id:x.id,taskUid:x.taskUid||'',routeLegKey:x.routeLegKey||'',planUid:x.planUid||'',containerNo:x.containerNo||'',status:x.status||'',rank:kind==='task'?taskRank(x):undefined}:{ok:false,decoded:dec(ref)};};
+
+  function setVersion(){try{document.title='Sistema Inteligente de Monitoramento de Contêineres V47.7';document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.[0-6]|Unpack Task Integrity|Task Reference Integrity|Restore Integrity Core/i.test(S(el.textContent)))el.textContent=VERSION;});}catch(_){ }}
+  const oldRender=W.renderContent;if(typeof oldRender==='function'){W.renderContent=function(){const r=oldRender.apply(this,arguments);setTimeout(()=>{setVersion();patchPickupDom();patchDynamicDom();},0);return r;};try{renderContent=W.renderContent;}catch(_){ }}
+  setVersion();document.addEventListener('DOMContentLoaded',()=>setTimeout(setVersion,500));
+  console.log(VERSION+' loaded: pickup, transport, gate, dock, unpack and plan maintenance use exact safe references.');
+})();
+</script>
+
 </body>
 </html>
