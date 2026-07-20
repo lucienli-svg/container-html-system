@@ -14640,5 +14640,792 @@ ${preview}
 })();
 </script>
 
+<script>
+/* ==================== V46.9 滞箱费计算逻辑修复 ====================
+   1. 只读取 type=return、已确认且有有效还箱日期的记录；多条记录取最后维护的一条。
+   2. 历史报表按 min(报表日期, 实际还箱日期) 计算，修复还箱当天“今日新增滞箱费=0”。
+   3. 滞箱费与生产完成状态解耦：所有集装箱均进入累计费用，未还箱集装箱继续预警。
+   4. 缺少船公司/箱型/ETA生效区间费率时，不再静默按0视为正常，而是进入“费率未配置”预警。
+   5. 费用报表、导出、预警明细统一使用严格还箱记录。
+*/
+(function(){
+  const W = window;
+  const VERSION = 'V46.9 Demurrage Logic Fix';
+  const CACHE_VERSION = 'V46.9-fee-cache-1';
+
+  function arr(v){ return Array.isArray(v) ? v : []; }
+  function txt(v){ return v === undefined || v === null ? '' : String(v); }
+  function num(v){ const n = Number(v); return Number.isFinite(n) ? n : 0; }
+
+  function normalizeDateV469(value){
+    if(!value) return '';
+    try{
+      if(typeof normalizeDateOnly === 'function') return normalizeDateOnly(value) || '';
+      if(typeof W.normalizeDateOnly === 'function') return W.normalizeDateOnly(value) || '';
+    }catch(_){ }
+    const s = txt(value).trim();
+    const m = s.match(/(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
+    if(m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+    const d = new Date(s);
+    if(Number.isNaN(d.getTime())) return '';
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
+
+  function dateDiffV469(startValue, endValue){
+    const s = normalizeDateV469(startValue);
+    const e = normalizeDateV469(endValue);
+    if(!s || !e) return 0;
+    const sp = s.split('-').map(Number);
+    const ep = e.split('-').map(Number);
+    const startUtc = Date.UTC(sp[0], sp[1]-1, sp[2]);
+    const endUtc = Date.UTC(ep[0], ep[1]-1, ep[2]);
+    return Math.max(0, Math.round((endUtc - startUtc) / 86400000));
+  }
+
+  function minDateV469(a, b){
+    const da = normalizeDateV469(a);
+    const db = normalizeDateV469(b);
+    if(!da) return db;
+    if(!db) return da;
+    return da <= db ? da : db;
+  }
+
+  function getStrictReturnRecordV469(containerId){
+    const id = txt(containerId);
+    const rows = arr(typeof returnRecords !== 'undefined' ? returnRecords : W.returnRecords);
+    // 从后向前读取，确保重复维护时以最后保存/修正的有效记录为准。
+    for(let i = rows.length - 1; i >= 0; i--){
+      const r = rows[i];
+      if(!r) continue;
+      if(txt(r.containerId) !== id) continue;
+      if(r.type !== 'return' || r.isReturnConfirmed !== true) continue;
+      if(!normalizeDateV469(r.returnDate)) continue;
+      return r;
+    }
+    return null;
+  }
+
+  function getDemurrageConfigV469(container){
+    if(!container || !container.eta) return null;
+    try{
+      if(typeof getDemurrageConfigByDate === 'function') return getDemurrageConfigByDate(container, container.eta);
+      if(typeof W.getDemurrageConfigByDate === 'function') return W.getDemurrageConfigByDate(container, container.eta);
+    }catch(_){ }
+    return null;
+  }
+
+  function calculateDemurrageBreakdownV469(container, reportDate){
+    const empty = {
+      total:0, days:0, freeDays:0, overtimeDays:0, ratePerDay:0,
+      config:null, configMissing:false, returnRecord:null, returnDate:'', cutoffDate:'', eta:''
+    };
+    if(!container || !container.eta) return empty;
+
+    const eta = normalizeDateV469(container.eta);
+    const asOf = normalizeDateV469(reportDate || (typeof getTodayStr === 'function' ? getTodayStr() : new Date()));
+    if(!eta || !asOf) return empty;
+
+    const config = getDemurrageConfigV469(container);
+    const returnRecord = getStrictReturnRecordV469(container.id);
+    const returnDate = returnRecord ? normalizeDateV469(returnRecord.returnDate) : '';
+    const cutoffDate = returnDate ? minDateV469(asOf, returnDate) : asOf;
+    const days = dateDiffV469(eta, cutoffDate);
+
+    if(!config){
+      return {
+        ...empty, days, configMissing:true, returnRecord, returnDate, cutoffDate, eta
+      };
+    }
+
+    const freeDays = Math.max(0, num(config.freeDays));
+    const ratePerDay = Math.max(0, num(config.ratePerDay));
+    const overtimeDays = Math.max(0, days - freeDays);
+    return {
+      total:overtimeDays * ratePerDay,
+      days, freeDays, overtimeDays, ratePerDay,
+      config, configMissing:false, returnRecord, returnDate, cutoffDate, eta
+    };
+  }
+
+  function calculateDemurrageFeeV469(container, reportDate){
+    return calculateDemurrageBreakdownV469(container, reportDate).total;
+  }
+
+  W.getConfirmedReturnRecord = getStrictReturnRecordV469;
+  W.isContainerReturnConfirmed = function(containerId){ return !!getStrictReturnRecordV469(containerId); };
+  W.calculateDemurrageBreakdownV469 = calculateDemurrageBreakdownV469;
+  W.calculateDemurrageFee = calculateDemurrageFeeV469;
+  try{
+    getConfirmedReturnRecord = getStrictReturnRecordV469;
+    isContainerReturnConfirmed = W.isContainerReturnConfirmed;
+    calculateDemurrageFee = calculateDemurrageFeeV469;
+  }catch(_){ }
+
+  const baseCalculateFees = (typeof calculateFeesForContainer === 'function') ? calculateFeesForContainer : W.calculateFeesForContainer;
+  function calculateFeesForContainerV469(container, currentDate){
+    let base = {};
+    try{ if(typeof baseCalculateFees === 'function') base = baseCalculateFees(container, currentDate) || {}; }catch(e){ console.warn('[V46.9] base fee calculation failed', e); }
+    const dem = calculateDemurrageBreakdownV469(container, currentDate);
+    let remaining = 999;
+    if(!dem.returnRecord && !dem.configMissing){
+      remaining = Math.max(0, dem.freeDays - dem.days);
+    }
+    return Object.assign({}, base, {
+      demurrageFee:dem.total,
+      demurrageDays:dem.days,
+      demurrageFreeDays:dem.freeDays,
+      demurrageOvertimeDays:dem.overtimeDays,
+      demurrageRatePerDay:dem.ratePerDay,
+      demurrageRemainingDays:remaining,
+      demurrageConfigMissing:dem.configMissing,
+      demurrageCutoffDate:dem.cutoffDate,
+      demurrageReturnDate:dem.returnDate
+    });
+  }
+  W.calculateFeesForContainer = calculateFeesForContainerV469;
+  try{ calculateFeesForContainer = calculateFeesForContainerV469; }catch(_){ }
+
+  function clearFeeCacheV469(){
+    try{
+      localStorage.removeItem('cc_lastFeeUpdate');
+      localStorage.removeItem('cc_cachedFees');
+      localStorage.removeItem('cc_feeInputSignatureV468');
+    }catch(_){ }
+  }
+
+  function updateDailyFeesV469(){
+    const today = typeof getTodayStr === 'function' ? getTodayStr() : normalizeDateV469(new Date());
+    const lastUpdate = (()=>{ try{return localStorage.getItem('cc_lastFeeUpdate') || '';}catch(_){return '';} })();
+    const cachedRaw = (()=>{ try{return localStorage.getItem('cc_cachedFees') || '';}catch(_){return '';} })();
+    if(lastUpdate === today && cachedRaw){
+      try{
+        const parsed = JSON.parse(cachedRaw);
+        if(parsed && parsed.cacheVersion === CACHE_VERSION){
+          cachedFeeData = parsed;
+          W.cachedFeeData = parsed;
+          return parsed;
+        }
+      }catch(_){ }
+    }
+
+    const allContainers = arr(typeof containers !== 'undefined' ? containers : W.containers);
+    const operationalContainers = allContainers.filter(c => {
+      try{ return typeof isOperationalVisibleContainer === 'function' ? isOperationalVisibleContainer(c) : true; }
+      catch(_){ return true; }
+    });
+
+    let totalStorage = 0;
+    let totalNormalStorage = 0;
+    let totalAbnormalStorage = 0;
+    let totalDemurrage = 0;
+    const storageWarningList = [];
+    const demurrageWarningList = [];
+    const demurrageConfigMissingList = [];
+    const fees = {};
+
+    // 堆存费继续使用运营可见范围，保持V46.8既有口径。
+    operationalContainers.forEach(c => {
+      const result = calculateFeesForContainerV469(c, today);
+      fees[c.id] = result;
+      totalStorage += num(result.storageFee);
+      totalNormalStorage += num(result.normalStorageFee);
+      totalAbnormalStorage += num(result.abnormalStorageFee);
+      if(result.storageRemainingDays <= num(warningConfig && warningConfig.storageWarningDays) && result.storageRemainingDays > 0){
+        storageWarningList.push({
+          id:c.id, batch:c.batch, containerNo:c.containerNo, vessel:c.vessel, eta:c.eta,
+          remainingDays:result.storageRemainingDays, fee:num(result.abnormalStorageFee),
+          storageDays:num(result.storageDays), abnormalDays:num(result.storageAbnormalDays)
+        });
+      }
+    });
+
+    // 滞箱费统计全部集装箱，不再因“生产完成”而停止累计或隐藏。
+    allContainers.forEach(c => {
+      const result = fees[c.id] || calculateFeesForContainerV469(c, today);
+      fees[c.id] = result;
+      totalDemurrage += num(result.demurrageFee);
+
+      const returned = !!getStrictReturnRecordV469(c.id);
+      if(returned) return;
+
+      if(result.demurrageConfigMissing){
+        const row = {
+          id:c.id, batch:c.batch, containerNo:c.containerNo, vessel:c.vessel,
+          type:c.containerType, eta:c.eta, remainingDays:null, fee:0,
+          missingConfig:true, issue:'费率未配置'
+        };
+        demurrageWarningList.push(row);
+        demurrageConfigMissingList.push(row);
+        return;
+      }
+
+      if(result.demurrageRemainingDays <= num(warningConfig && warningConfig.demurrageWarningDays) && result.demurrageRemainingDays > 0){
+        demurrageWarningList.push({
+          id:c.id, batch:c.batch, containerNo:c.containerNo, vessel:c.vessel,
+          type:c.containerType, eta:c.eta, remainingDays:result.demurrageRemainingDays,
+          fee:num(result.demurrageFee), missingConfig:false
+        });
+      }
+    });
+
+    const data = {
+      cacheVersion:CACHE_VERSION, date:today, fees,
+      totalStorage, totalNormalStorage, totalAbnormalStorage, totalDemurrage,
+      storageWarningList, demurrageWarningList, demurrageConfigMissingList
+    };
+    cachedFeeData = data;
+    W.cachedFeeData = data;
+    try{
+      localStorage.setItem('cc_lastFeeUpdate', today);
+      localStorage.setItem('cc_cachedFees', JSON.stringify(data));
+    }catch(e){ console.warn('[V46.9] fee cache save failed', e); }
+    return data;
+  }
+
+  W.updateDailyFees = updateDailyFeesV469;
+  try{ updateDailyFees = updateDailyFeesV469; }catch(_){ }
+
+  // V46.8 的保存包装会动态调用此函数，因此在这里改为V46.9计算器。
+  W.invalidateAndRefreshFeesV468 = function(reason){
+    clearFeeCacheV469();
+    const result = updateDailyFeesV469();
+    try{ localStorage.setItem('cc_lastFeeRefreshReasonV469', txt(reason || 'manual')); }catch(_){ }
+    return result;
+  };
+  W.invalidateAndRefreshFeesV469 = W.invalidateAndRefreshFeesV468;
+
+  const baseDailyReport = (typeof getDailyOperationReport === 'function') ? getDailyOperationReport : W.getDailyOperationReport;
+  function getDailyOperationReportV469(targetDate){
+    const result = typeof baseDailyReport === 'function' ? (baseDailyReport(targetDate) || {}) : {};
+    const prevDate = typeof addDaysToDateStr === 'function' ? addDaysToDateStr(targetDate, -1) : targetDate;
+    let todayDemurrage = 0;
+    arr(typeof containers !== 'undefined' ? containers : W.containers).forEach(c => {
+      const todayFee = calculateDemurrageFeeV469(c, targetDate);
+      const prevFee = calculateDemurrageFeeV469(c, prevDate);
+      todayDemurrage += Math.max(0, todayFee - prevFee);
+    });
+    result.todayDemurrage = todayDemurrage;
+    return result;
+  }
+  W.getDailyOperationReport = getDailyOperationReportV469;
+  try{ getDailyOperationReport = getDailyOperationReportV469; }catch(_){ }
+
+  const baseDailyDetail = (typeof getDailyOperationDetail === 'function') ? getDailyOperationDetail : W.getDailyOperationDetail;
+  function getDailyOperationDetailV469(type, targetDate){
+    if(type !== 'todayDemurrage'){
+      return typeof baseDailyDetail === 'function' ? baseDailyDetail(type, targetDate) : [];
+    }
+    const prevDate = typeof addDaysToDateStr === 'function' ? addDaysToDateStr(targetDate, -1) : targetDate;
+    const rows = [];
+    arr(typeof containers !== 'undefined' ? containers : W.containers).forEach(c => {
+      const amount = Math.max(0, calculateDemurrageFeeV469(c, targetDate) - calculateDemurrageFeeV469(c, prevDate));
+      if(amount > 0) rows.push(Object.assign({_amount:amount, _metric:'$ ' + amount.toFixed(2)}, c));
+    });
+    return rows;
+  }
+  W.getDailyOperationDetail = getDailyOperationDetailV469;
+  try{ getDailyOperationDetail = getDailyOperationDetailV469; }catch(_){ }
+
+  W.showWarningDetail = function(type){
+    const list = type === 'storage' ? arr(cachedFeeData.storageWarningList) : arr(cachedFeeData.demurrageWarningList);
+    const title = type === 'storage' ? '⚠️ 异常堆存费预警明细' : '⚠️ 滞箱费预警明细（含费率未配置）';
+    if(!list.length){ alert('暂无预警集装箱'); return; }
+    const headers = type === 'storage'
+      ? ['批次','集装箱号','船公司','到港日期','剩余正常天数','预计异常堆存费']
+      : ['批次','集装箱号','船公司','箱型','到港日期','状态','剩余免费天数','当前滞箱费'];
+    document.getElementById('modalTitle').innerText = title;
+    document.getElementById('modalBody').innerHTML = `<div style="margin-bottom:15px;"><button class="btn export-btn" onclick="exportWarningList('${type}')">📥 导出Excel</button></div><div id="warningDetailTable"></div>`;
+    openModal();
+    renderTable('warningDetailTable', headers, list, item => {
+      const tr = document.createElement('tr');
+      if(type === 'storage'){
+        tr.innerHTML = `<td>${item.batch||'-'}</td><td>${item.containerNo||'-'}</td><td>${item.vessel||'-'}</td><td>${fmtDate(item.eta)}</td><td style="text-align:center;color:#e6a23c;">${item.remainingDays}天</td><td style="text-align:center;color:#e6a23c;">R$ ${num(item.fee).toFixed(2)}</td>`;
+      }else{
+        const status = item.missingConfig ? '<span class="status-badge status-danger">费率未配置</span>' : '<span class="status-badge status-warning">即将收费</span>';
+        const remain = item.missingConfig ? '-' : `${item.remainingDays}天`;
+        tr.innerHTML = `<td>${item.batch||'-'}</td><td>${item.containerNo||'-'}</td><td>${item.vessel||'-'}</td><td>${item.type||'-'}</td><td>${fmtDate(item.eta)}</td><td>${status}</td><td style="text-align:center;color:#f56c6c;">${remain}</td><td style="text-align:center;color:#f56c6c;">$ ${num(item.fee).toFixed(2)}</td>`;
+      }
+      return tr;
+    });
+    if(typeof applyLanguage === 'function') applyLanguage();
+  };
+
+  W.exportWarningList = function(type){
+    const list = type === 'storage' ? arr(cachedFeeData.storageWarningList) : arr(cachedFeeData.demurrageWarningList);
+    const wsData = type === 'storage'
+      ? [['批次','集装箱号','船公司','到港日期','剩余正常天数','预计异常堆存费(雷亚尔)']]
+      : [['批次','集装箱号','船公司','箱型','到港日期','状态','剩余免费天数','当前滞箱费(美元)']];
+    list.forEach(item => {
+      if(type === 'storage') wsData.push([item.batch,item.containerNo,item.vessel,fmtDate(item.eta),item.remainingDays,num(item.fee).toFixed(2)]);
+      else wsData.push([item.batch,item.containerNo,item.vessel,item.type||'-',fmtDate(item.eta),item.missingConfig?'费率未配置':'即将收费',item.missingConfig?'-':item.remainingDays,num(item.fee).toFixed(2)]);
+    });
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, `${type}_预警列表`);
+    XLSX.writeFile(wb, `${type}_预警列表_${getTodayStr()}.xlsx`);
+  };
+
+  function feeReportRowsV469(currentDate){
+    return arr(typeof containers !== 'undefined' ? containers : W.containers).map(c => {
+      const fees = calculateFeesForContainerV469(c, currentDate);
+      const clearanceCompleteDate = typeof getContainerClearanceCompleteDate === 'function' ? getContainerClearanceCompleteDate(c) : '';
+      const pickupDate = c.actualPickupTime ? (typeof getDatePart === 'function' ? getDatePart(c.actualPickupTime) : normalizeDateV469(c.actualPickupTime)) : '';
+      const returnRec = getStrictReturnRecordV469(c.id);
+      return {
+        ...c,
+        clearanceCompleteDate,
+        pickupDate,
+        returnDate:returnRec ? normalizeDateV469(returnRec.returnDate) : '',
+        arrivalToClearanceDays:typeof getArrivalToClearanceDays === 'function' ? getArrivalToClearanceDays(c.eta, clearanceCompleteDate) : '-',
+        clearanceToPickupDays:typeof getClearanceToPickupDays === 'function' ? getClearanceToPickupDays(clearanceCompleteDate, pickupDate) : '-',
+        storageFee:num(fees.storageFee), normalStorageFee:num(fees.normalStorageFee), abnormalStorageFee:num(fees.abnormalStorageFee),
+        storageDays:num(fees.storageDays), storageAbnormalDays:num(fees.storageAbnormalDays),
+        demurrageFee:num(fees.demurrageFee), demurrageDays:num(fees.demurrageDays),
+        demurrageOvertimeDays:num(fees.demurrageOvertimeDays), demurrageRatePerDay:num(fees.demurrageRatePerDay),
+        demurrageConfigMissing:!!fees.demurrageConfigMissing
+      };
+    });
+  }
+
+  function renderFeeReportV469(container){
+    const currentDate = getTodayStr();
+    const feeData = feeReportRowsV469(currentDate);
+    const totalNormalStorage = feeData.reduce((s,c)=>s+c.normalStorageFee,0);
+    const totalAbnormalStorage = feeData.reduce((s,c)=>s+c.abnormalStorageFee,0);
+    const totalStorage = feeData.reduce((s,c)=>s+c.storageFee,0);
+    const totalDemurrage = feeData.reduce((s,c)=>s+c.demurrageFee,0);
+    const missingCount = feeData.filter(c=>c.demurrageConfigMissing && !c.returnDate).length;
+    container.innerHTML = `<div class="card"><div class="card-header"><span class="card-title">📈 费用报表</span><div><button class="btn export-btn" onclick="exportFeeReport()">📥 导出Excel</button></div></div>
+      <div class="stats-grid"><div class="stat-card"><div class="stat-number">R$ ${totalNormalStorage.toFixed(2)}</div><div class="stat-label">正常堆存费</div></div><div class="stat-card warning-card"><div class="stat-number warning-number">R$ ${totalAbnormalStorage.toFixed(2)}</div><div class="stat-label">异常堆存费</div></div><div class="stat-card"><div class="stat-number">R$ ${totalStorage.toFixed(2)}</div><div class="stat-label">堆存费合计</div></div><div class="stat-card"><div class="stat-number">$ ${totalDemurrage.toFixed(2)}</div><div class="stat-label">滞箱费总额</div></div><div class="stat-card danger-card"><div class="stat-number danger-number">${missingCount}</div><div class="stat-label">滞箱费率未配置</div></div></div>
+      <div class="fee-card"><div class="fee-row"><span class="fee-label">费用计算截止日期:</span><span class="fee-value">${fmtDate(currentDate)}</span></div><div class="fee-row"><span class="fee-label">说明:</span><span class="fee-label">堆存费计算至实际提箱日；滞箱费计算至实际还箱日，未还箱计算至当前日期。历史报表使用“报表日期与还箱日期中的较早日期”，生产完成不会停止滞箱费。</span></div></div>
+      <div id="feeTable"></div></div>`;
+    renderTable('feeTable',['批次','箱号','船公司','箱型','到港日期','清关完成时间','到港→清关用时(天)','提箱日期','清关完成→提箱间隔(天)','还箱日期','堆存天数','正常堆存费(雷亚尔)','异常堆存费(雷亚尔)','堆存费合计(雷亚尔)','滞箱占用天数','超期天数','日费率(美元)','滞箱费(美元)','费率状态'],feeData,c=>{
+      const tr = document.createElement('tr');
+      const rateStatus = c.demurrageConfigMissing ? '<span class="status-badge status-danger">未配置</span>' : '<span class="status-badge status-success">已配置</span>';
+      tr.innerHTML = `<td>${c.batch||'-'}</td><td>${c.containerNo||'-'}</td><td>${c.vessel||'-'}</td><td>${c.containerType||'-'}</td><td>${fmtDate(c.eta)}</td><td>${c.clearanceCompleteDate?fmtDate(c.clearanceCompleteDate):'-'}</td><td>${c.arrivalToClearanceDays}</td><td>${c.pickupDate?fmtDate(c.pickupDate):'-'}</td><td>${c.clearanceToPickupDays}</td><td>${c.returnDate?fmtDate(c.returnDate):'-'}</td><td>${c.storageDays}</td><td style="text-align:center;color:#67c23a;font-weight:600;">R$ ${c.normalStorageFee.toFixed(2)}</td><td style="text-align:center;color:#e6a23c;font-weight:600;">R$ ${c.abnormalStorageFee.toFixed(2)}</td><td style="text-align:center;color:#2a5298;font-weight:600;">R$ ${c.storageFee.toFixed(2)}</td><td>${c.demurrageDays}</td><td>${c.demurrageOvertimeDays}</td><td>$ ${c.demurrageRatePerDay.toFixed(2)}</td><td style="text-align:center;color:#f56c6c;font-weight:600;">$ ${c.demurrageFee.toFixed(2)}</td><td>${rateStatus}</td>`;
+      return tr;
+    });
+    if(typeof applyLanguage === 'function') applyLanguage();
+  }
+  W.renderFeeReport = renderFeeReportV469;
+  try{ renderFeeReport = renderFeeReportV469; }catch(_){ }
+
+  W.exportFeeReport = function(){
+    const currentDate = getTodayStr();
+    const feeData = feeReportRowsV469(currentDate).map(c => ({
+      批次:c.batch, 集装箱号:c.containerNo, 船公司:c.vessel, 箱型:c.containerType||'-', 到港日期:fmtDate(c.eta),
+      清关完成时间:c.clearanceCompleteDate?fmtDate(c.clearanceCompleteDate):'-', 到港到清关完成用时_天:c.arrivalToClearanceDays,
+      提箱日期:c.pickupDate?fmtDate(c.pickupDate):'-', 清关完成到提箱间隔_天:c.clearanceToPickupDays,
+      还箱日期:c.returnDate?fmtDate(c.returnDate):'-', 堆存天数:c.storageDays,
+      正常堆存费_雷亚尔:c.normalStorageFee.toFixed(2), 异常堆存费_雷亚尔:c.abnormalStorageFee.toFixed(2), 堆存费合计_雷亚尔:c.storageFee.toFixed(2),
+      滞箱占用天数:c.demurrageDays, 滞箱超期天数:c.demurrageOvertimeDays, 滞箱日费率_美元:c.demurrageRatePerDay.toFixed(2),
+      滞箱费_美元:c.demurrageFee.toFixed(2), 滞箱费率状态:c.demurrageConfigMissing?'未配置':'已配置'
+    }));
+    const ws = XLSX.utils.json_to_sheet(feeData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '费用报表');
+    XLSX.writeFile(wb, `费用报表_${currentDate}.xlsx`);
+  };
+
+  function updateVersionTextV469(){
+    try{
+      document.title = 'Sistema Inteligente de Monitoramento de Contêineres V46.9';
+      const card = document.querySelector('.login-card');
+      if(card){
+        const candidates = Array.from(card.querySelectorAll('div,p,span'));
+        const sub = candidates.find(el => /V46\.[0-8]|Safe Core|Storage Fee|Pickup Date|Notebook Stable/i.test(txt(el.textContent)));
+        if(sub) sub.textContent = 'V46.9 Safe Core：修复还箱截止日、今日新增滞箱费及生产完成后的持续统计。';
+      }
+      document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{
+        if(/V46\.[0-8]|Safe Core|Storage Fee|Pickup Date|Notebook Stable/i.test(txt(el.textContent))) el.textContent = 'V46.9 Safe Core';
+      });
+    }catch(_){ }
+  }
+
+  clearFeeCacheV469();
+  try{ updateDailyFeesV469(); }catch(e){ console.warn('[V46.9] initial fee rebuild skipped', e); }
+  updateVersionTextV469();
+  document.addEventListener('DOMContentLoaded', ()=>{ updateVersionTextV469(); setTimeout(updateVersionTextV469, 2800); });
+  setTimeout(updateVersionTextV469, 2300);
+  setTimeout(updateVersionTextV469, 6500);
+
+  W.__v469DemurrageStatus = function(containerId, reportDate){
+    const c = arr(typeof containers !== 'undefined' ? containers : W.containers).find(x=>txt(x && x.id)===txt(containerId));
+    return { version:VERSION, calculation:c?calculateDemurrageBreakdownV469(c, reportDate || getTodayStr()):null };
+  };
+  console.log(VERSION + ' loaded: strict return record + historical cutoff + all-container demurrage + missing-rate warning enabled.');
+})();
+</script>
+
+<script>
+/* ==================== V47.0 Transport State + Rate Deletion Integrity Fix ====================
+   修复：
+   1) 当前有效运输任务优先于历史掏箱/还箱/生产记录，避免“运输中却显示已完成”。
+   2) 确认提箱时禁止复用带有门岗/卸货/掏箱完成字段的历史任务；工厂任务稳定进入门岗和卸货口。
+   3) 到货、门岗、卸货口按当前运输腿显示，不再被同箱历史还箱记录隐藏。
+   4) 费率允许全部删除；通过权威快照覆盖云端合并，防止删除后自动恢复。
+*/
+(function(){
+  'use strict';
+  const W = window;
+  const VERSION = 'V47.0 State Integrity Fix';
+  const RATE_OVERRIDE_KEY = 'rateConfigOverrideV470';
+
+  const A = v => Array.isArray(v) ? v : [];
+  const S = v => String(v == null ? '' : v).trim();
+  const U = v => S(v).toUpperCase();
+  const SL = v => S(v).toLowerCase();
+  const esc = v => S(v).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  const nowIso = () => new Date().toISOString();
+  const today = () => { try{return typeof getTodayStr==='function'?getTodayStr():new Date().toISOString().slice(0,10);}catch(_){return new Date().toISOString().slice(0,10);} };
+  const fmtD = v => { try{return typeof fmtDate==='function'?fmtDate(v):(S(v).slice(0,10)||'-');}catch(_){return S(v).slice(0,10)||'-';} };
+  const fmtDT = v => { try{return typeof fmtDateTime==='function'?fmtDateTime(v):(S(v)||'-');}catch(_){return S(v)||'-';} };
+  function rows(name){
+    try{
+      if(name==='containers') return typeof containers!=='undefined'&&Array.isArray(containers)?containers:[];
+      if(name==='pickupPlans') return typeof pickupPlans!=='undefined'&&Array.isArray(pickupPlans)?pickupPlans:[];
+      if(name==='transportTasks') return typeof transportTasks!=='undefined'&&Array.isArray(transportTasks)?transportTasks:[];
+      if(name==='returnRecords') return typeof returnRecords!=='undefined'&&Array.isArray(returnRecords)?returnRecords:[];
+      if(name==='locationStock') return typeof locationStock!=='undefined'&&Array.isArray(locationStock)?locationStock:[];
+      if(name==='productionRecords') return typeof productionRecords!=='undefined'&&Array.isArray(productionRecords)?productionRecords:[];
+      if(name==='storageConfig') return typeof storageConfig!=='undefined'&&Array.isArray(storageConfig)?storageConfig:[];
+      if(name==='demurrageConfig') return typeof demurrageConfig!=='undefined'&&Array.isArray(demurrageConfig)?demurrageConfig:[];
+      if(name==='containerBlMap') return typeof containerBlMap!=='undefined'&&Array.isArray(containerBlMap)?containerBlMap:[];
+      if(name==='blList') return typeof blList!=='undefined'&&Array.isArray(blList)?blList:[];
+    }catch(_){ }
+    return [];
+  }
+  function nextId(kind){
+    try{
+      nextIds = nextIds || {};
+      const list = kind==='task' ? rows('transportTasks') : kind==='returnRecord' ? rows('returnRecords') : [];
+      const nums=list.map(x=>Number(x&&x.id)).filter(Number.isFinite);
+      nextIds[kind]=Math.max(Number(nextIds[kind]||1), nums.length?Math.max(...nums)+1:1);
+      return nextIds[kind]++;
+    }catch(_){ return Date.now()+Math.floor(Math.random()*1000); }
+  }
+  function uuid(prefix){ return (prefix||'id')+'-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,9); }
+  function normLoc(v){
+    const raw=S(v), s=raw.replace(/\s+/g,'').toLowerCase();
+    if(!s) return '';
+    if(s.includes('rioclaro')) return 'Rio Claro';
+    if(s.includes('ira')) return 'IRA库房';
+    if(s.includes('rg')) return 'RG堆场';
+    if(s.includes('工厂')||s.includes('factory')||s.includes('fabrica')||s.includes('fábrica')||s.includes('gwm')) return '工厂';
+    if(s.includes('港口')||s.includes('santos')||s.includes('porto')) return '港口';
+    if(['120b','132','140b','140c'].includes(s)) return s.toUpperCase();
+    return raw;
+  }
+  function origin(t){ return normLoc(t&&(t.from||t.origin||t.fromLocation)); }
+  function dest(t){ return normLoc(t&&(t.to||t.destination||t.location||t.dest)); }
+  function dock(t){ return dest(t)==='IRA库房'?'IRA库房':normLoc(t&&(t.unloadingDock||t.dock||t.dockName)); }
+  function cancelled(t){ return !t || t.cancelled || ['cancelled','archived','closed'].includes(S(t.status)); }
+  function openTask(t){ return t && !cancelled(t) && !['completed','return_completed','produced'].includes(S(t.status)); }
+  function rank(t){
+    if(!t) return 0;
+    if(t.unloadFinishTime||t.unpackConfirmedAt||t.operationStatus==='unloaded') return 4;
+    if(t.unloadStartTime||t.operationStatus==='unloading') return 3;
+    if(t.waitingAreaTime||t.gateReleaseTime||t.operationStatus==='inside_waiting') return 2;
+    if(t.gateArrivalTime||t.operationStatus==='outside_parking'||t.operationStatus==='gate_arrived') return 1;
+    return 0;
+  }
+  function containerOf(x){
+    const id=S(x&&x.containerId), no=U(x&&x.containerNo);
+    return rows('containers').find(c=>S(c.id)===id) || rows('containers').find(c=>U(c.containerNo)===no) || null;
+  }
+  function contNo(x){ const c=containerOf(x); return S(x&&x.containerNo)||S(c&&c.containerNo); }
+  function contBatch(x){ const c=containerOf(x); return S(x&&x.batch)||S(c&&c.batch); }
+  function contSeq(x){ const c=containerOf(x); return S(x&&(x.containerSeq||x.seq))||S(c&&(c.containerSeq||c.seq)); }
+  function blText(x){ try{return typeof getTaskBlText==='function'?getTaskBlText(x):S(x&&(x.blNo||x.bl));}catch(_){return S(x&&(x.blNo||x.bl));} }
+  function iraText(x){ try{return typeof getIraList==='function'?(getIraList(x.containerId)||S(x.iraNo)):S(x.iraNo);}catch(_){return S(x&&x.iraNo);} }
+  function canLoc(l){ try{return (typeof isAdminUser==='function'&&isAdminUser()) || (typeof canViewLocation==='function'&&canViewLocation(l));}catch(_){return true;} }
+  function setStock(containerId, location, time){
+    if(!containerId||!location||location==='运输中') return;
+    const list=rows('locationStock'); let r=list.find(x=>S(x.containerId)===S(containerId));
+    if(r){ r.location=location; r.time=time||nowIso(); r.updatedAt=nowIso(); r.isActive=true; }
+    else list.push({id:nextId('stock'),containerId,location,time:time||nowIso(),updatedAt:nowIso(),isActive:true});
+  }
+  function saveAndRender(reason){
+    try{ if(typeof W.saveData==='function') W.saveData(); else if(typeof saveData==='function') saveData(); }catch(e){ console.error('[V47.0] save failed',e); alert('操作已更新到页面，但云端保存发生异常，请检查同步状态。'); }
+    try{ if(typeof W.renderContent==='function') W.renderContent(); else if(typeof renderContent==='function') renderContent(); }catch(_){ }
+    try{ if(typeof showRealtimeSyncHint==='function') showRealtimeSyncHint('已更新：'+reason); }catch(_){ }
+  }
+  function encodeRef(obj){ try{return btoa(unescape(encodeURIComponent(JSON.stringify(obj)))).replace(/=+$/,'');}catch(_){return S(obj&&obj.id);} }
+  function decodeRef(ref){
+    if(ref&&typeof ref==='object') return ref;
+    const s=S(ref); if(!s) return {};
+    try{ let p=s; while(p.length%4)p+='='; return JSON.parse(decodeURIComponent(escape(atob(p)))); }catch(_){ }
+    return {id:s,containerNo:s};
+  }
+  function taskRef(t){ return encodeRef({id:t.id,taskUid:t.taskUid,routeLegKey:t.routeLegKey,containerId:t.containerId,containerNo:t.containerNo,batch:t.batch,to:dest(t),from:origin(t)}); }
+  function resolveTask(ref){
+    if(ref&&typeof ref==='object'&&ref.to) return ref;
+    const k=decodeRef(ref), list=rows('transportTasks');
+    let t=null;
+    if(k.taskUid) t=list.find(x=>S(x.taskUid)===S(k.taskUid));
+    if(!t&&k.routeLegKey) t=list.find(x=>S(x.routeLegKey)===S(k.routeLegKey));
+    if(!t&&k.id!==undefined) t=list.find(x=>S(x.id)===S(k.id));
+    if(!t&&(k.containerId||k.containerNo)) t=list.filter(openTask).find(x=>(!k.containerId||S(x.containerId)===S(k.containerId))&&(!k.containerNo||U(x.containerNo)===U(k.containerNo))&&(!k.to||dest(x)===normLoc(k.to)));
+    return t||null;
+  }
+  function resolvePlan(ref){
+    if(ref&&typeof ref==='object'&&ref.destination) return ref;
+    const k=decodeRef(ref), list=rows('pickupPlans').filter(p=>p&&S(p.status)!=='cancelled');
+    let m=[];
+    if(k.id!==undefined) m=list.filter(p=>S(p.id)===S(k.id));
+    if(!m.length&&k.containerId!==undefined) m=list.filter(p=>S(p.containerId)===S(k.containerId));
+    if(!m.length&&k.containerNo) m=list.filter(p=>U(p.containerNo)===U(k.containerNo));
+    if(m.length>1&&k.batch){const z=m.filter(p=>U(p.batch)===U(k.batch));if(z.length)m=z;}
+    if(m.length>1&&k.seq){const z=m.filter(p=>S(p.containerSeq||p.seq)===S(k.seq));if(z.length)m=z;}
+    return m.find(p=>S(p.status)!=='confirmed')||m[0]||null;
+  }
+  function readPickupDate(ref,p){
+    const candidates=[S(ref),S(p.id),encodeRef({id:p.id,containerId:p.containerId,containerNo:p.containerNo,batch:p.batch,seq:p.containerSeq||p.seq,destination:p.destination})];
+    for(const k of candidates){ const el=document.getElementById('pickupTimeKey_'+k)||document.getElementById('pickupTime_'+k); if(el&&S(el.value)) return S(el.value); }
+    const no=U(p.containerNo), batch=U(p.batch);
+    for(const input of Array.from(document.querySelectorAll('input[type="date"]'))){
+      if(!S(input.value)) continue; const tr=input.closest('tr'), text=U(tr?tr.textContent:'');
+      if(no&&text.includes(no)&&(!batch||text.includes(batch))) return S(input.value);
+    }
+    return S(p.actualPickupTime);
+  }
+  function clearExecutionFields(t){
+    ['actualArrival','arrivalConfirmedAt','arrivalConfirmedBy','gateArrivalTime','gateReleaseTime','waitingAreaTime','unloadStartTime','unloadFinishTime','unpackConfirmedAt','unpackConfirmedBy','returnConfirmedAt','returnConfirmedBy'].forEach(k=>{ t[k]=''; });
+    t.truckPlate=''; t.driverName=''; t.driverPhone='';
+  }
+  function hasExecution(t){ return !!(t&&(rank(t)>0||['arrived','return_pending','completed','return_completed'].includes(S(t.status)))); }
+  function nextTaskId(){ return nextId('task'); }
+  function upsertFreshTask(plan,c,actual){
+    const d=normLoc(plan.destination||plan.to), list=rows('transportTasks');
+    const exact=list.filter(t=>t&&!cancelled(t)&&S(t.sourcePlanId||t.pickupPlanId)===S(plan.id));
+    let t=exact.find(x=>!hasExecution(x)&&['','planned','in_transit'].includes(S(x.status)));
+    if(!t){
+      t=list.find(x=>!cancelled(x)&&S(x.containerId)===S(plan.containerId)&&origin(x)==='港口'&&dest(x)===d&&!hasExecution(x)&&['','planned','in_transit'].includes(S(x.status)));
+    }
+    if(!t){ t={id:nextTaskId(),taskUid:uuid('task'),createdAt:nowIso()}; list.push(t); }
+    clearExecutionFields(t);
+    const routeLegKey='pickup:'+S(plan.id)+':'+S(actual)+':'+d;
+    Object.assign(t,{containerId:plan.containerId,containerNo:plan.containerNo||c?.containerNo||'',containerSeq:c?.containerSeq||plan.containerSeq||plan.seq||'',batch:plan.batch||c?.batch||'',blNo:blText(plan),iraNo:iraText(plan),from:'港口',to:d,destination:d,carrier:plan.carrier||t.carrier||'RG',status:'in_transit',operationStatus:['工厂','IRA库房'].includes(d)?'not_arrived':'',estimatedArrival:plan.arrivalDate||plan.estimatedArrival||'',arrivalDate:plan.arrivalDate||plan.estimatedArrival||'',unloadingDock:d==='IRA库房'?'IRA库房':(plan.unloadingDock||t.unloadingDock||''),source:'pickupPlan',sourcePlanId:plan.id,planUid:plan.planUid||t.planUid||uuid('plan'),taskUid:t.taskUid||uuid('task'),routeLegKey,actualPickupTime:actual,cancelled:false,cancelReason:'',publishedAt:t.publishedAt||nowIso(),updatedAt:nowIso(),cc47FreshLeg:true});
+    exact.forEach(x=>{ if(x!==t&&!hasExecution(x)){x.cancelled=true;x.status='cancelled';x.cancelReason='V47.0清理同一提箱计划重复未执行任务';x.cancelTime=nowIso();x.updatedAt=nowIso();} });
+    return t;
+  }
+  function confirmPickupV470(ref){
+    const p=resolvePlan(ref); if(!p){alert('未找到当前提箱计划，请刷新后重试。');return false;}
+    const actual=readPickupDate(ref,p); if(!actual){alert('请填写实际提箱日期');return false;}
+    const c=containerOf(p), d=normLoc(p.destination||p.to);
+    if(d==='工厂'&&!S(p.unloadingDock)){ try{const rec=typeof v42RecommendedDock==='function'?v42RecommendedDock(p.batch||c?.batch,p.containerSeq||c?.containerSeq):'';if(rec)p.unloadingDock=rec;}catch(_){ } }
+    p.status='confirmed';p.actualPickupTime=actual;p.needReconfirm=false;p.planUid=p.planUid||uuid('plan');p.updatedAt=nowIso();p.cc47PickupFixed=true;
+    if(c){c.actualPickupTime=actual;c.updatedAt=nowIso();}
+    upsertFreshTask(p,c,actual);
+    saveAndRender('确认提箱 '+(p.containerNo||c?.containerNo||''));
+    alert('已确认提箱 '+S(p.containerNo||c?.containerNo));
+    return true;
+  }
+  W.confirmPickupTask=W.confirmPickupTaskByKey=W.confirmPickupTaskByKeyV45=W.confirmPickupTaskByKeyV451=W.confirmPickupTaskByKeyV455=W.confirmPickupTaskByKeyV4518=W.confirmPickupTaskByKeyV4521=W.confirmPickupTaskByKeyV4522=confirmPickupV470;
+
+  // 当前运输腿必须独立生成待还箱记录，不受历史同箱记录影响。
+  function exactCurrentReturn(t){
+    return rows('returnRecords').find(r=>r&&r.isReturnConfirmed&&r.type==='return'&&r.returnDate&&((t.taskUid&&S(r.sourceTaskUid)===S(t.taskUid))||(t.routeLegKey&&S(r.sourceRouteLegKey)===S(t.routeLegKey))));
+  }
+  function ensureCurrentPendingReturn(t){
+    if(exactCurrentReturn(t)) return null;
+    let r=rows('returnRecords').find(x=>x&&!x.isReturnConfirmed&&S(x.type||'return_needed')==='return_needed'&&((t.taskUid&&S(x.sourceTaskUid)===S(t.taskUid))||(t.routeLegKey&&S(x.sourceRouteLegKey)===S(t.routeLegKey))));
+    if(!r){
+      r={id:nextId('returnRecord'),type:'return_needed',containerId:t.containerId,containerNo:contNo(t),batch:contBatch(t),blNo:blText(t),iraNo:iraText(t),location:dest(t),unpackDate:today(),isReturnConfirmed:false,sourceTaskUid:t.taskUid||'',sourceRouteLegKey:t.routeLegKey||'',createdAt:nowIso(),updatedAt:nowIso(),createdBy:'V47.0'};
+      rows('returnRecords').push(r);
+    }else{Object.assign(r,{containerId:t.containerId,containerNo:contNo(t),batch:contBatch(t),blNo:blText(t),location:dest(t),updatedAt:nowIso()});}
+    return r;
+  }
+  function mutateTask(ref,step){
+    const t=resolveTask(ref); if(!t){alert('未找到当前运输任务，请刷新后重试。');return false;}
+    const d=dest(t), ts=nowIso();
+    if(step==='rgArrival'){
+      t.status='arrived';t.operationStatus='arrived';t.actualArrival=t.actualArrival||ts;t.arrivalConfirmedAt=t.arrivalConfirmedAt||ts;setStock(t.containerId,d,ts);
+    }else if(step==='rioUnstuff'){
+      t.status='return_pending';t.operationStatus='unloaded';t.actualArrival=t.actualArrival||ts;t.arrivalConfirmedAt=t.arrivalConfirmedAt||ts;t.unloadStartTime=t.unloadStartTime||ts;t.unloadFinishTime=t.unloadFinishTime||ts;t.unpackConfirmedAt=t.unpackConfirmedAt||ts;setStock(t.containerId,d,ts);ensureCurrentPendingReturn(t);
+    }else if(step==='gate'){
+      t.truckPlate=S(document.getElementById('gatePlate_'+S(t.id))?.value)||t.truckPlate||'';t.driverName=S(document.getElementById('gateDriver_'+S(t.id))?.value)||t.driverName||'';t.driverPhone=S(document.getElementById('gatePhone_'+S(t.id))?.value)||t.driverPhone||'';t.status='in_transit';t.operationStatus='outside_parking';t.gateArrivalTime=t.gateArrivalTime||ts;t.actualArrival=t.actualArrival||ts;setStock(t.containerId,d,ts);
+    }else if(step==='release'){
+      t.status='in_transit';t.operationStatus='inside_waiting';t.gateArrivalTime=t.gateArrivalTime||ts;t.gateReleaseTime=t.gateReleaseTime||ts;t.waitingAreaTime=t.waitingAreaTime||ts;setStock(t.containerId,d,ts);
+    }else if(step==='dock'){
+      t.status='in_transit';t.operationStatus='unloading';t.gateArrivalTime=t.gateArrivalTime||ts;t.waitingAreaTime=t.waitingAreaTime||ts;t.unloadStartTime=t.unloadStartTime||ts;setStock(t.containerId,d,ts);
+    }else if(step==='unstuff'){
+      t.status='return_pending';t.operationStatus='unloaded';t.gateArrivalTime=t.gateArrivalTime||ts;t.waitingAreaTime=t.waitingAreaTime||ts;t.unloadStartTime=t.unloadStartTime||ts;t.unloadFinishTime=t.unloadFinishTime||ts;t.unpackConfirmedAt=t.unpackConfirmedAt||ts;setStock(t.containerId,d,ts);ensureCurrentPendingReturn(t);
+    }
+    t.updatedAt=ts;t.cc47Touched=true;saveAndRender(step);return true;
+  }
+  W.doArrival=W.confirmArrivalOnly=function(ref){const t=resolveTask(ref);return mutateTask(ref,dest(t)==='Rio Claro'?'rioUnstuff':'rgArrival');};
+  W.doUnpack=function(ref){return mutateTask(ref,'rioUnstuff');};
+  W.confirmGateArrival=function(ref){return mutateTask(ref,'gate');};
+  W.releaseFromGate=function(ref){return mutateTask(ref,'release');};
+  W.startUnloading=function(ref){return mutateTask(ref,'dock');};
+  W.finishUnloading=function(ref){return mutateTask(ref,'unstuff');};
+
+  function table(headers,body){return `<div class="table-wrapper"><table class="data-table"><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${body||`<tr><td colspan="${headers.length}" style="padding:22px;text-align:center;color:#909399;">暂无数据</td></tr>`}</tbody></table></div>`;}
+  function sortTask(a,b){return S(a.estimatedArrival||a.arrivalDate||a.createdAt).localeCompare(S(b.estimatedArrival||b.arrivalDate||b.createdAt))||S(a.batch).localeCompare(S(b.batch),'zh-CN',{numeric:true})||Number(contSeq(a)||999)-Number(contSeq(b)||999);}
+  function queryFilter(list,q){q=SL(q);return q?list.filter(t=>[t.batch,t.containerNo,contSeq(t),blText(t),origin(t),dest(t),dock(t)].join(' ').toLowerCase().includes(q)):list;}
+
+  function renderLocationV470(container){
+    const main=container||document.getElementById('mainContent');if(!main)return;
+    const q=S(document.getElementById('arrSearch')?.value);
+    const all=queryFilter(rows('transportTasks').filter(t=>openTask(t)&&S(t.status)==='in_transit'&&['RG堆场','Rio Claro'].includes(dest(t))&&canLoc(dest(t))),q).sort(sortTask);
+    const rg=all.filter(t=>dest(t)==='RG堆场'), rio=all.filter(t=>dest(t)==='Rio Claro');
+    main.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">✅ 到货/掏箱确认 <span class="status-badge status-ready">V47.0</span></span></div><div style="font-size:13px;color:#606266;margin-bottom:10px;">当前有效运输任务优先显示，不再被同一集装箱的历史还箱/掏箱记录隐藏。</div><div class="search-bar"><input id="arrSearch" value="${esc(q)}" placeholder="批次 / 箱号 / 提单 / 序号"><button class="btn btn-primary" onclick="renderLocationConfirm(document.getElementById('mainContent'))">查询</button><button class="btn" onclick="document.getElementById('arrSearch').value='';renderLocationConfirm(document.getElementById('mainContent'))">重置</button></div><div class="section-label">🚛 RG堆场 - 待确认到达（${rg.length}）</div><div id="v470Rg"></div><div class="section-divider"></div><div class="section-label">📦 Rio Claro - 待确认掏箱（${rio.length}）</div><div id="v470Rio"></div></div>`;
+    document.getElementById('v470Rg').innerHTML=table(['序号','批次','集装箱号','提单号','出发地','目的地','预计到达','操作'],rg.map(t=>`<tr><td>${esc(contSeq(t)||'-')}</td><td>${esc(t.batch||'-')}</td><td>${esc(t.containerNo||'-')}</td><td>${esc(blText(t)||'-')}</td><td>${esc(origin(t)||'-')}</td><td>${esc(dest(t))}</td><td>${esc(fmtDT(t.estimatedArrival))}</td><td><button class="btn btn-sm btn-success" onclick="doArrival('${taskRef(t)}')">确认到达</button></td></tr>`).join(''));
+    document.getElementById('v470Rio').innerHTML=table(['序号','批次','集装箱号','提单号','出发地','目的地','预计到达','操作'],rio.map(t=>`<tr><td>${esc(contSeq(t)||'-')}</td><td>${esc(t.batch||'-')}</td><td>${esc(t.containerNo||'-')}</td><td>${esc(blText(t)||'-')}</td><td>${esc(origin(t)||'-')}</td><td>${esc(dest(t))}</td><td>${esc(fmtDT(t.estimatedArrival))}</td><td><button class="btn btn-sm btn-warning" onclick="doUnpack('${taskRef(t)}')">确认掏箱</button></td></tr>`).join(''));
+  }
+  W.renderLocationConfirm=renderLocationV470;try{renderLocationConfirm=renderLocationV470;}catch(_){ }
+
+  function gateTasks(){return rows('transportTasks').filter(t=>openTask(t)&&S(t.status)==='in_transit'&&['工厂','IRA库房'].includes(dest(t))&&canLoc(dest(t))&&rank(t)<2).sort(sortTask);}
+  function renderGateV470(container){
+    const main=container||document.getElementById('mainContent');if(!main)return;const q=S(document.getElementById('gateSearch')?.value), d=normLoc(document.getElementById('gateDock')?.value||'');
+    const list=queryFilter(gateTasks(),q).filter(t=>!d||dest(t)===d||dock(t)===d);
+    main.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🚪 门岗登记 <span class="status-badge status-ready">V47.0</span></span></div><div style="font-size:13px;color:#606266;margin-bottom:10px;">确认提箱后，目的地为工厂/IRA的当前运输任务立即进入本页面；历史完成记录不再屏蔽新任务。</div><div class="search-bar"><input id="gateSearch" value="${esc(q)}" placeholder="批次 / 箱号 / 提单 / 序号"><select id="gateDock"><option value="">全部目的地/卸货口</option><option>工厂</option><option>IRA库房</option><option>120B</option><option>132</option><option>140B</option><option>140C</option></select><button class="btn btn-primary" onclick="renderFactoryGateOnly(document.getElementById('mainContent'))">查询</button></div><div id="v470Gate"></div></div>`; const sel=document.getElementById('gateDock');if(sel)sel.value=d;
+    document.getElementById('v470Gate').innerHTML=table(['目的地','卸货口','计划到达','序号','批次','集装箱号','提单号','车牌','司机','电话','状态','操作'],list.map(t=>{const r=rank(t),ref=taskRef(t);return `<tr><td>${esc(dest(t))}</td><td>${esc(dock(t)||'-')}</td><td>${esc(fmtDT(t.estimatedArrival))}</td><td>${esc(contSeq(t)||'-')}</td><td>${esc(t.batch||'-')}</td><td>${esc(t.containerNo||'-')}</td><td>${esc(blText(t)||'-')}</td><td><input id="gatePlate_${esc(t.id)}" value="${esc(t.truckPlate||'')}" style="width:95px"></td><td><input id="gateDriver_${esc(t.id)}" value="${esc(t.driverName||'')}" style="width:90px"></td><td><input id="gatePhone_${esc(t.id)}" value="${esc(t.driverPhone||'')}" style="width:105px"></td><td><span class="status-badge ${r?'status-warning':'status-pending'}">${r?'厂外等待':'未到门岗'}</span></td><td>${r?`<button class="btn btn-sm btn-primary" onclick="releaseFromGate('${ref}')">放行进入等待区</button>`:`<button class="btn btn-sm btn-success" onclick="confirmGateArrival('${ref}')">确认到门岗</button>`}</td></tr>`;}).join(''));
+  }
+  W.renderFactoryGateOnly=W.renderGateMonitoring=renderGateV470;try{renderFactoryGateOnly=renderGateV470;}catch(_){ }try{renderGateMonitoring=renderGateV470;}catch(_){ }
+
+  function dockTasks(){return rows('transportTasks').filter(t=>openTask(t)&&S(t.status)==='in_transit'&&['工厂','IRA库房'].includes(dest(t))&&canLoc(dest(t))&&[2,3].includes(rank(t))).sort(sortTask);}
+  function renderDockV470(container){
+    const main=container||document.getElementById('mainContent');if(!main)return;const q=S(document.getElementById('dockSearch')?.value), d=normLoc(document.getElementById('dockDock')?.value||'');
+    const list=queryFilter(dockTasks(),q).filter(t=>!d||dest(t)===d||dock(t)===d);
+    main.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📦 卸货口收货 <span class="status-badge status-ready">V47.0</span></span></div><div class="search-bar"><input id="dockSearch" value="${esc(q)}" placeholder="批次 / 箱号 / 提单 / 序号"><select id="dockDock"><option value="">全部卸货口</option><option>120B</option><option>132</option><option>140B</option><option>140C</option><option>IRA库房</option></select><button class="btn btn-primary" onclick="renderFactoryDockOnly(document.getElementById('mainContent'))">查询</button></div><div id="v470Dock"></div></div>`;const sel=document.getElementById('dockDock');if(sel)sel.value=d;
+    document.getElementById('v470Dock').innerHTML=table(['目的地','卸货口','状态','序号','批次','集装箱号','提单号','车牌','进入等待','开始卸货','操作'],list.map(t=>{const r=rank(t),ref=taskRef(t);return `<tr><td>${esc(dest(t))}</td><td>${esc(dock(t)||'-')}</td><td><span class="status-badge ${r===3?'status-transport':'status-warning'}">${r===3?'卸货中':'厂内等待'}</span></td><td>${esc(contSeq(t)||'-')}</td><td>${esc(t.batch||'-')}</td><td>${esc(t.containerNo||'-')}</td><td>${esc(blText(t)||'-')}</td><td>${esc(t.truckPlate||'-')}</td><td>${esc(fmtDT(t.waitingAreaTime||t.gateReleaseTime))}</td><td>${esc(fmtDT(t.unloadStartTime))}</td><td>${r===2?`<button class="btn btn-sm btn-success" onclick="startUnloading('${ref}')">确认到达卸货口</button>`:`<button class="btn btn-sm btn-success" onclick="finishUnloading('${ref}')">确认掏箱完成</button>`}</td></tr>`;}).join(''));
+  }
+  W.renderFactoryDockOnly=W.renderDockMonitoring=renderDockV470;try{renderFactoryDockOnly=renderDockV470;}catch(_){ }try{renderDockMonitoring=renderDockV470;}catch(_){ }
+
+  // 运输公司页面：当前 in_transit 始终可见，不再被旧卸货字段或生产记录隐藏。
+  const visibleTransport=function(t){return !!(t&&!cancelled(t)&&S(t.status)==='in_transit');};
+  W.isTransportCompanyVisibleTask=visibleTransport;try{isTransportCompanyVisibleTask=visibleTransport;}catch(_){ }
+
+  function strictReturn(c){return rows('returnRecords').filter(r=>r&&r.type==='return'&&r.isReturnConfirmed===true&&S(r.returnDate)&&((S(r.containerId)&&S(r.containerId)===S(c.id))||(U(r.containerNo)&&U(r.containerNo)===U(c.containerNo)))).sort((a,b)=>S(b.returnConfirmedAt||b.returnDate||b.updatedAt).localeCompare(S(a.returnConfirmedAt||a.returnDate||a.updatedAt)))[0]||null;}
+  function pendingReturn(c){return rows('returnRecords').find(r=>r&&!r.isReturnConfirmed&&S(r.type||'return_needed')==='return_needed'&&((S(r.containerId)&&S(r.containerId)===S(c.id))||(U(r.containerNo)&&U(r.containerNo)===U(c.containerNo))));}
+  function latestActive(c){return rows('transportTasks').filter(t=>openTask(t)&&((S(t.containerId)&&S(t.containerId)===S(c.id))||(U(t.containerNo)&&U(t.containerNo)===U(c.containerNo)))).sort((a,b)=>S(b.updatedAt||b.createdAt).localeCompare(S(a.updatedAt||a.createdAt)))[0]||null;}
+  function statusFor(c){
+    const customs=S(c.customsStatus||c.clearanceStatus||(c.customsCompleteTime||c.clearanceTime?'已清关':'清关中'))||'清关中';
+    const t=latestActive(c);
+    if(t){const r=rank(t),d=dest(t),st=S(t.status);if(st==='in_transit'){if(r===3)return{customs,loc:d,text:'卸货中',cls:'status-transport'};if(r===2)return{customs,loc:d,text:'工厂内等待',cls:'status-warning'};if(r===1)return{customs,loc:d,text:'已到门口',cls:'status-warning'};return{customs,loc:'运输中',text:'运输中',cls:'status-transport'};}if(st==='arrived')return{customs,loc:d,text:'已到达',cls:'status-at-location'};if(st==='return_pending')return{customs,loc:d,text:'待还箱',cls:'status-return-pending'};}
+    const pr=pendingReturn(c);if(pr)return{customs,loc:normLoc(pr.location)||'待还箱',text:'待还箱',cls:'status-return-pending'};
+    try{if(rows('productionRecords').some(p=>A(p.containerIds).map(S).includes(S(c.id))))return{customs,loc:'已生产',text:'已完成',cls:'status-completed'};}catch(_){ }
+    const rr=strictReturn(c);if(rr)return{customs,loc:normLoc(rr.location)||'已还箱',text:'已完成',cls:'status-completed'};
+    const stock=rows('locationStock').find(s=>S(s.containerId)===S(c.id));if(stock)return{customs,loc:normLoc(stock.location),text:'已到达',cls:'status-at-location'};
+    if(c.actualPickupTime)return{customs,loc:'运输中',text:'运输中',cls:'status-transport'};
+    return{customs,loc:'港口',text:customs,cls:customs==='已清关'?'status-ready':'status-clearing'};
+  }
+  W.getContainerFullStatus=function(c){const s=statusFor(c);return{text:s.text,cls:s.cls,loc:s.loc};};
+  W.getContainerLocation=function(id){const c=rows('containers').find(x=>S(x.id)===S(id));return c?statusFor(c).loc:'港口';};
+
+  function renderContainerTableV470(){
+    const box=document.getElementById('containerTable');if(!box)return;
+    const qb=SL(document.getElementById('searchBatch')?.value), qn=SL(document.getElementById('searchContainer')?.value), ql=normLoc(document.getElementById('searchLocation')?.value||''), qs=S(document.getElementById('searchStatus')?.value||'');
+    const list=rows('containers').slice().sort((a,b)=>S(a.batch).localeCompare(S(b.batch),'zh-CN',{numeric:true})||Number(contSeq(a)||999)-Number(contSeq(b)||999)).filter(c=>{const st=statusFor(c);return(!qb||SL(c.batch).includes(qb))&&(!qn||SL(c.containerNo).includes(qn))&&(!ql||st.loc===ql)&&(!qs||st.text===qs||st.customs===qs);});
+    const body=list.map((c,i)=>{const st=statusFor(c);let bl='-',ira='-';try{bl=typeof getContainerBlTextById==='function'?(getContainerBlTextById(c.id)||'-'):'-';ira=typeof getIraList==='function'?(getIraList(c.id)||'-'):'-';}catch(_){ }return `<tr><td>${i+1}</td><td>${esc(c.batch||'-')}</td><td>${esc(c.containerSeq||c.seq||'-')}</td><td>${esc(c.containerNo||'-')}</td><td>${esc(c.vessel||c.carrier||'-')}</td><td>${esc(c.containerType||'-')}</td><td>${esc(fmtD(c.eta||c.arrivalDate))}</td><td>${esc((typeof W.getDemurrageLastFreeDay==='function'?W.getDemurrageLastFreeDay(c):'')||'-')}</td><td>${esc(bl)}</td><td>${esc(ira)}</td><td><span class="status-badge ${st.customs==='已清关'?'status-ready':'status-clearing'}">${esc(st.customs)}</span></td><td><span class="status-badge status-pending">${esc(st.loc)}</span></td><td><span class="status-badge ${st.cls}">${esc(st.text)}</span></td><td><button class="btn btn-sm btn-warning" onclick="editContainer(${JSON.stringify(c.id)})">编辑</button> <button class="btn btn-sm btn-danger" onclick="deleteContainer(${JSON.stringify(c.id)})">删除</button></td></tr>`;}).join('');
+    box.innerHTML=`<div style="font-size:12px;color:#606266;margin:6px 0">查询结果：${list.length} 条</div>`+table(['序号','批次','序号','集装箱号','船公司','箱型','到港','滞箱LFD','关联提单','IRA号','清关','位置','运输状态','操作'],body);
+  }
+  function renderContainersV470(container){
+    const main=container||document.getElementById('mainContent');if(!main)return;
+    main.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📦 基础数据 <span class="status-badge status-ready">V47.0</span></span><div><button class="btn btn-primary" onclick="showAddContainer()">+ 新增</button><button class="btn export-btn" onclick="exportTemplate()">📥 导出模板</button><button class="btn btn-success" onclick="showImport()">📎 批量导入</button></div></div><div style="font-size:12px;color:#606266;margin-bottom:10px">当前有效运输任务优先于历史完成记录，避免同一集装箱新运输时仍显示“已完成”。</div><div class="search-bar"><input id="searchBatch" placeholder="批次"><input id="searchContainer" placeholder="集装箱号"><select id="searchLocation"><option value="">全部当前位置</option><option>港口</option><option>运输中</option><option>RG堆场</option><option>Rio Claro</option><option>IRA库房</option><option>工厂</option><option>已生产</option></select><select id="searchStatus"><option value="">全部运输状态</option><option>清关中</option><option>已清关</option><option>运输中</option><option>已到门口</option><option>工厂内等待</option><option>卸货中</option><option>待还箱</option><option>已完成</option></select><button class="btn btn-primary" onclick="renderContainerTable()">查询</button><button class="btn" onclick="clearContainerSearch()">重置</button></div><div id="containerTable"></div></div>`;renderContainerTableV470();
+  }
+  W.renderContainers=renderContainersV470;W.renderContainerTable=renderContainerTableV470;W.clearContainerSearch=function(){['searchBatch','searchContainer','searchLocation','searchStatus'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});renderContainerTableV470();};
+  try{renderContainers=renderContainersV470;renderContainerTable=renderContainerTableV470;clearContainerSearch=W.clearContainerSearch;}catch(_){ }
+
+  // ---------- 费率配置权威快照 ----------
+  function getWarning(){try{return warningConfig||(warningConfig={storageWarningDays:5,demurrageWarningDays:7});}catch(_){return W.warningConfig||(W.warningConfig={storageWarningDays:5,demurrageWarningDays:7});}}
+  function clone(v){return JSON.parse(JSON.stringify(v));}
+  function activeRateArray(type){
+    const wc=getWarning(), ov=wc[RATE_OVERRIDE_KEY];
+    if(ov&&Array.isArray(ov[type])) return clone(ov[type]);
+    const src=type==='storage'?rows('storageConfig'):rows('demurrageConfig');
+    return clone(src.filter(x=>x&&!x.deletedAt));
+  }
+  function replaceArray(name,values){
+    try{
+      let target=null;
+      if(name==='storageConfig'&&typeof storageConfig!=='undefined') target=storageConfig;
+      if(name==='demurrageConfig'&&typeof demurrageConfig!=='undefined') target=demurrageConfig;
+      if(Array.isArray(target)){target.splice(0,target.length,...values);return;}
+    }catch(_){ }
+    W[name]=values;
+  }
+  function applyRateOverride(render){
+    const wc=getWarning(), ov=wc[RATE_OVERRIDE_KEY];if(!ov)return false;
+    replaceArray('storageConfig',clone(A(ov.storage)));replaceArray('demurrageConfig',clone(A(ov.demurrage)));
+    if(render&&currentMenu==='rateConfig')renderRateConfigV470(document.getElementById('mainContent'));
+    try{localStorage.removeItem('cc_lastFeeUpdate');localStorage.removeItem('cc_cachedFees');if(typeof W.updateDailyFees==='function')W.updateDailyFees(true);}catch(_){ }
+    return true;
+  }
+  function rateId(type,c,i){return S(c&&c.id)||`${type}-${Date.now().toString(36)}-${i}-${Math.random().toString(36).slice(2,7)}`;}
+  function renderRateConfigV470(container){
+    const main=container||document.getElementById('mainContent');if(!main)return;
+    const storage=activeRateArray('storage').map((c,i)=>Object.assign({},c,{id:rateId('storage',c,i)}));
+    const dem=activeRateArray('demurrage').map((c,i)=>Object.assign({},c,{id:rateId('demurrage',c,i)}));
+    const wc=getWarning();
+    main.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">💰 费率配置 <span class="status-badge status-ready">V47.0</span></span></div><h3>📊 堆存费配置（按时间段）</h3><div class="table-wrapper"><table class="data-table"><thead><tr><th>生效开始</th><th>生效结束</th><th>正常收费时长/天</th><th>正常费用(BRL)</th><th>超期异常日费(BRL/天)</th><th>操作</th></tr></thead><tbody>${storage.map((c,i)=>`<tr data-rate-type="storage" data-rate-id="${esc(c.id)}"><td><input type="date" class="r-start" value="${esc(S(c.startDate).replace(/\//g,'-'))}"></td><td><input type="date" class="r-end" value="${esc(S(c.endDate).replace(/\//g,'-'))}"></td><td><input type="number" class="r-fixedDays" value="${Number(c.fixedDays||0)}"></td><td><input type="number" step="0.01" class="r-fixedRate" value="${Number(c.fixedRate||0)}"></td><td><input type="number" step="0.01" class="r-overtimeRate" value="${Number(c.overtimeRate||0)}"></td><td><button class="btn btn-sm btn-danger" onclick="deleteStoragePeriodV470('${esc(c.id)}')">删除</button></td></tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:#909399">暂无配置</td></tr>'}</tbody></table></div><button class="btn btn-sm btn-success" onclick="addStoragePeriodV470()">+ 添加堆存费时段</button><hr><h3>🚢 滞箱费配置（按时间段）</h3><div class="table-wrapper"><table class="data-table"><thead><tr><th>船公司</th><th>箱型</th><th>生效开始</th><th>生效结束</th><th>免费天数</th><th>日费率(USD)</th><th>操作</th></tr></thead><tbody>${dem.map(c=>`<tr data-rate-type="demurrage" data-rate-id="${esc(c.id)}"><td><select class="r-carrier"><option ${c.carrier==='MSC'?'selected':''}>MSC</option><option ${c.carrier==='COSCO'?'selected':''}>COSCO</option><option ${c.carrier==='长荣'?'selected':''}>长荣</option></select></td><td><select class="r-type"><option ${c.type==='普柜'?'selected':''}>普柜</option><option ${c.type==='冷柜'?'selected':''}>冷柜</option></select></td><td><input type="date" class="r-start" value="${esc(S(c.startDate).replace(/\//g,'-'))}"></td><td><input type="date" class="r-end" value="${esc(S(c.endDate).replace(/\//g,'-'))}"></td><td><input type="number" class="r-freeDays" value="${Number(c.freeDays||0)}"></td><td><input type="number" step="0.01" class="r-rate" value="${Number(c.ratePerDay||0)}"></td><td><button class="btn btn-sm btn-danger" onclick="deleteDemPeriodV470('${esc(c.id)}')">删除</button></td></tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:#909399">暂无配置</td></tr>'}</tbody></table></div><button class="btn btn-sm btn-success" onclick="addDemPeriodV470()">+ 添加滞箱费时段</button><hr><h3>⚠️ 预警配置</h3><div class="rate-period-row"><label>堆存费预警天数：<input type="number" id="warningStorageDays" value="${Number(wc.storageWarningDays||0)}" style="width:80px"></label><label style="margin-left:20px">滞箱费预警天数：<input type="number" id="warningDemurrageDays" value="${Number(wc.demurrageWarningDays||0)}" style="width:80px"></label></div><div style="margin-top:16px"><button class="btn btn-primary" onclick="saveAllRatesV470()">保存所有配置</button></div></div>`;
+    // 尚未保存的新ID也写入当前权威快照，确保删除键稳定。
+    wc[RATE_OVERRIDE_KEY]={storage,demurrage:dem,updatedAt:wc[RATE_OVERRIDE_KEY]?.updatedAt||nowIso(),revision:Number(wc[RATE_OVERRIDE_KEY]?.revision||0)};
+  }
+  function collectRates(){
+    const storage=[],dem=[];
+    document.querySelectorAll('tr[data-rate-type="storage"]').forEach(tr=>storage.push({id:tr.dataset.rateId,startDate:tr.querySelector('.r-start')?.value||'',endDate:tr.querySelector('.r-end')?.value||'',fixedDays:Math.max(0,Number(tr.querySelector('.r-fixedDays')?.value||0)),fixedRate:Math.max(0,Number(tr.querySelector('.r-fixedRate')?.value||0)),overtimeRate:Math.max(0,Number(tr.querySelector('.r-overtimeRate')?.value||0)),updatedAt:nowIso()}));
+    document.querySelectorAll('tr[data-rate-type="demurrage"]').forEach(tr=>dem.push({id:tr.dataset.rateId,carrier:tr.querySelector('.r-carrier')?.value||'',type:tr.querySelector('.r-type')?.value||'',startDate:tr.querySelector('.r-start')?.value||'',endDate:tr.querySelector('.r-end')?.value||'',freeDays:Math.max(0,Number(tr.querySelector('.r-freeDays')?.value||0)),ratePerDay:Math.max(0,Number(tr.querySelector('.r-rate')?.value||0)),updatedAt:nowIso()}));
+    return{storage,demurrage:dem};
+  }
+  W.addStoragePeriodV470=function(){const wc=getWarning(),ov=wc[RATE_OVERRIDE_KEY]||{storage:activeRateArray('storage'),demurrage:activeRateArray('demurrage'),revision:0};ov.storage.push({id:uuid('storage'),startDate:today(),endDate:today(),fixedDays:15,fixedRate:0,overtimeRate:0});wc[RATE_OVERRIDE_KEY]=ov;renderRateConfigV470(document.getElementById('mainContent'));};
+  W.addDemPeriodV470=function(){const wc=getWarning(),ov=wc[RATE_OVERRIDE_KEY]||{storage:activeRateArray('storage'),demurrage:activeRateArray('demurrage'),revision:0};ov.demurrage.push({id:uuid('demurrage'),carrier:'MSC',type:'普柜',startDate:today(),endDate:today(),freeDays:28,ratePerDay:170});wc[RATE_OVERRIDE_KEY]=ov;renderRateConfigV470(document.getElementById('mainContent'));};
+  W.deleteStoragePeriodV470=function(id){const cur=collectRates();cur.storage=cur.storage.filter(x=>S(x.id)!==S(id));const wc=getWarning();wc[RATE_OVERRIDE_KEY]={...cur,updatedAt:nowIso(),revision:Number(wc[RATE_OVERRIDE_KEY]?.revision||0)+1};renderRateConfigV470(document.getElementById('mainContent'));};
+  W.deleteDemPeriodV470=function(id){const cur=collectRates();cur.demurrage=cur.demurrage.filter(x=>S(x.id)!==S(id));const wc=getWarning();wc[RATE_OVERRIDE_KEY]={...cur,updatedAt:nowIso(),revision:Number(wc[RATE_OVERRIDE_KEY]?.revision||0)+1};renderRateConfigV470(document.getElementById('mainContent'));};
+  W.saveAllRatesV470=function(){
+    const cur=collectRates(),wc=getWarning();wc.storageWarningDays=Math.max(0,Number(document.getElementById('warningStorageDays')?.value||0));wc.demurrageWarningDays=Math.max(0,Number(document.getElementById('warningDemurrageDays')?.value||0));wc[RATE_OVERRIDE_KEY]={...cur,updatedAt:nowIso(),revision:Number(wc[RATE_OVERRIDE_KEY]?.revision||0)+1};replaceArray('storageConfig',clone(cur.storage));replaceArray('demurrageConfig',clone(cur.demurrage));
+    try{if(typeof W.saveData==='function')W.saveData();}catch(e){console.error(e);alert('费率已在页面更新，但云端保存失败：'+(e.message||e));return;}
+    [300,900,1800].forEach(ms=>setTimeout(()=>applyRateOverride(false),ms));
+    try{localStorage.removeItem('cc_lastFeeUpdate');localStorage.removeItem('cc_cachedFees');if(typeof W.updateDailyFees==='function')W.updateDailyFees(true);}catch(_){ }
+    alert('费率配置已保存。删除操作以V47.0权威快照为准，不会再被云端旧记录恢复。');
+  };
+  W.renderRateConfig=renderRateConfigV470;W.saveAllRates=W.saveAllRatesV470;W.addStoragePeriod=W.addStoragePeriodV470;W.addDemPeriod=W.addDemPeriodV470;
+  try{renderRateConfig=renderRateConfigV470;saveAllRates=W.saveAllRatesV470;addStoragePeriod=W.addStoragePeriodV470;addDemPeriod=W.addDemPeriodV470;}catch(_){ }
+  // 旧索引删除函数仍可调用时，统一转到V47界面逻辑。
+  W.deleteStoragePeriod=function(idx){const rowsNow=Array.from(document.querySelectorAll('tr[data-rate-type="storage"]'));const id=rowsNow[idx]?.dataset.rateId;if(id)W.deleteStoragePeriodV470(id);};
+  W.deleteDemPeriod=function(idx){const rowsNow=Array.from(document.querySelectorAll('tr[data-rate-type="demurrage"]'));const id=rowsNow[idx]?.dataset.rateId;if(id)W.deleteDemPeriodV470(id);};
+
+  function getStorageConfigV470(eta){
+    const d=S(eta).replace(/\//g,'-'), list=activeRateArray('storage');
+    for(const c of list){const s=S(c.startDate).replace(/\//g,'-'),e=S(c.endDate).replace(/\//g,'-');if(d>=s&&d<=e)return c;}
+    return list.length?list[list.length-1]:null;
+  }
+  function getDemConfigV470(container,eta){
+    const d=S(eta).replace(/\//g,'-');for(const c of activeRateArray('demurrage')){if(S(c.carrier)!==S(container.vessel)||S(c.type)!==S(container.containerType))continue;const s=S(c.startDate).replace(/\//g,'-'),e=S(c.endDate).replace(/\//g,'-');if(d>=s&&d<=e)return c;}return null;
+  }
+  W.getStorageConfigByDate=getStorageConfigV470;W.getDemurrageConfigByDate=getDemConfigV470;try{getStorageConfigByDate=getStorageConfigV470;getDemurrageConfigByDate=getDemConfigV470;}catch(_){ }
+
+  // 云端加载/实时同步后重新应用权威费率快照。
+  function wrapAsync(name){const old=W[name];if(typeof old!=='function'||old.__v470Wrapped)return;const fn=async function(){const r=await old.apply(this,arguments);const changed=applyRateOverride(false);if(changed&&currentMenu==='rateConfig')renderRateConfigV470(document.getElementById('mainContent'));return r;};fn.__v470Wrapped=true;W[name]=fn;try{(0,eval)(name+' = window["'+name+'"]');}catch(_){ }}
+  wrapAsync('loadCloudState');wrapAsync('pullCloudStateAndRefresh');
+
+  function repairInconsistentActiveTasks(){
+    let changed=0;
+    rows('transportTasks').forEach(t=>{
+      if(!t||cancelled(t)||S(t.status)!=='in_transit')return;
+      if(!t.taskUid){t.taskUid=uuid('task');changed++;}
+      if(!t.routeLegKey){t.routeLegKey='legacy-active:'+S(t.id)+':'+S(t.actualPickupTime||t.updatedAt||nowIso());changed++;}
+      // in_transit 与“已卸货/已掏箱”互斥；这些字段来自旧任务复用，必须清除。
+      if(rank(t)>=4){clearExecutionFields(t);t.operationStatus=['工厂','IRA库房'].includes(dest(t))?'not_arrived':'';t.cc47RepairedStaleExecution=true;t.updatedAt=nowIso();changed++;}
+      if(['工厂','IRA库房'].includes(dest(t))&&!S(t.operationStatus)) {t.operationStatus='not_arrived';changed++;}
+    });
+    return changed;
+  }
+
+  const repaired=repairInconsistentActiveTasks();
+  applyRateOverride(false);
+  if(repaired){setTimeout(()=>{try{W.saveData();}catch(_){ }},800);}
+
+  function updateVersion(){
+    try{document.title='Sistema Inteligente de Monitoramento de Contêineres V47.0';document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V46\.|Notebook Stable|Safe Core|State Integrity/i.test(S(el.textContent)))el.textContent='V47.0 Safe Core';});}catch(_){ }
+  }
+  updateVersion();document.addEventListener('DOMContentLoaded',()=>{updateVersion();setTimeout(updateVersion,2500);});setTimeout(updateVersion,3000);
+  W.__v470Status=function(){return{version:VERSION,repairedActiveTasks:repaired,activeTransport:rows('transportTasks').filter(t=>openTask(t)&&S(t.status)==='in_transit').length,rateOverride:getWarning()[RATE_OVERRIDE_KEY]||null};};
+  console.log(VERSION+' loaded: active-route precedence, fresh pickup task, route-scoped receiving, authoritative rate deletion.');
+})();
+</script>
+
 </body>
 </html>
