@@ -14172,5 +14172,118 @@ ${preview}
 })();
 </script>
 
+
+<script>
+/* ==================== V47.5 Task Reference Integrity：统一解析恢复后的任务引用 ==================== */
+(function(){
+  'use strict';
+  const W=window;
+  const VERSION='V47.5 Task Reference Integrity';
+  const S=v=>String(v==null?'':v).trim();
+  const A=v=>Array.isArray(v)?v:[];
+
+  function tasks(){
+    try{return A(transportTasks);}catch(_){return A(W.transportTasks);}
+  }
+  function decodeRef(ref){
+    if(ref&&typeof ref==='object'){
+      // 兼容旧包装：{id:'BASE64任务引用'}
+      const keys=Object.keys(ref);
+      if(keys.length===1&&keys[0]==='id'&&typeof ref.id==='string'){
+        const inner=decodeRef(ref.id);
+        if(inner&&typeof inner==='object'&&(inner.taskUid||inner.routeLegKey||inner.containerId||inner.containerNo||S(inner.id)!==S(ref.id))) return inner;
+      }
+      return ref;
+    }
+    const s=S(ref); if(!s)return {};
+    try{
+      let p=s; while(p.length%4)p+='=';
+      const obj=JSON.parse(decodeURIComponent(escape(atob(p))));
+      if(obj&&typeof obj==='object')return obj;
+    }catch(_){ }
+    return {id:s};
+  }
+  function encodeRef(t){
+    const obj={id:t.id,taskUid:t.taskUid||'',routeLegKey:t.routeLegKey||'',containerId:t.containerId,containerNo:t.containerNo||'',to:t.to||t.destination||'',from:t.from||t.origin||''};
+    try{return btoa(unescape(encodeURIComponent(JSON.stringify(obj)))).replace(/=+$/,'');}
+    catch(_){return S(t.id);}
+  }
+  function timeOf(t){
+    const v=t&&(t.updatedAt||t.updated_at||t.actualArrival||t.createdAt||t.created_at||'');
+    const n=Date.parse(v); return Number.isFinite(n)?n:0;
+  }
+  function active(t){return !!(t&&!t.cancelled&&S(t.status)!=='cancelled');}
+  function findTask(ref,preferred){
+    const k=decodeRef(ref), list=tasks().filter(active);
+    let m=[];
+    if(k.taskUid)m=list.filter(t=>S(t.taskUid)===S(k.taskUid));
+    if(!m.length&&k.routeLegKey)m=list.filter(t=>S(t.routeLegKey)===S(k.routeLegKey));
+    if(!m.length&&k.id!==undefined&&k.id!==null)m=list.filter(t=>S(t.id)===S(k.id));
+    if(!m.length&&k.containerId!==undefined&&k.containerId!==null)m=list.filter(t=>S(t.containerId)===S(k.containerId));
+    if(!m.length&&k.containerNo)m=list.filter(t=>S(t.containerNo).toUpperCase()===S(k.containerNo).toUpperCase());
+    if(k.to&&m.length>1){const z=m.filter(t=>S(t.to||t.destination).toUpperCase()===S(k.to).toUpperCase());if(z.length)m=z;}
+    if(k.from&&m.length>1){const z=m.filter(t=>S(t.from||t.origin).toUpperCase()===S(k.from).toUpperCase());if(z.length)m=z;}
+    if(preferred&&m.length){const z=m.filter(t=>S(t.status)===preferred);if(z.length)m=z;}
+    m.sort((a,b)=>timeOf(b)-timeOf(a));
+    return m[0]||null;
+  }
+  function normalizeRef(ref){
+    const k=decodeRef(ref);
+    // 保留完整编码引用，避免再次被包装成 {id: 编码字符串}
+    if(typeof ref==='string'&&(k.taskUid||k.routeLegKey||k.containerId||k.containerNo))return ref;
+    return k;
+  }
+
+  // 到货及掏箱：直接把原始任务引用交给V47.3安全事务函数。
+  W.doArrival=W.confirmArrivalOnly=function(ref){
+    return W.doArrivalByKeyV455(normalizeRef(ref));
+  };
+  W.doUnpack=function(ref){
+    return W.doUnpackByKeyV455(normalizeRef(ref));
+  };
+
+  // 门岗/卸货口函数需要同时使用原始任务ID读取输入框，因此先解析当前任务，
+  // 再用真实ID注册任务引用，避免把BASE64引用误当作ID。
+  function invokeFactory(ref,handlerName){
+    const t=findTask(ref);
+    if(!t){alert('未找到当前工厂到货任务，请刷新后重试。');return false;}
+    const mapId=S(t.id||('v475-'+Date.now()+'-'+Math.random().toString(36).slice(2,7)));
+    W.__v453TaskKeys=W.__v453TaskKeys||{};
+    W.__v453TaskKeys[mapId]=encodeRef(t);
+    const fn=W[handlerName];
+    if(typeof fn!=='function'){alert('当前操作函数未加载，请强制刷新页面后重试。');return false;}
+    return fn(mapId);
+  }
+  W.confirmGateArrival=function(ref){return invokeFactory(ref,'confirmGateArrivalByKeyV453');};
+  W.releaseFromGate=function(ref){return invokeFactory(ref,'releaseFromGateByKeyV453');};
+  W.startUnloading=function(ref){return invokeFactory(ref,'startUnloadingByKeyV453');};
+  W.finishUnloading=function(ref){return invokeFactory(ref,'finishUnloadingByKeyV453');};
+
+  // 提供诊断函数，便于现场确认页面引用能否解析到当前内存任务。
+  W.__v475ResolveTask=function(ref){
+    const t=findTask(ref);
+    return t?{ok:true,id:t.id,taskUid:t.taskUid||'',containerNo:t.containerNo||'',status:t.status||'',to:t.to||t.destination||''}:{ok:false,decoded:decodeRef(ref),taskCount:tasks().length};
+  };
+
+  function updateVersion(){
+    try{
+      document.title='Sistema Inteligente de Monitoramento de Contêineres V47.5';
+      document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{
+        const s=S(el.textContent);
+        if(/V47\.[0-4]|Restore Integrity Core|Safe Transaction Core|Warning Integrity|Lean Core/i.test(s))el.textContent=VERSION;
+      });
+    }catch(_){ }
+  }
+  const oldRender=W.renderContent;
+  if(typeof oldRender==='function'){
+    W.renderContent=function(){const r=oldRender.apply(this,arguments);setTimeout(updateVersion,0);return r;};
+    try{renderContent=W.renderContent;}catch(_){ }
+  }
+  updateVersion();
+  document.addEventListener('DOMContentLoaded',()=>setTimeout(updateVersion,500));
+  console.log(VERSION+' loaded: encoded task references are resolved without double-wrapping.');
+})();
+</script>
+
 </body>
 </html>
