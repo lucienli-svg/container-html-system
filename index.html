@@ -14936,5 +14936,166 @@ ${preview}
 })();
 </script>
 
+
+<script>
+/* ==================== V47.10 基础数据全量Excel导出 ====================
+   1. 基础数据分页仅影响页面渲染，不影响导出范围。
+   2. 点击“导出全部基础数据”始终导出系统内全部基础数据。
+   3. 导出字段与基础数据页面展示口径一致，状态使用当前实时计算结果。
+*/
+(function(){
+  'use strict';
+  const W=window;
+  const VERSION='V47.10 Full Basic Data Export';
+  const S=v=>String(v==null?'':v).trim();
+  const A=v=>Array.isArray(v)?v:[];
+
+  function allContainers(){
+    try{return A(containers);}catch(_){return A(W.containers);}
+  }
+  function dateText(v){
+    if(!v)return'';
+    try{
+      if(typeof W.getDatePart==='function')return W.getDatePart(v)||S(v).slice(0,10);
+      if(typeof getDatePart==='function')return getDatePart(v)||S(v).slice(0,10);
+    }catch(_){ }
+    const s=S(v),m=s.match(/(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
+    return m?`${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`:s;
+  }
+  function currentStatus(c){
+    let st=null;
+    try{
+      const fn=W.getContainerFullStatus||(typeof getContainerFullStatus==='function'?getContainerFullStatus:null);
+      if(fn)st=fn(c);
+    }catch(_){ }
+    const customs=S(c&&c.customsStatus||c&&c.clearanceStatus||((c&&(c.customsCompleteTime||c.clearanceTime||c.clearanceCompleteDate))?'已清关':'清关中'))||'清关中';
+    return{
+      customs,
+      location:S(st&&st.loc)||'港口',
+      transport:S(st&&st.text)||customs
+    };
+  }
+  function blText(c){
+    try{
+      const fn=W.getContainerBlTextById||(typeof getContainerBlTextById==='function'?getContainerBlTextById:null);
+      return fn?S(fn(c.id)):'';
+    }catch(_){return'';}
+  }
+  function iraText(c){
+    try{
+      const fn=W.getIraList||(typeof getIraList==='function'?getIraList:null);
+      return fn?S(fn(c.id)):'';
+    }catch(_){return'';}
+  }
+  function lfdText(c){
+    try{
+      const fn=W.getDemurrageLastFreeDay||(typeof getDemurrageLastFreeDay==='function'?getDemurrageLastFreeDay:null);
+      return fn?S(fn(c)):'';
+    }catch(_){return'';}
+  }
+  function today(){
+    try{
+      const fn=W.getTodayStr||(typeof getTodayStr==='function'?getTodayStr:null);
+      if(fn)return fn();
+    }catch(_){ }
+    const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
+
+  W.exportAllBasicDataV4710=function(){
+    if(typeof XLSX==='undefined'){
+      alert('Excel组件未加载，请检查网络后重新打开系统。');
+      return false;
+    }
+    const list=allContainers().slice().sort((a,b)=>S(a.batch).localeCompare(S(b.batch),'zh-CN',{numeric:true})||(Number(a.containerSeq||a.seq||999999)-Number(b.containerSeq||b.seq||999999))||S(a.containerNo).localeCompare(S(b.containerNo),'en',{numeric:true}));
+    if(!list.length){alert('当前没有可导出的基础数据。');return false;}
+
+    const headers=['数据序号','批次','集装箱序号','集装箱号','船公司','箱型','到港日期','滞箱费最后免费日','关联提单','IRA号','清关状态','当前位置','运输状态'];
+    const data=list.map((c,index)=>{
+      const st=currentStatus(c);
+      return[
+        index+1,
+        S(c.batch),
+        S(c.containerSeq||c.seq),
+        S(c.containerNo),
+        S(c.vessel||c.carrier),
+        S(c.containerType||c.type),
+        dateText(c.eta||c.arrivalDate),
+        dateText(lfdText(c)),
+        blText(c),
+        iraText(c),
+        st.customs,
+        st.location,
+        st.transport
+      ];
+    });
+
+    const ws=XLSX.utils.aoa_to_sheet([headers,...data]);
+    ws['!cols']=[
+      {wch:10},{wch:15},{wch:14},{wch:18},{wch:12},{wch:10},{wch:13},
+      {wch:20},{wch:38},{wch:18},{wch:12},{wch:15},{wch:18}
+    ];
+    if(ws['!ref'])ws['!autofilter']={ref:ws['!ref']};
+    ws['!freeze']={xSplit:0,ySplit:1,topLeftCell:'A2',activePane:'bottomLeft',state:'frozen'};
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,'全部基础数据');
+    wb.Props={Title:'集装箱管理系统基础数据',Subject:'全部基础数据导出',Author:'GWM Container Monitoring System',CreatedDate:new Date()};
+    XLSX.writeFile(wb,`基础数据_全部_${today()}.xlsx`);
+    try{if(typeof W.showRealtimeSyncHint==='function')W.showRealtimeSyncHint(`已导出 ${list.length} 条基础数据`);}catch(_){ }
+    return true;
+  };
+
+  function injectExportButton(container){
+    const main=container||document.getElementById('mainContent');
+    if(!main||document.getElementById('exportAllBasicDataV4710'))return;
+    const title=[...main.querySelectorAll('.card-title')].find(el=>/基础数据|Basic Data|Dados básicos/i.test(S(el.textContent)));
+    const header=title&&title.closest('.card-header');
+    if(!header)return;
+    let actions=header.querySelector(':scope > div');
+    if(!actions){actions=document.createElement('div');header.appendChild(actions);}
+    const btn=document.createElement('button');
+    btn.id='exportAllBasicDataV4710';
+    btn.className='btn export-btn';
+    btn.type='button';
+    btn.innerHTML='📊 导出全部基础数据';
+    btn.onclick=W.exportAllBasicDataV4710;
+    const templateBtn=[...actions.querySelectorAll('button')].find(el=>/导出模板|Export Template/i.test(S(el.textContent)));
+    if(templateBtn)actions.insertBefore(btn,templateBtn);else actions.appendChild(btn);
+    const badge=title.querySelector('.status-badge');if(badge)badge.textContent='V47.10';
+  }
+
+  const oldRender=W.renderContainers;
+  if(typeof oldRender==='function'){
+    W.renderContainers=function(container){
+      const result=oldRender.apply(this,arguments);
+      injectExportButton(container);
+      return result;
+    };
+    try{renderContainers=W.renderContainers;}catch(_){ }
+  }
+  const oldRenderContent=W.renderContent;
+  if(typeof oldRenderContent==='function'){
+    W.renderContent=function(){
+      const result=oldRenderContent.apply(this,arguments);
+      setTimeout(()=>injectExportButton(document.getElementById('mainContent')),0);
+      return result;
+    };
+    try{renderContent=W.renderContent;}catch(_){ }
+  }
+  function setVersion(){
+    try{
+      document.title='Sistema Inteligente de Monitoramento de Contêineres V47.10';
+      document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{
+        if(/V47\.9|Ordered Local-First Journal/i.test(S(el.textContent)))el.textContent='V47.10';
+      });
+      injectExportButton(document.getElementById('mainContent'));
+    }catch(_){ }
+  }
+  setVersion();
+  document.addEventListener('DOMContentLoaded',()=>setTimeout(setVersion,700));
+  setTimeout(setVersion,2200);
+  console.log(VERSION+' loaded: paginated basic data can now be exported completely to Excel.');
+})();
+</script>
+
 </body>
 </html>
