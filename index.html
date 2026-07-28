@@ -712,7 +712,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V43.1 Stable：修复动态运输计划发布后被历史非工厂任务误撤回的问题。
+        V47.13 Instant Access：登录与云端同步分离；数据在后台同步，不再阻塞登录和页面操作。
       </div>
       <button class="login-btn" onclick="loginWithGoogle()" style="width:100%;margin-bottom:14px;">使用 Google 登录</button>
 
@@ -14813,7 +14813,7 @@ ${preview}
 
   let indicator=null;
   function ensureIndicator(){if(indicator&&document.body.contains(indicator))return indicator;indicator=document.createElement('div');indicator.id='v479SaveIndicator';indicator.style.cssText='position:fixed;right:16px;bottom:14px;z-index:99999;padding:7px 11px;border-radius:999px;font-size:12px;font-weight:700;background:#ecf5ff;color:#2b5aa6;border:1px solid #b3d8ff;box-shadow:0 2px 10px rgba(0,0,0,.12);display:none';document.body.appendChild(indicator);return indicator;}
-  function status(text,type,hold){const el=ensureIndicator();el.textContent=text;el.style.display='block';const map={ok:['#f0f9eb','#2f7d32','#c2e7b0'],local:['#fdf6ec','#b26a00','#f5dab1'],error:['#fef0f0','#c73636','#f5c2c2'],saving:['#ecf5ff','#2b5aa6','#b3d8ff']},c=map[type]||map.saving;el.style.background=c[0];el.style.color=c[1];el.style.borderColor=c[2];if(hold!==true)setTimeout(()=>{if(el.textContent===text)el.style.display='none';},typeof hold==='number'?hold:2600);}
+  function status(text,type,hold){const login=document.getElementById('loginPage'),main=document.getElementById('mainApp');if(login&&login.style.display!=='none'&&(!main||main.style.display==='none'))return;const el=ensureIndicator();el.textContent=text;el.style.display='block';const map={ok:['#f0f9eb','#2f7d32','#c2e7b0'],local:['#fdf6ec','#b26a00','#f5dab1'],error:['#fef0f0','#c73636','#f5c2c2'],saving:['#ecf5ff','#2b5aa6','#b3d8ff']},c=map[type]||map.saving;el.style.background=c[0];el.style.color=c[1];el.style.borderColor=c[2];if(hold!==true)setTimeout(()=>{if(el.textContent===text)el.style.display='none';},typeof hold==='number'?hold:2600);}
   function hint(text){try{if(typeof showRealtimeSyncHint==='function')showRealtimeSyncHint(text);}catch(_){} }
   function timeout(p,ms){return Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('云端请求超时')),ms))]);}
   function verifyOp(op){return !!(op&&op.type==='incremental_operation'&&op.opId&&op.checksum&&opChecksum(op)===op.checksum);}
@@ -14823,11 +14823,18 @@ ${preview}
     const row={id:WRITE_PREFIX+op.opId,data:op,updated_by:op.createdBy||user(),updated_at:op.createdAt||now()};let last=null;
     for(let i=0;i<2;i++){
       try{
-        const r=await timeout(client.from('app_state').upsert(row),CLOUD_TIMEOUT);if(r&&r.error)throw r.error;
+        let returned=null;
+        try{
+          const q=client.from('app_state').upsert(row).select('id,data,updated_at').maybeSingle();
+          const r=await timeout(q,CLOUD_TIMEOUT);if(r&&r.error)throw r.error;returned=r&&r.data;
+        }catch(first){
+          const r=await timeout(client.from('app_state').upsert(row),CLOUD_TIMEOUT);if(r&&r.error)throw r.error;
+        }
+        if(returned&&verifyOp(returned.data)&&returned.data.checksum===op.checksum)return true;
         const check=await timeout(client.from('app_state').select('data,updated_at').eq('id',row.id).maybeSingle(),CLOUD_TIMEOUT);if(check&&check.error)throw check.error;
         if(!check||!check.data||!verifyOp(check.data.data)||check.data.data.checksum!==op.checksum)throw new Error('云端写入回读校验失败');
         return true;
-      }catch(e){last=e;if(i===0)await sleep(300);}
+      }catch(e){last=e;if(i===0)await sleep(250);}
     }
     throw last||new Error('事务上传失败');
   }
@@ -14866,7 +14873,8 @@ ${preview}
     try{await pendingPut(op);}catch(e){status('本地断点保存失败','error',true);alert('浏览器本地断点保存失败：'+(e.message||e));return false;}
     applyOpToShadow(op);
     uploadChain=uploadChain.catch(()=>true).then(()=>sendOp(op));
-    return uploadChain;
+    status('本机已保存 · 云端后台同步中','saving',1800);
+    return true;
   }
   function queue(reason){const p=captureChain=captureChain.catch(()=>true).then(()=>capture(reason||'saveData'));return p;}
   async function retryPending(){const list=await pendingAll();if(!list.length)return true;for(const op of list){if(!verifyOp(op)){await pendingDelete(op.opId);continue;}const ok=await sendOp(op);if(!ok)return false;}return true;}
@@ -14893,6 +14901,8 @@ ${preview}
   async function releaseCompact(owner){if(!owner)return;try{const client=sb();if(client)await client.from('app_state').delete().eq('id',COMPACT_LOCK_ID).eq('updated_by',owner);}catch(_){ }}
   async function deleteRows(ids){const client=sb();if(!client)return;for(let i=0;i<ids.length;i+=50){const {error}=await client.from('app_state').delete().in('id',ids.slice(i,i+50));if(error)throw error;}}
   async function compact(force){
+    const login=document.getElementById('loginPage'),main=document.getElementById('mainApp');
+    if(!cloudUser||(login&&login.style.display!=='none'&&(!main||main.style.display==='none')))return false;
     if(compacting||reloading)return false;const pending=await pendingAll();if(pending.length)return false;if(!force&&(Date.now()-lastActivity<COMPACT_IDLE_MS||uploadedSinceCompact<COMPACT_MIN_OPS))return false;
     const owner=await compactLock();if(!owner)return false;compacting=true;
     try{const rows=await fetchOps();if(!rows.length)return true;if(!force&&rows.length<COMPACT_MIN_OPS)return true;await applyAllOps(false);if(typeof fullSave!=='function')return false;const ok=await fullSave.call(W,'v479_background_compaction');if(ok===false)return false;await deleteRows(rows.map(r=>r.id));seenOps.clear();resetShadow();uploadedSinceCompact=0;status('后台数据整理完成','ok');return true;}catch(e){console.warn('V47.9 compaction skipped',e);return false;}finally{compacting=false;await releaseCompact(owner);}
@@ -14931,7 +14941,7 @@ ${preview}
   document.addEventListener('pointerdown',()=>{lastActivity=Date.now();},true);
   function setVersion(){try{document.title='Sistema Inteligente de Monitoramento de Contêineres V47.9';document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.[0-8]|Fast Journal Save|Workflow Reference Integrity|Ordered Local-First Journal/i.test(S(el.textContent)))el.textContent=VERSION;});}catch(_){ }}
   const oldRender=W.renderContent;if(typeof oldRender==='function'){W.renderContent=function(){const r=oldRender.apply(this,arguments);setTimeout(setVersion,0);return r;};try{renderContent=W.renderContent;}catch(_){ }}
-  setVersion();if(coreScore(state())>0)resetShadow();document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>{setVersion();if(!shadow&&coreScore(state())>0)resetShadow();migrateV478Pending().then(retryPending);startRealtime();},600));setTimeout(()=>{if(!shadow&&coreScore(state())>0)resetShadow();migrateV478Pending().then(retryPending);startRealtime();},2200);scheduleCompact();
+  setVersion();if(coreScore(state())>0)resetShadow();document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>{setVersion();if(!shadow&&coreScore(state())>0)resetShadow();},600));setTimeout(()=>{if(!shadow&&coreScore(state())>0)resetShadow();},2200);
   console.log(VERSION+' loaded: every operation is captured immediately, persisted to IndexedDB, cloud-verified in order, and protected from stale snapshot rollback.');
 })();
 </script>
@@ -15383,5 +15393,562 @@ ${preview}
 })();
 
 </script>
+<script>
+/* ==================== V47.12 基础数据导入完整性校验 ==================== */
+(function(){
+  'use strict';
+  const W = window;
+  const VERSION = 'V47.12 Import Validation Guard';
+  const REQUIRED_FIELDS = [
+    {index:0, key:'batch', label:'批次'},
+    {index:1, key:'seq', label:'集装箱序号'},
+    {index:2, key:'containerNo', label:'集装箱号'},
+    {index:3, key:'vessel', label:'船公司'},
+    {index:4, key:'containerType', label:'箱型'},
+    {index:5, key:'eta', label:'到港时间'},
+    {index:6, key:'bls', label:'提单号'}
+  ];
+
+  function text(v){
+    if(v === null || v === undefined) return '';
+    return String(v).replace(/\u00a0/g, ' ').trim();
+  }
+  function upper(v){ return text(v).toUpperCase(); }
+  function esc(v){
+    return text(v).replace(/[&<>"']/g, function(ch){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];
+    });
+  }
+  function dateOnly(v){
+    const raw = text(v);
+    if(!raw) return '';
+    try{
+      if(typeof fmtDate === 'function'){
+        const f = text(fmtDate(raw));
+        if(/^\d{4}-\d{2}-\d{2}$/.test(f)) return f;
+      }
+    }catch(_){ }
+    let m = raw.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+    if(m) return `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;
+    m = raw.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+    if(m) return `${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
+    const d = new Date(raw);
+    if(!Number.isNaN(d.getTime())) return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    return '';
+  }
+  function validDate(v){
+    const s = dateOnly(v);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+    const d = new Date(s + 'T00:00:00');
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0,10) === s;
+  }
+  function normalizedContainerNo(v){ return upper(v).replace(/[\s-]+/g, ''); }
+  function relationKey(r){ return [normalizedContainerNo(r.containerNo), upper(r.batch), upper(r.seq)].join('|'); }
+  function headerMatches(actual, field){
+    const h = upper(actual).replace(/[\s（）()：:]/g,'');
+    const aliases = {
+      batch:['批次','BATCH'],
+      seq:['集装箱序号','序号','CONTAINERSEQ','SEQ'],
+      containerNo:['集装箱号','箱号','CONTAINERNO','CONTAINERNUMBER'],
+      vessel:['船公司','承运人','SHIPPINGCOMPANY','CARRIER','VESSEL'],
+      containerType:['箱型','集装箱类型','CONTAINERTYPE','TYPE'],
+      eta:['到港时间','到港日期','ETA','ARRIVALDATE'],
+      bls:['提单号','提单号长荣格式主提单号|分提单号','BL','BLNO','BILL OF LADING','BILLOFLADING']
+    };
+    return (aliases[field.key] || []).some(a => h === upper(a).replace(/[\s（）()：:]/g,''));
+  }
+  function isBlankRow(row){ return !Array.isArray(row) || row.slice(0,7).every(v => !text(v)); }
+  function rowObject(row, excelRow){
+    return {
+      excelRow,
+      batch:text(row[0]),
+      seq:text(row[1]),
+      containerNo:text(row[2]),
+      vessel:text(row[3]),
+      containerType:text(row[4]),
+      eta:text(row[5]),
+      bls:text(row[6])
+    };
+  }
+  function currentContainers(){
+    try{ return Array.isArray(containers) ? containers : []; }catch(_){ return []; }
+  }
+  function nextContainerId(){
+    try{
+      if(!nextIds || typeof nextIds !== 'object') return Date.now() + Math.floor(Math.random()*1000);
+      if(!Number(nextIds.container)) nextIds.container = 1;
+      return nextIds.container++;
+    }catch(_){ return Date.now() + Math.floor(Math.random()*1000); }
+  }
+  function createBlRelation(containerId, vessel, raw, no){
+    try{
+      if(typeof createBlForContainer === 'function'){
+        createBlForContainer(containerId, vessel, raw, no);
+        return;
+      }
+    }catch(_){ }
+    const value = text(raw);
+    const parts = value.split('|').map(text);
+    const isEvergreen = /长荣|EVERGREEN|EMC/i.test(text(vessel));
+    const key = isEvergreen ? (parts[1] || parts[0]) : value;
+    if(!key) throw new Error(`集装箱 ${no} 的提单号无效`);
+    try{
+      const list = Array.isArray(blList) ? blList : [];
+      const maps = Array.isArray(containerBlMap) ? containerBlMap : [];
+      let bl = list.find(x => upper(x.blNo || x.houseBlNo) === upper(key));
+      if(!bl){
+        bl = isEvergreen
+          ? {carrier:'长荣', masterBlNo:parts[0] || key, houseBlNo:key, iraNo:'', isCleared:false, channel:'绿色', clearanceDate:null}
+          : {carrier:text(vessel), blNo:key, iraNo:'', isCleared:false, channel:'绿色', clearanceDate:null};
+        list.push(bl);
+      }
+      if(!maps.some(m => String(m.containerId) === String(containerId) && upper(m.blNo) === upper(key))) maps.push({containerId, blNo:key});
+    }catch(err){ throw err; }
+  }
+
+  function validateWorkbookRows(rows){
+    const errors = [];
+    if(!Array.isArray(rows) || rows.length < 2){
+      errors.push({row:1, field:'文件', message:'Excel中没有可导入的数据行。', value:''});
+      return {errors, records:[]};
+    }
+    const header = rows[0] || [];
+    REQUIRED_FIELDS.forEach(field => {
+      if(!headerMatches(header[field.index], field)){
+        errors.push({row:1, field:field.label, message:`第 ${field.index+1} 列表头应为“${field.label}”。请使用系统导出的模板。`, value:text(header[field.index])});
+      }
+    });
+
+    const records = [];
+    for(let i=1; i<rows.length; i++){
+      const row = rows[i] || [];
+      if(isBlankRow(row)) continue;
+      const rec = rowObject(row, i+1);
+      REQUIRED_FIELDS.forEach(field => {
+        if(!text(rec[field.key])){
+          errors.push({row:i+1, field:field.label, message:`“${field.label}”不能为空。`, value:'' , containerNo:rec.containerNo, batch:rec.batch});
+        }
+      });
+      if(rec.eta && !validDate(rec.eta)){
+        errors.push({row:i+1, field:'到港时间', message:'日期格式无法识别，请使用 YYYY-MM-DD 或 DD/MM/YYYY。', value:rec.eta, containerNo:rec.containerNo, batch:rec.batch});
+      }
+      if(rec.bls){
+        const blItems = rec.bls.split(',');
+        if(blItems.some(x => !text(x))){
+          errors.push({row:i+1, field:'提单号', message:'提单号列表中存在空项，请检查多余的逗号。', value:rec.bls, containerNo:rec.containerNo, batch:rec.batch});
+        }
+      }
+      records.push(rec);
+    }
+    if(!records.length && !errors.length) errors.push({row:1, field:'文件', message:'Excel中没有非空数据行。', value:''});
+
+    // 文件内部及与现有系统数据的一致性校验。
+    const existing = currentContainers();
+    const existingByNo = new Map();
+    existing.forEach(c => {
+      const key = normalizedContainerNo(c.containerNo);
+      if(!key) return;
+      if(!existingByNo.has(key)) existingByNo.set(key, []);
+      existingByNo.get(key).push(c);
+    });
+    const importByNo = new Map();
+    records.forEach(rec => {
+      const key = normalizedContainerNo(rec.containerNo);
+      if(!key) return;
+      if(!importByNo.has(key)) importByNo.set(key, []);
+      importByNo.get(key).push(rec);
+    });
+
+    importByNo.forEach((group, noKey) => {
+      const commonFields = [
+        {key:'vessel', label:'船公司', normalize:upper},
+        {key:'containerType', label:'箱型', normalize:upper},
+        {key:'eta', label:'到港时间', normalize:dateOnly}
+      ];
+      commonFields.forEach(field => {
+        const values = [...new Set(group.map(r => field.normalize(r[field.key])).filter(Boolean))];
+        if(values.length > 1){
+          group.forEach(r => errors.push({row:r.excelRow, field:field.label, message:`同一物理集装箱 ${r.containerNo} 的“${field.label}”在本次文件中不一致。`, value:r[field.key], containerNo:r.containerNo, batch:r.batch}));
+        }
+      });
+      const existingGroup = existingByNo.get(noKey) || [];
+      const master = existingGroup[0];
+      if(master){
+        group.forEach(r => {
+          const checks = [
+            ['vessel','船公司', upper(master.vessel || master.carrier), upper(r.vessel)],
+            ['containerType','箱型', upper(master.containerType), upper(r.containerType)],
+            ['eta','到港时间', dateOnly(master.eta || master.arrivalDate), dateOnly(r.eta)]
+          ];
+          checks.forEach(([key,label,oldVal,newVal]) => {
+            if(oldVal && newVal && oldVal !== newVal){
+              errors.push({row:r.excelRow, field:label, message:`该箱号已存在，导入值与系统中的物理集装箱公共信息不一致。系统值：${oldVal}`, value:r[key], containerNo:r.containerNo, batch:r.batch});
+            }
+          });
+        });
+      }
+    });
+
+    // 同一箱号+批次只允许一个序号；同文件冲突必须阻断。
+    const batchSeqMap = new Map();
+    existing.forEach(c => {
+      const key = normalizedContainerNo(c.containerNo) + '|' + upper(c.batch);
+      if(normalizedContainerNo(c.containerNo) && upper(c.batch)) batchSeqMap.set(key, upper(c.containerSeq || c.seq));
+    });
+    records.forEach(r => {
+      const key = normalizedContainerNo(r.containerNo) + '|' + upper(r.batch);
+      const seq = upper(r.seq);
+      if(batchSeqMap.has(key) && batchSeqMap.get(key) !== seq){
+        errors.push({row:r.excelRow, field:'集装箱序号', message:`同一箱号和批次已存在其他序号：${batchSeqMap.get(key)}。`, value:r.seq, containerNo:r.containerNo, batch:r.batch});
+      }else if(!batchSeqMap.has(key)){
+        batchSeqMap.set(key, seq);
+      }
+    });
+
+    return {errors, records};
+  }
+
+  function showValidationErrors(errors){
+    W.__v4712ImportErrors = errors.slice();
+    const shown = errors.slice(0,200);
+    const rowsHtml = shown.map(e => `<tr><td>${e.row}</td><td>${esc(e.batch || '-')}</td><td>${esc(e.containerNo || '-')}</td><td>${esc(e.field)}</td><td>${esc(e.value || '-')}</td><td style="text-align:left!important">${esc(e.message)}</td></tr>`).join('');
+    const more = errors.length > shown.length ? `<div style="margin-top:8px;color:#e6a23c">页面仅展示前 ${shown.length} 项，完整错误可导出Excel。</div>` : '';
+    const title = document.getElementById('modalTitle');
+    const body = document.getElementById('modalBody');
+    if(title) title.innerText = '基础数据导入校验失败';
+    if(body) body.innerHTML = `
+      <div style="padding:10px 12px;background:#fef0f0;border:1px solid #fbc4c4;border-radius:6px;color:#c45656;line-height:1.7">
+        检测到 <b>${errors.length}</b> 项错误。为避免产生不完整数据，本次Excel中的所有数据均未导入。
+      </div>
+      <div class="table-wrapper" style="max-height:55vh;margin-top:12px">
+        <table class="data-table"><thead><tr><th>Excel行号</th><th>批次</th><th>集装箱号</th><th>错误字段</th><th>原值</th><th>错误原因</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+      </div>${more}
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+        <button class="btn export-btn" onclick="exportImportValidationErrorsV4712()">导出错误明细</button>
+        <button class="btn" onclick="showImport()">返回重新选择</button>
+        <button class="btn btn-primary" onclick="closeModal()">关闭</button>
+      </div>`;
+    try{ if(typeof openModal === 'function') openModal(); }catch(_){ }
+  }
+
+  W.exportImportValidationErrorsV4712 = function(){
+    const errors = Array.isArray(W.__v4712ImportErrors) ? W.__v4712ImportErrors : [];
+    if(!errors.length) return alert('没有可导出的错误记录。');
+    if(typeof XLSX === 'undefined') return alert('Excel组件未加载。');
+    const data = errors.map(e => ({Excel行号:e.row, 批次:e.batch || '', 集装箱号:e.containerNo || '', 错误字段:e.field || '', 原值:e.value || '', 错误原因:e.message || ''}));
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws['!autofilter'] = {ref:ws['!ref']};
+    ws['!cols'] = [{wch:12},{wch:16},{wch:18},{wch:16},{wch:24},{wch:60}];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '导入错误明细');
+    XLSX.writeFile(wb, `基础数据导入错误_${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
+
+  W.showImport = function(){
+    const title = document.getElementById('modalTitle');
+    const body = document.getElementById('modalBody');
+    if(title) title.innerText = '批量导入基础数据';
+    if(body) body.innerHTML = `
+      <div style="padding:10px 12px;background:#ecf5ff;border:1px solid #b3d8ff;border-radius:6px;color:#409eff;line-height:1.7;margin-bottom:12px">
+        导入前将对整份文件进行校验。以下字段全部为必填：<b>批次、集装箱序号、集装箱号、船公司、箱型、到港时间、提单号</b>。<br>
+        任意一行存在缺失或冲突时，本次文件将整体停止导入，不会产生部分成功、部分失败的数据。
+      </div>
+      <input type="file" id="importFile" accept=".xlsx,.xls">
+      <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn export-btn" onclick="exportTemplate()">下载/导出模板</button>
+        <button class="btn btn-primary" onclick="importExcel()">校验并导入</button>
+      </div>`;
+    try{ if(typeof openModal === 'function') openModal(); }catch(_){ }
+  };
+  try{ showImport = W.showImport; }catch(_){ }
+
+  W.importExcel = function(){
+    const file = document.getElementById('importFile')?.files?.[0];
+    if(!file) return alert('请选择Excel文件。');
+    const reader = new FileReader();
+    reader.onload = function(e){
+      try{
+        const workbook = XLSX.read(new Uint8Array(e.target.result), {type:'array', cellDates:true});
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        if(!sheet) return showValidationErrors([{row:1, field:'工作表', message:'Excel中没有可读取的工作表。', value:''}]);
+        const rows = XLSX.utils.sheet_to_json(sheet, {header:1, defval:'', raw:false});
+        const checked = validateWorkbookRows(rows);
+        if(checked.errors.length) return showValidationErrors(checked.errors);
+
+        const existingRelations = new Set(currentContainers().map(c => [normalizedContainerNo(c.containerNo), upper(c.batch), upper(c.containerSeq || c.seq)].join('|')));
+        const groupExists = new Set(currentContainers().map(c => normalizedContainerNo(c.containerNo)).filter(Boolean));
+        let newPhysical = 0, newLinks = 0, sharedLinks = 0, duplicate = 0;
+        const accepted = [];
+        checked.records.forEach(r => {
+          const rk = relationKey(r);
+          if(existingRelations.has(rk)){ duplicate++; return; }
+          accepted.push(r);
+          existingRelations.add(rk);
+        });
+
+        if(!accepted.length){
+          return alert(`校验通过，但没有新增数据。完全重复记录 ${duplicate} 条，已全部跳过。`);
+        }
+
+        accepted.forEach(r => {
+          const noKey = normalizedContainerNo(r.containerNo);
+          const master = currentContainers().find(c => normalizedContainerNo(c.containerNo) === noKey);
+          const id = nextContainerId();
+          const row = {
+            id,
+            batch:r.batch,
+            containerSeq:r.seq,
+            containerNo:r.containerNo,
+            vessel:master?.vessel || master?.carrier || r.vessel,
+            containerType:master?.containerType || r.containerType,
+            eta:master?.eta || dateOnly(r.eta),
+            actualPickupTime:master?.actualPickupTime || null,
+            physicalContainerId:master?.physicalContainerId || undefined
+          };
+          containers.push(row);
+          newLinks++;
+          if(groupExists.has(noKey)) sharedLinks++; else { newPhysical++; groupExists.add(noKey); }
+          r.bls.split(',').map(text).filter(Boolean).forEach(bl => createBlRelation(id, row.vessel, bl, row.containerNo));
+        });
+
+        try{ W.prepareSharedContainerStateV4711 && W.prepareSharedContainerStateV4711(); }catch(_){ }
+        try{ if(typeof updateContainerStatus === 'function') updateContainerStatus(); }catch(_){ }
+        const saveResult = (typeof W.saveData === 'function' ? W.saveData('import_validated_complete_basic_data') : (typeof saveData === 'function' ? saveData('import_validated_complete_basic_data') : true));
+        Promise.resolve(saveResult).then(() => {
+          try{ if(typeof closeModal === 'function') closeModal(); }catch(_){ }
+          try{ if(typeof W.renderContainerTable === 'function') W.renderContainerTable(1); else if(typeof renderContainerTable === 'function') renderContainerTable(1); }catch(_){ }
+          alert(`基础数据导入成功。\n新增物理集装箱：${newPhysical}个\n新增批次关系：${newLinks}条\n其中新增共箱关系：${sharedLinks}条\n完全重复跳过：${duplicate}条\n\n本次文件已通过完整性校验，未生成缺失字段记录。`);
+        }).catch(err => {
+          console.error(err);
+          alert('数据已写入当前页面，但云端保存失败，请立即导出备份并重试保存：' + (err?.message || err));
+        });
+      }catch(err){
+        console.error(err);
+        showValidationErrors([{row:1, field:'文件', message:'Excel解析失败：' + (err?.message || err), value:file.name}]);
+      }
+    };
+    reader.onerror = function(){ showValidationErrors([{row:1, field:'文件', message:'浏览器无法读取该文件，请重新选择。', value:file.name}]); };
+    reader.readAsArrayBuffer(file);
+  };
+  try{ importExcel = W.importExcel; }catch(_){ }
+
+  function setVersion(){
+    try{
+      document.title = 'Sistema Inteligente de Monitoramento de Contêineres V47.12';
+      document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el => {
+        if(/V47\.11|Shared Container Customs Core/i.test(text(el.textContent))) el.textContent = 'V47.12';
+      });
+    }catch(_){ }
+  }
+  setVersion();
+  document.addEventListener('DOMContentLoaded', () => setTimeout(setVersion, 600));
+  setTimeout(setVersion, 1800);
+  console.log(VERSION + ' loaded: atomic full-file validation prevents incomplete basic-data imports.');
+})();
+</script>
+
+
+<script>
+/* ==================== V47.13 Instant Access & Background Sync ====================
+   - Authentication/profile validation is separated from business-data synchronization.
+   - The main application opens immediately after authorization.
+   - Cached data is shown first; cloud checkpoint, journal and pending uploads synchronize in background.
+   - Saving completes for the UI after IndexedDB durability; cloud upload never blocks the page.
+   - The login screen is never covered by save/retry indicators.
+=============================================================================== */
+(function(){
+  'use strict';
+  const W=window;
+  const VERSION='V47.13 Instant Access & Background Sync';
+  const MODULES=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig'];
+  const OBJECTS=['nextIds','warningConfig'];
+  const CORE=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans'];
+  const CACHE_DB='cms_v4713_boot_cache';
+  const CACHE_STORE='state_cache';
+  const CACHE_KEY='latest';
+  const backgroundLoad=W.loadCloudState;
+  const backgroundRealtime=W.startRealtimeSync;
+  const journalQueue=W.queueSaveV479||W.queueSaveV478||W.queueSaveV473||W.saveData;
+  let loginPromise=null, syncPromise=null, cacheTimer=null, cacheDbPromise=null;
+
+  const A=v=>Array.isArray(v)?v:[];
+  const S=v=>String(v==null?'':v).trim();
+  const clone=v=>{try{return structuredClone(v);}catch(_){return JSON.parse(JSON.stringify(v));}};
+  function get(name,fallback){try{const v=eval(name);return v===undefined?fallback:v;}catch(_){return W[name]===undefined?fallback:W[name];}}
+  function replaceArray(name,value){const target=get(name,null);if(Array.isArray(target))target.splice(0,target.length,...A(value));else try{W[name]=A(value);}catch(_){} }
+  function replaceObject(name,value){const target=get(name,null);if(target&&typeof target==='object'&&!Array.isArray(target)){Object.keys(target).forEach(k=>delete target[k]);Object.assign(target,value||{});}else try{W[name]=value||{};}catch(_){} }
+  function coreCount(){return CORE.reduce((n,k)=>n+A(get(k,[])).length,0);}
+  function stateSnapshot(){const st={};MODULES.forEach(k=>st[k]=clone(A(get(k,[]))));OBJECTS.forEach(k=>st[k]=clone(get(k,{})||{}));return st;}
+  function applySnapshot(st){if(!st||typeof st!=='object')return false;MODULES.forEach(k=>replaceArray(k,A(st[k])));OBJECTS.forEach(k=>replaceObject(k,st[k]||{}));try{if(typeof W.normalizeStateV455==='function')W.normalizeStateV455(false);}catch(_){ }try{if(typeof updateContainerStatus==='function')updateContainerStatus();}catch(_){ }return true;}
+  function timeout(p,ms,label){return Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error(label||'请求超时')),ms))]);}
+
+  function cacheDb(){
+    if(cacheDbPromise)return cacheDbPromise;
+    cacheDbPromise=new Promise((resolve,reject)=>{
+      try{
+        const req=indexedDB.open(CACHE_DB,1);
+        req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains(CACHE_STORE))db.createObjectStore(CACHE_STORE,{keyPath:'key'});};
+        req.onsuccess=()=>resolve(req.result);
+        req.onerror=()=>reject(req.error||new Error('启动缓存打开失败'));
+      }catch(e){reject(e);}
+    });
+    return cacheDbPromise;
+  }
+  async function readCache(email){
+    const db=await cacheDb();
+    return new Promise((resolve,reject)=>{const tx=db.transaction(CACHE_STORE,'readonly'),req=tx.objectStore(CACHE_STORE).get(CACHE_KEY);req.onsuccess=()=>{const row=req.result;if(!row||!row.state)return resolve(null);if(row.userEmail&&email&&S(row.userEmail).toLowerCase()!==S(email).toLowerCase())return resolve(null);resolve(row);};req.onerror=()=>reject(req.error||new Error('启动缓存读取失败'));});
+  }
+  async function writeCache(){
+    if(coreCount()<=0)return false;
+    const db=await cacheDb();
+    const row={key:CACHE_KEY,userEmail:(W.cloudUser&&W.cloudUser.email)||(typeof cloudUser!=='undefined'&&cloudUser&&cloudUser.email)||'',savedAt:new Date().toISOString(),state:stateSnapshot()};
+    return new Promise((resolve,reject)=>{const tx=db.transaction(CACHE_STORE,'readwrite');tx.objectStore(CACHE_STORE).put(row);tx.oncomplete=()=>resolve(true);tx.onerror=()=>reject(tx.error||new Error('启动缓存写入失败'));});
+  }
+  function scheduleCache(delay){if(cacheTimer)clearTimeout(cacheTimer);cacheTimer=setTimeout(()=>{cacheTimer=null;writeCache().catch(e=>console.warn('V47.13 boot cache skipped',e));},delay==null?900:delay);}
+
+  function isLoginVisible(){const login=document.getElementById('loginPage'),main=document.getElementById('mainApp');return !!(login&&login.style.display!=='none'&&(!main||main.style.display==='none'));}
+  function syncBadge(){
+    let el=document.getElementById('v4713SyncBadge');
+    if(el)return el;
+    el=document.createElement('div');
+    el.id='v4713SyncBadge';
+    el.style.cssText='position:fixed;right:16px;bottom:14px;z-index:99998;display:none;align-items:center;gap:7px;padding:8px 12px;border-radius:999px;font-size:12px;font-weight:700;box-shadow:0 2px 12px rgba(0,0,0,.13);border:1px solid #b3d8ff;background:#ecf5ff;color:#2b5aa6;pointer-events:none';
+    document.body.appendChild(el);return el;
+  }
+  function setSync(text,type,hold){
+    const el=syncBadge();
+    if(isLoginVisible()){el.style.display='none';return;}
+    const map={syncing:['#ecf5ff','#2b5aa6','#b3d8ff','↻'],ok:['#f0f9eb','#2f7d32','#c2e7b0','✓'],local:['#fdf6ec','#9a5a00','#f5dab1','•'],error:['#fef0f0','#c73636','#f5c2c2','!']};
+    const c=map[type]||map.syncing;el.innerHTML=`<span>${c[3]}</span><span>${text}</span>`;el.style.background=c[0];el.style.color=c[1];el.style.borderColor=c[2];el.style.display='flex';
+    if(hold!==true)setTimeout(()=>{if(el.textContent.includes(text))el.style.display='none';},typeof hold==='number'?hold:2600);
+    try{if(typeof W.showRealtimeSyncHint==='function')W.showRealtimeSyncHint(text);}catch(_){ }
+  }
+  function renderAll(){try{if(typeof renderSidebar==='function')renderSidebar();if(typeof renderContent==='function')renderContent();if(typeof applyLanguage==='function')applyLanguage();}catch(e){console.warn('V47.13 render skipped',e);}}
+
+  function mountAuthorizedApp(profile,user){
+    try{W.cloudUser=cloudUser=user;}catch(_){W.cloudUser=user;}
+    try{W.cloudProfile=cloudProfile=profile;}catch(_){W.cloudProfile=profile;}
+    let mapped=null;try{mapped=typeof mapProfileToCurrentUser==='function'?mapProfileToCurrentUser(profile,user):{email:user.email,name:profile.name||user.email,role:profile.role||'订购科'};}catch(_){mapped={email:user.email,name:profile.name||user.email,role:profile.role||'订购科'};}
+    try{W.currentUser=currentUser=mapped;}catch(_){W.currentUser=mapped;}
+    try{currentMenu=(mapped.role==='订购科'||(typeof isAdminUser==='function'&&isAdminUser()))?'dashboard':(allMenus.find(m=>canAccessMenu(m))?.id||'containers');W.currentMenu=currentMenu;}catch(_){ }
+
+    if(coreCount()===0){try{if(typeof loadLocalDataOnly==='function')loadLocalDataOnly();}catch(e){console.warn('V47.13 local startup data skipped',e);}}
+    const login=document.getElementById('loginPage'),main=document.getElementById('mainApp');if(login)login.style.display='none';if(main)main.style.display='block';
+    const role=document.getElementById('currentRole'),name=document.getElementById('currentUser');if(role)role.innerText=mapped.role||'';if(name)name.innerText=mapped.name||mapped.email||user.email||'';
+    renderAll();
+    setSync('已登录 · 云端数据后台同步中','syncing',true);
+  }
+
+  async function backgroundBootstrap(email){
+    if(syncPromise)return syncPromise;
+    syncPromise=(async()=>{
+      W.__v4713AllowBackgroundSync=true;
+      try{
+        if(coreCount()===0){
+          const cached=await timeout(readCache(email),1500,'启动缓存读取超时').catch(()=>null);
+          if(cached&&cached.state&&coreCount()===0){applySnapshot(cached.state);renderAll();setSync('已加载本机缓存 · 云端同步中','syncing',true);}
+        }
+        if(typeof backgroundRealtime==='function'){try{backgroundRealtime.call(W);}catch(_){ }}
+        if(typeof backgroundLoad==='function')await backgroundLoad.call(W,'v4713_background_login');
+        scheduleCache(100);
+        setSync('云端数据已同步','ok',2200);
+        return true;
+      }catch(e){
+        console.warn('V47.13 background bootstrap deferred',e);
+        setSync(navigator.onLine?'云端同步较慢 · 已使用本机数据':'当前离线 · 操作将自动续传',navigator.onLine?'local':'error',true);
+        try{if(typeof backgroundRealtime==='function')backgroundRealtime.call(W);}catch(_){ }
+        return false;
+      }finally{syncPromise=null;}
+    })();
+    return syncPromise;
+  }
+
+  async function authorizedSession(){
+    const sb=typeof initSupabaseClient==='function'?initSupabaseClient():null;if(!sb)throw new Error('Supabase未连接');
+    const sessionResult=await timeout(sb.auth.getSession(),9000,'读取登录会话超时');
+    if(sessionResult&&sessionResult.error)throw sessionResult.error;
+    const session=sessionResult&&sessionResult.data&&sessionResult.data.session;if(!session||!session.user)return null;
+    const user=session.user;
+    const profileResult=await timeout(sb.from('user_profiles').select('*').ilike('email',user.email).maybeSingle(),9000,'读取用户权限超时');
+    if(profileResult&&profileResult.error)throw profileResult.error;
+    return{user,profile:profileResult&&profileResult.data};
+  }
+
+  async function fastEnsureCloudSession(){
+    if(loginPromise)return loginPromise;
+    loginPromise=(async()=>{
+      try{
+        const auth=await authorizedSession();
+        if(!auth)return false;
+        const {user,profile}=auth;
+        if(!profile||profile.is_active===false){
+          const login=document.getElementById('loginPage'),main=document.getElementById('mainApp');if(login)login.style.display='none';if(main)main.style.display='block';
+          const side=document.getElementById('sidebar'),content=document.getElementById('mainContent');if(side)side.innerHTML='';if(content)content.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">⏳ 等待管理员授权</span></div><p>当前账号：<b>${S(user.email)}</b></p><p style="margin-top:10px;color:#606266;">该账号尚未在 user_profiles 中分配角色，请联系系统管理员添加权限。</p><button class="btn btn-primary" onclick="logoutCloud()">退出</button></div>`;
+          return false;
+        }
+        mountAuthorizedApp(profile,user);
+        setTimeout(()=>backgroundBootstrap(user.email),0);
+        return true;
+      }catch(e){console.error('V47.13 login failed',e);alert('登录失败：'+(e&&e.message||e));return false;}
+      finally{loginPromise=null;}
+    })();
+    return loginPromise;
+  }
+
+  W.ensureCloudSession=fastEnsureCloudSession;
+  W.loadData=async function(){
+    const ok=await fastEnsureCloudSession();
+    if(!ok){const login=document.getElementById('loginPage'),main=document.getElementById('mainApp');if(login&&(!main||main.style.display==='none'))login.style.display='flex';if(main&&main.style.display!=='block')main.style.display='none';}
+    return ok;
+  };
+  try{ensureCloudSession=W.ensureCloudSession;loadData=W.loadData;}catch(_){ }
+
+  W.loginWithEmailPassword=async function(){
+    const sb=typeof initSupabaseClient==='function'?initSupabaseClient():null;
+    const email=document.getElementById('loginEmail')?.value.trim().toLowerCase();
+    const password=document.getElementById('loginPassword')?.value||'';
+    if(!email)return alert('请输入邮箱');if(!password)return alert('请输入密码');
+    const btn=document.querySelector('button[onclick="loginWithEmailPassword()"]');const old=btn&&btn.textContent;if(btn){btn.disabled=true;btn.textContent='正在验证账号…';}
+    try{const r=await timeout(sb.auth.signInWithPassword({email,password}),12000,'账号验证超时');if(r&&r.error)throw r.error;await fastEnsureCloudSession();}
+    catch(e){alert('邮箱登录失败：'+(e&&e.message||e));}
+    finally{if(btn){btn.disabled=false;btn.textContent=old||'邮箱 + 密码登录';}}
+  };
+  try{loginWithEmailPassword=W.loginWithEmailPassword;}catch(_){ }
+
+  function queueWithCache(reason){
+    if(typeof journalQueue!=='function')return Promise.resolve(false);
+    const p=Promise.resolve(journalQueue.call(W,reason||'saveData'));
+    p.then(ok=>{if(ok!==false)scheduleCache(700);}).catch(()=>{});
+    return p;
+  }
+  W.queueSaveV479=W.queueSaveV478=W.queueSaveV473=W.queueSaveV455=W.queueSystemSaveV4513=W.queueCloudPersistV435=queueWithCache;
+  W.saveData=function(reason){return queueWithCache(reason||'saveData');};
+  W.saveCloudState=function(reason){return queueWithCache(reason||'saveCloudState');};
+  W.saveCloudStateV45=W.saveCloudStateV44=W.saveCloudStateV442=W.saveCloudState;
+  W.saveAndRenderContentKeepState=function(){let ui=null;try{ui=typeof W.captureCurrentUiStateV4513==='function'?W.captureCurrentUiStateV4513():{scrollY:scrollY};}catch(_){ui={scrollY:scrollY};}renderAll();try{if(typeof W.restoreCurrentUiStateV4513==='function')setTimeout(()=>W.restoreCurrentUiStateV4513(ui),0);}catch(_){ }return queueWithCache('save_and_render_v4713');};
+  try{saveData=W.saveData;saveCloudState=W.saveCloudState;saveAndRenderContentKeepState=W.saveAndRenderContentKeepState;queueSaveV473=W.queueSaveV473;queueSaveV455=W.queueSaveV455;}catch(_){ }
+
+  W.addEventListener('online',()=>{if(!isLoginVisible()){setSync('网络已恢复 · 正在续传','syncing',true);backgroundBootstrap((W.cloudUser&&W.cloudUser.email)||'');}});
+  W.addEventListener('offline',()=>{if(!isLoginVisible())setSync('当前离线 · 数据已保存在本机','error',true);});
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')scheduleCache(0);});
+
+  const style=document.createElement('style');
+  style.textContent=`#loginPage~#v479SaveIndicator,#loginPage~#v478SaveIndicator{display:none!important}body.v4713-login-visible #v479SaveIndicator,body.v4713-login-visible #v4713SyncBadge{display:none!important}.login-card button:disabled{opacity:.72;cursor:wait}`;
+  document.head.appendChild(style);
+  function version(){
+    try{
+      document.title='Sistema Inteligente de Monitoramento de Contêineres V47.13';
+      const card=document.querySelector('.login-card');if(card){const sub=[...card.querySelectorAll('div,p')].find(el=>/V4\d|Stable|Clean|Safe|Instant Access|修复/i.test(S(el.textContent)));if(sub)sub.textContent='V47.13 Instant Access：登录与云端同步分离；数据在后台同步，不再阻塞登录和页面操作。';}
+      document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.(9|10|11|12)|Ordered Local-First|Full Basic Data Export|Shared Container|Import Validation/i.test(S(el.textContent)))el.textContent='V47.13';});
+      document.body.classList.toggle('v4713-login-visible',isLoginVisible());
+    }catch(_){ }
+  }
+  const observer=new MutationObserver(()=>version());
+  document.addEventListener('DOMContentLoaded',()=>{version();try{observer.observe(document.querySelector('.login-card')||document.body,{subtree:true,childList:true,characterData:true});}catch(_){ }setTimeout(version,800);setTimeout(version,2600);setTimeout(version,6500);});
+  setTimeout(version,100);setTimeout(version,2300);setTimeout(version,6800);
+  console.log(VERSION+' loaded: authorized users enter immediately; all checkpoint/journal uploads continue in the background.');
+})();
+</script>
+
 </body>
 </html>
