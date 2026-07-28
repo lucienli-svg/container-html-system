@@ -16179,7 +16179,7 @@ window.__v479JournalOwnsSync = true;
   document.head.appendChild(style);
   function version(){
     try{
-      if(document.title!=='Sistema Inteligente de Monitoramento de Contêineres V48.4')document.title='Sistema Inteligente de Monitoramento de Contêineres V48.5';
+      if(document.title!=='Sistema Inteligente de Monitoramento de Contêineres V48.4')document.title='Sistema Inteligente de Monitoramento de Contêineres V48.6';
       const card=document.querySelector('.login-card');if(card){const sub=[...card.querySelectorAll('div,p')].find(el=>/V4\d|Stable|Clean|Safe|Instant Access|修复/i.test(S(el.textContent)));if(sub){const t='V48.1 Fast Read Model：登录即时进入；逐行原子保存；服务器读取模型即时加载；完整快照仅用于备份。';if(S(sub.textContent)!==t)sub.textContent=t;}}
       document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.(9|10|11|12)|Ordered Local-First|Full Basic Data Export|Shared Container|Import Validation/i.test(S(el.textContent))){if(S(el.textContent)!=='V48.1')el.textContent='V48.1';}});
       document.body.classList.toggle('v4713-login-visible',isLoginVisible());
@@ -16220,7 +16220,7 @@ window.__v479JournalOwnsSync = true;
 (function(){
   'use strict';
   const W=window;
-  const VERSION='V48.5 Targeted Save & Realtime Fix';
+  const VERSION='V48.6 IRA Persistence & Queue Drain Fix';
   const MODULES=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig','nextIds','warningConfig'];
   const ARRAY_MODULES=new Set(['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig']);
   const SMALL_MODULES=['nextIds','warningConfig'];
@@ -16440,6 +16440,31 @@ window.__v479JournalOwnsSync = true;
       baselines.set(module,base);
     }));
   }
+
+  async function reapplyPendingForModuleV486(module){
+    const pending=await queueAll();
+    if(!pending.length)return false;
+    if(ARRAY_MODULES.has(module)){
+      const map=new Map(A(getValue(module)).map(x=>[recordKey(module,x),x]));
+      pending.forEach(op=>A(op.changes).filter(c=>c.module===module).forEach(c=>{
+        if(c.action==='delete')map.delete(c.key);else map.set(c.key,clone(c.payload||{}));
+      }));
+      setValue(module,[...map.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(x=>x[1]));
+    }else{
+      pending.forEach(op=>A(op.changes).filter(c=>c.module===module&&c.action!=='delete').forEach(c=>setValue(module,clone(c.payload||{}))));
+    }
+    const base=baselines.get(module)||new Map();
+    pending.forEach(op=>A(op.changes).filter(c=>c.module===module).forEach(c=>{
+      if(c.action==='delete')base.delete(c.key);
+      else{
+        const p=persistentPayload(module,c.payload||{});
+        base.set(c.key,{payload:p,version:N(c.expectedVersion)+1,hash:hash(p)});
+      }
+    }));
+    baselines.set(module,base);
+    return true;
+  }
+
   async function ensureModules(modules,opts={}){
     const requested=[...new Set(A(modules).filter(Boolean))];
     const missing=opts.force?requested:requested.filter(m=>!loadedModules.has(m));
@@ -16610,6 +16635,23 @@ window.__v479JournalOwnsSync = true;
     applyOptimistic(op);setStatus('本机已记录 · 云端快速写入中','syncing');setTimeout(processQueue,0);return true;
   }
   W.queueTargetedSaveV485=queueTargetedSave;
+  W.queueTargetedSaveAndConfirmV486=async function(items,reason){
+    let op;try{op=createTargetedOperation(items,reason);}catch(e){alert('定向保存校验失败：'+S(e&&e.message||e));return{queued:false,cloudSaved:false,pending:(await queueAll()).length,error:e};}
+    if(!op)return{queued:true,cloudSaved:true,pending:(await queueAll()).length};
+    if(op.blocked){alert(op.blocked);return{queued:false,cloudSaved:false,pending:(await queueAll()).length};}
+    try{await queuePut(op);}catch(e){alert('浏览器本地安全队列写入失败：'+S(e&&e.message||e));setStatus('本地保存失败','error');return{queued:false,cloudSaved:false,pending:(await queueAll()).length,error:e};}
+    applyOptimistic(op);setStatus('本机已记录 · 云端快速写入中','syncing');setTimeout(processQueue,0);
+    const deadline=Date.now()+Math.max(12000,RPC_TIMEOUT*2);
+    while(Date.now()<deadline){
+      await processQueue();
+      const list=await queueAll(),mine=list.find(x=>x.opId===op.opId);
+      if(!mine)return{queued:true,cloudSaved:true,pending:list.length};
+      if(mine.status==='conflict')return{queued:true,cloudSaved:false,pending:list.length,conflict:true};
+      await new Promise(r=>setTimeout(r,120));
+    }
+    const list=await queueAll();
+    return{queued:true,cloudSaved:!list.some(x=>x.opId===op.opId),pending:list.length};
+  };
 
   async function refreshBootstrap(){
     const b=await callRpc('cms_get_bootstrap_v484',{},RPC_TIMEOUT);
@@ -16635,7 +16677,29 @@ window.__v479JournalOwnsSync = true;
       op.status='pending';await queuePut(op);setStatus(navigator.onLine?'云端暂不可用 · 已保存在本机':'当前离线 · 已保存在本机','warn');scheduleRetry();return false;
     }
   }
-  async function processQueue(){if(processRunning)return false;processRunning=true;try{const list=await queueAll();for(const op of list){if(op.status==='conflict'){setStatus('存在待处理数据冲突','error');return false;}const ok=await sendOperation(op);if(!ok)return false;}if(!list.length)setStatus('云端服务器模式已就绪','ok');return true;}finally{processRunning=false;}}
+  let queueWakeRequestedV486=false;
+  async function processQueue(){
+    if(processRunning){queueWakeRequestedV486=true;return true;}
+    processRunning=true;
+    try{
+      while(true){
+        queueWakeRequestedV486=false;
+        const list=await queueAll();
+        if(!list.length){setStatus('云端服务器模式已就绪','ok');return true;}
+        for(const op of list){
+          if(op.status==='conflict'){setStatus('存在待处理数据冲突','error');return false;}
+          const ok=await sendOperation(op);
+          if(!ok)return false;
+        }
+        const remaining=await queueAll();
+        if(!remaining.length&&!queueWakeRequestedV486){setStatus('云端服务器模式已就绪','ok');return true;}
+        await yieldMain();
+      }
+    }finally{
+      processRunning=false;
+      if(queueWakeRequestedV486)setTimeout(processQueue,0);
+    }
+  }
   function scheduleRetry(){if(retryTimer)return;retryTimer=setTimeout(()=>{retryTimer=null;if(navigator.onLine)processQueue();},RETRY_MS);}
   async function capture(reason){
     let op;try{op=createOperation(reason);}catch(e){alert('保存前数据校验失败：'+S(e&&e.message||e));return false;}
@@ -16665,7 +16729,11 @@ window.__v479JournalOwnsSync = true;
     const after=Math.min(...mods.map(m=>N(moduleRevisions.get(m))||before));
     const data=await callRpc('cms_get_module_changes_bundle_v484',{p_modules:mods,p_after_revision:after,p_limit_per_module:CHANGE_SIZE},RPC_TIMEOUT);
     const bundle=data&&data.modules||{};let changed=false;
-    for(const m of mods){const rows=A(bundle[m]);if(rows.length){applyDeltaRows(m,rows);changed=true;}moduleRevisions.set(m,N(data&&data.revision));}
+    for(const m of mods){
+      const rows=A(bundle[m]);
+      if(rows.length){applyDeltaRows(m,rows);await reapplyPendingForModuleV486(m);changed=true;}
+      moduleRevisions.set(m,N(data&&data.revision));
+    }
     if(changed){
       let editing=false;try{editing=(typeof isCurrentPageRefreshLocked==='function'&&isCurrentPageRefreshLocked())||(typeof isModalOpen==='function'&&isModalOpen())||(typeof isUserActivelyEditing==='function'&&isUserActivelyEditing());}catch(_){ }
       if(!editing){prepareDerivedState(currentMenu);W.renderContent();}else setStatus('云端有更新 · 当前操作完成后刷新','warn');
@@ -16722,7 +16790,7 @@ window.__v479JournalOwnsSync = true;
 
   W.retryPendingBusinessOpsV480=W.retryPendingBusinessOpsV484=async()=>{const ok=await processQueue();if(ok)alert('本机待上传操作已完成同步。');return ok;};
   W.migrateLocalToCloud=()=>W.retryPendingBusinessOpsV484();try{migrateLocalToCloud=W.migrateLocalToCloud;}catch(_){ }
-  W.showV484Status=async()=>{const q=await queueAll(),mods=[...loadedModules];alert(`V48.5 云端服务器模式\n\n云端修订号：${N(bootstrap&&bootstrap.revision)}\n已加载模块：${mods.length?mods.join('、'):'仅轻量首页'}\n本机待上传：${q.length}\n冲突操作：${q.filter(x=>x.status==='conflict').length}\n\n登录读取：服务器预计算轻量首页\n菜单读取：单次云端数据包\n日常保存：单行原子事务\n完整快照：仅手工备份`);};
+  W.showV484Status=async()=>{const q=await queueAll(),mods=[...loadedModules];alert(`V48.6 云端服务器模式\n\n云端修订号：${N(bootstrap&&bootstrap.revision)}\n已加载模块：${mods.length?mods.join('、'):'仅轻量首页'}\n本机待上传：${q.length}\n冲突操作：${q.filter(x=>x.status==='conflict').length}\n\n登录读取：服务器预计算轻量首页\n菜单读取：单次云端数据包\n日常保存：单行原子事务\n完整快照：仅手工备份`);};
 
   const legacyDownload=W.downloadCloudBackup;
   W.downloadCloudBackup=async function(){
@@ -16736,7 +16804,7 @@ window.__v479JournalOwnsSync = true;
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){processQueue();refreshLoadedModules().catch(()=>{});}});
 
   function version(){
-    try{document.title='Sistema Inteligente de Monitoramento de Contêineres V48.5';document.querySelectorAll('.v42-hero-title').forEach(el=>{el.textContent=S(el.textContent).replace(/V4\d+\.\d+/,'V48.4');});document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/^V4\d+(?:\.\d+)?(?:\s.*)?$/i.test(S(el.textContent)))el.textContent='V48.5';});const card=document.querySelector('.login-card');if(card){const sub=[...card.querySelectorAll('div,p')].find(el=>/V4\d|Stable|Clean|Safe|Instant Access|Fast Read|修复/i.test(S(el.textContent)));if(sub)sub.textContent='V48.5：服务器轻量读取、清关单记录定向保存、实时订阅修复。';}hideOldBadges();}catch(_){ }
+    try{document.title='Sistema Inteligente de Monitoramento de Contêineres V48.6';document.querySelectorAll('.v42-hero-title').forEach(el=>{el.textContent=S(el.textContent).replace(/V4\d+\.\d+/,'V48.4');});document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/^V4\d+(?:\.\d+)?(?:\s.*)?$/i.test(S(el.textContent)))el.textContent='V48.6';});const card=document.querySelector('.login-card');if(card){const sub=[...card.querySelectorAll('div,p')].find(el=>/V4\d|Stable|Clean|Safe|Instant Access|Fast Read|修复/i.test(S(el.textContent)));if(sub)sub.textContent='V48.6：IRA云端确认保存、队列持续排空、待上传数据防覆盖。';}hideOldBadges();}catch(_){ }
   }
   const style=document.createElement('style');style.textContent='#v4713SyncBadge,#v479SaveIndicator,#v478SaveIndicator{display:none!important}#v484StatusBadge{border:1px solid rgba(255,255,255,.35)}';document.head.appendChild(style);
   document.addEventListener('DOMContentLoaded',()=>{version();setTimeout(version,800);setTimeout(version,2500);setTimeout(version,7200);});setTimeout(version,100);
@@ -16745,18 +16813,163 @@ window.__v479JournalOwnsSync = true;
 </script>
 
 <script>
-/* V48.5 final UI marker */
+/* V48.6 final UI marker */
 (function(){
   const W=window,S=v=>String(v==null?'':v).trim();
   function mark(){
     try{
       document.title='Sistema Inteligente de Monitoramento de Contêineres V48.5';
-      document.querySelectorAll('.v42-hero-title').forEach(el=>{el.textContent=S(el.textContent).replace(/V4\d+\.\d+/,'V48.5');});
+      document.querySelectorAll('.v42-hero-title').forEach(el=>{el.textContent=S(el.textContent).replace(/V4\d+\.\d+/,'V48.6');});
       const b=document.getElementById('v484StatusBadge');if(b)b.id='v485StatusBadge';
     }catch(_){ }
   }
   W.showV485Status=W.showV484Status;
   document.addEventListener('DOMContentLoaded',()=>{mark();setTimeout(mark,900);setTimeout(mark,2600);});setTimeout(mark,100);
+})();
+</script>
+
+
+<script>
+/* ==================== V48.6 IRA Persistence Guard ====================
+   - Every IRA edit is a targeted blList row operation.
+   - Success is reported only after the durable queue is written; cloud completion is explicitly shown.
+   - Bulk import prioritizes "新IRA号" and rejects conflicting duplicate BL values.
+   - Pending IRA operations remain visible during realtime/poll refresh.
+============================================================================ */
+(function(){
+  'use strict';
+  const W=window;
+  const S=v=>String(v==null?'':v).trim();
+  const A=v=>Array.isArray(v)?v:[];
+  const norm=v=>S(v).replace(/\s+/g,'');
+  function currentBlList(){try{return Array.isArray(blList)?blList:A(W.blList||[]);}catch(_){return A(W.blList||[]);}}
+  function findBl(identifier){return currentBlList().find(b=>typeof getBlIdentifier==='function'&&getBlIdentifier(b)===identifier);}
+  async function saveIraRecord(bl,newValue,reason){
+    if(!bl){alert('未找到提单记录');return false;}
+    const oldValue=S(bl.iraNo),next=S(newValue);
+    if(oldValue===next)return true;
+    bl.iraNo=next;
+    try{if(typeof renderBlTable==='function')renderBlTable();}catch(_){ }
+    let result;
+    try{
+      if(typeof W.queueTargetedSaveAndConfirmV486==='function'){
+        result=await W.queueTargetedSaveAndConfirmV486([{module:'blList',payload:bl}],reason||'save_ira');
+      }else if(typeof W.queueTargetedSaveV485==='function'){
+        const queued=await W.queueTargetedSaveV485([{module:'blList',payload:bl}],reason||'save_ira');
+        const cloudSaved=queued&&typeof W.flushPendingSaveV484==='function'?await W.flushPendingSaveV484():false;
+        result={queued:!!queued,cloudSaved:!!cloudSaved,pending:cloudSaved?0:1};
+      }else{
+        const ok=await Promise.resolve(typeof W.saveData==='function'?W.saveData(reason||'save_ira'):false);
+        result={queued:!!ok,cloudSaved:false,pending:ok?1:0};
+      }
+    }catch(e){
+      console.error('V48.6 IRA save failed',e);
+      result={queued:false,cloudSaved:false,pending:0,error:e};
+    }
+    if(!result||!result.queued){
+      bl.iraNo=oldValue;
+      try{if(typeof renderBlTable==='function')renderBlTable();}catch(_){ }
+      alert('IRA号保存失败，页面已恢复原值。'+(result&&result.error?'\n'+S(result.error.message||result.error):''));
+      return false;
+    }
+    if(result.cloudSaved){alert('IRA号已保存到云端。');return true;}
+    alert(`IRA号已写入本机安全队列，但尚未收到云端确认。\n当前待上传：${Number(result.pending)||1}项。\n请不要清理浏览器网站数据，并点击顶部状态查看同步结果。`);
+    return true;
+  }
+
+  W.saveBl=async function(identifier){
+    const bl=findBl(identifier);
+    if(!bl){alert('未找到提单记录');return;}
+    const input=document.getElementById('ira_'+(typeof safeId==='function'?safeId(identifier):identifier));
+    await saveIraRecord(bl,input?input.value:bl.iraNo,'save_ira_single');
+  };
+
+  W.editIraRecord=async function(identifier){
+    const bl=findBl(identifier);
+    if(!bl){alert('未找到提单记录');return;}
+    const next=prompt('重新编辑IRA号',bl.iraNo||'');
+    if(next===null)return;
+    await saveIraRecord(bl,next,'edit_ira_single');
+  };
+
+  W.importIraExcel=function(){
+    const file=document.getElementById('iraImportFile')?.files?.[0];
+    if(!file){alert('请选择要导入的Excel文件');return;}
+    const reader=new FileReader();
+    reader.onload=async function(e){
+      try{
+        const workbook=XLSX.read(new Uint8Array(e.target.result),{type:'array',cellDates:true});
+        const sheet=workbook.Sheets[workbook.SheetNames[0]];
+        const rows=XLSX.utils.sheet_to_json(sheet,{header:1,defval:'',raw:false});
+        if(rows.length<2)return alert('Excel中没有可导入的数据');
+        const headers=rows[0].map(norm);
+        const exactIndex=(pred)=>headers.findIndex(pred);
+        const idx={
+          master:exactIndex(h=>h.includes('主提单')),
+          house:exactIndex(h=>h.includes('分提单')),
+          bl:exactIndex(h=>h==='提单号'||(h.includes('提单号')&&!h.includes('主提单')&&!h.includes('分提单'))),
+          iraNew:exactIndex(h=>h.includes('新IRA'))
+        };
+        if(idx.iraNew<0)idx.iraNew=exactIndex(h=>h==='IRA号');
+        if(idx.iraNew<0)idx.iraNew=exactIndex(h=>h.includes('IRA')&&!h.includes('当前'));
+        if(idx.iraNew<0)return alert('模板中未找到“新IRA号”或可用的“IRA号”列。');
+        if(idx.house<0&&idx.bl<0&&idx.master<0)return alert('模板中未找到提单号、分提单号或主提单号列。');
+
+        const updates=new Map(),notFound=[],empty=[];
+        for(let i=1;i<rows.length;i++){
+          const row=rows[i];if(!row||row.every(v=>!S(v)))continue;
+          const ira=S(row[idx.iraNew]);if(!ira){empty.push(i+1);continue;}
+          const houseNo=idx.house>=0?S(row[idx.house]):'',blNo=idx.bl>=0?S(row[idx.bl]):'',masterNo=idx.master>=0?S(row[idx.master]):'';
+          let bl=null;
+          if(houseNo)bl=currentBlList().find(b=>S(b.houseBlNo)===houseNo||S(b.blNo)===houseNo);
+          if(!bl&&blNo)bl=currentBlList().find(b=>S(b.blNo)===blNo||S(b.houseBlNo)===blNo);
+          if(!bl&&masterNo)bl=currentBlList().find(b=>S(b.masterBlNo)===masterNo);
+          if(!bl){notFound.push({row:i+1,key:houseNo||blNo||masterNo||'-'});continue;}
+          const key=typeof getBlIdentifier==='function'?getBlIdentifier(bl):S(bl.id);
+          if(updates.has(key)&&updates.get(key).ira!==ira)throw new Error(`Excel中同一提单存在不同IRA号：${key}`);
+          updates.set(key,{bl,ira,row:i+1,old:S(bl.iraNo)});
+        }
+        const changed=[...updates.values()].filter(x=>x.old!==x.ira);
+        if(!changed.length){alert(`没有需要更新的IRA。未匹配 ${notFound.length} 条，IRA为空跳过 ${empty.length} 条。`);return;}
+        if(changed.length>3000)return alert(`本次需要更新 ${changed.length} 条IRA，超过单次安全上限3000条，请拆分文件导入。`);
+
+        changed.forEach(x=>x.bl.iraNo=x.ira);
+        try{if(typeof renderBlTable==='function')renderBlTable();}catch(_){ }
+        let result;
+        if(typeof W.queueTargetedSaveAndConfirmV486==='function'){
+          result=await W.queueTargetedSaveAndConfirmV486(changed.map(x=>({module:'blList',payload:x.bl})),'import_ira_batch');
+        }else{
+          const queued=await W.queueTargetedSaveV485(changed.map(x=>({module:'blList',payload:x.bl})),'import_ira_batch');
+          const cloudSaved=queued&&typeof W.flushPendingSaveV484==='function'?await W.flushPendingSaveV484():false;
+          result={queued:!!queued,cloudSaved:!!cloudSaved,pending:cloudSaved?0:changed.length};
+        }
+        if(!result||!result.queued){
+          changed.forEach(x=>x.bl.iraNo=x.old);
+          try{if(typeof renderBlTable==='function')renderBlTable();}catch(_){ }
+          return alert('IRA批量导入未能进入安全保存队列，页面已恢复原值。');
+        }
+        try{if(typeof closeModal==='function')closeModal();}catch(_){ }
+        let msg=`IRA导入：更新 ${changed.length} 条，未匹配 ${notFound.length} 条，IRA为空跳过 ${empty.length} 条。`;
+        if(result.cloudSaved)msg+='\n全部更新已由云端确认保存。';
+        else msg+=`\n数据已进入本机安全队列，尚有 ${Number(result.pending)||changed.length} 项等待云端确认。`;
+        if(notFound.length)msg+='\n未匹配示例：'+notFound.slice(0,10).map(x=>`${x.key}(第${x.row}行)`).join('、');
+        alert(msg);
+      }catch(err){console.error(err);alert('IRA导入失败：'+S(err&&err.message||err));}
+    };
+    reader.onerror=()=>alert('浏览器无法读取该Excel文件。');
+    reader.readAsArrayBuffer(file);
+  };
+
+  function mark(){
+    try{
+      document.title='Sistema Inteligente de Monitoramento de Contêineres V48.6';
+      document.querySelectorAll('.v42-hero-title').forEach(el=>{el.textContent=S(el.textContent).replace(/V4\d+\.\d+/,'V48.6');});
+      const b=document.getElementById('v485StatusBadge')||document.getElementById('v484StatusBadge');if(b)b.id='v486StatusBadge';
+    }catch(_){ }
+  }
+  W.showV486Status=W.showV485Status||W.showV484Status;
+  document.addEventListener('DOMContentLoaded',()=>{mark();setTimeout(mark,900);setTimeout(mark,2600);});setTimeout(mark,100);
+  console.log('V48.6 IRA Persistence Guard loaded.');
 })();
 </script>
 
