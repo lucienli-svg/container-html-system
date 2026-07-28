@@ -712,7 +712,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V47.13 Instant Access：登录与云端同步分离；数据在后台同步，不再阻塞登录和页面操作。
+        V47.14 Login Hotfix：修复登录页监听循环；登录与后台同步继续保持分离。
       </div>
       <button class="login-btn" onclick="loginWithGoogle()" style="width:100%;margin-bottom:14px;">使用 Google 登录</button>
 
@@ -15759,7 +15759,7 @@ ${preview}
 (function(){
   'use strict';
   const W=window;
-  const VERSION='V47.13 Instant Access & Background Sync';
+  const VERSION='V47.14 Login Responsiveness Hotfix';
   const MODULES=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig'];
   const OBJECTS=['nextIds','warningConfig'];
   const CORE=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans'];
@@ -15904,14 +15904,26 @@ ${preview}
   try{ensureCloudSession=W.ensureCloudSession;loadData=W.loadData;}catch(_){ }
 
   W.loginWithEmailPassword=async function(){
-    const sb=typeof initSupabaseClient==='function'?initSupabaseClient():null;
     const email=document.getElementById('loginEmail')?.value.trim().toLowerCase();
     const password=document.getElementById('loginPassword')?.value||'';
-    if(!email)return alert('请输入邮箱');if(!password)return alert('请输入密码');
-    const btn=document.querySelector('button[onclick="loginWithEmailPassword()"]');const old=btn&&btn.textContent;if(btn){btn.disabled=true;btn.textContent='正在验证账号…';}
-    try{const r=await timeout(sb.auth.signInWithPassword({email,password}),12000,'账号验证超时');if(r&&r.error)throw r.error;await fastEnsureCloudSession();}
-    catch(e){alert('邮箱登录失败：'+(e&&e.message||e));}
-    finally{if(btn){btn.disabled=false;btn.textContent=old||'邮箱 + 密码登录';}}
+    if(!email)return alert('请输入邮箱');
+    if(!password)return alert('请输入密码');
+    const btn=document.querySelector('button[onclick="loginWithEmailPassword()"]');
+    const old=btn&&btn.textContent;
+    if(btn){btn.disabled=true;btn.textContent='正在验证账号…';}
+    try{
+      const sb=typeof initSupabaseClient==='function'?initSupabaseClient():null;
+      if(!sb||!sb.auth||typeof sb.auth.signInWithPassword!=='function')throw new Error('Supabase登录服务未初始化');
+      const r=await timeout(sb.auth.signInWithPassword({email,password}),12000,'账号验证超时');
+      if(r&&r.error)throw r.error;
+      const ok=await fastEnsureCloudSession();
+      if(!ok&&document.getElementById('loginPage')?.style.display!=='none')throw new Error('账号已验证，但未能读取有效用户权限');
+    }catch(e){
+      console.error('V47.14 email login failed',e);
+      alert('邮箱登录失败：'+(e&&e.message||e));
+    }finally{
+      if(btn){btn.disabled=false;btn.textContent=old||'邮箱 + 密码登录';}
+    }
   };
   try{loginWithEmailPassword=W.loginWithEmailPassword;}catch(_){ }
 
@@ -15933,20 +15945,37 @@ ${preview}
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')scheduleCache(0);});
 
   const style=document.createElement('style');
-  style.textContent=`#loginPage~#v479SaveIndicator,#loginPage~#v478SaveIndicator{display:none!important}body.v4713-login-visible #v479SaveIndicator,body.v4713-login-visible #v4713SyncBadge{display:none!important}.login-card button:disabled{opacity:.72;cursor:wait}`;
+  style.textContent=`#loginPage~#v479SaveIndicator,#loginPage~#v478SaveIndicator{display:none!important}body.v4713-login-visible #v479SaveIndicator,body.v4713-login-visible #v4713SyncBadge{display:none!important}.login-card{position:relative;z-index:100001}.login-card button,.login-card input{pointer-events:auto!important}.login-card button:disabled{opacity:.72;cursor:wait}`;
   document.head.appendChild(style);
   function version(){
     try{
-      document.title='Sistema Inteligente de Monitoramento de Contêineres V47.13';
-      const card=document.querySelector('.login-card');if(card){const sub=[...card.querySelectorAll('div,p')].find(el=>/V4\d|Stable|Clean|Safe|Instant Access|修复/i.test(S(el.textContent)));if(sub)sub.textContent='V47.13 Instant Access：登录与云端同步分离；数据在后台同步，不再阻塞登录和页面操作。';}
-      document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.(9|10|11|12)|Ordered Local-First|Full Basic Data Export|Shared Container|Import Validation/i.test(S(el.textContent)))el.textContent='V47.13';});
+      if(document.title!=='Sistema Inteligente de Monitoramento de Contêineres V47.14')document.title='Sistema Inteligente de Monitoramento de Contêineres V47.14';
+      const card=document.querySelector('.login-card');if(card){const sub=[...card.querySelectorAll('div,p')].find(el=>/V4\d|Stable|Clean|Safe|Instant Access|修复/i.test(S(el.textContent)));if(sub){const t='V47.14 Login Hotfix：修复登录页监听循环；登录与后台同步继续保持分离。';if(S(sub.textContent)!==t)sub.textContent=t;}}
+      document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.(9|10|11|12)|Ordered Local-First|Full Basic Data Export|Shared Container|Import Validation/i.test(S(el.textContent))){if(S(el.textContent)!=='V47.14')el.textContent='V47.14';}});
       document.body.classList.toggle('v4713-login-visible',isLoginVisible());
     }catch(_){ }
   }
-  const observer=new MutationObserver(()=>version());
-  document.addEventListener('DOMContentLoaded',()=>{version();try{observer.observe(document.querySelector('.login-card')||document.body,{subtree:true,childList:true,characterData:true});}catch(_){ }setTimeout(version,800);setTimeout(version,2600);setTimeout(version,6500);});
+  // V47.14: do not observe characterData/childList on the login card.
+  // V47.13 changed textContent from inside its own MutationObserver callback,
+  // which could create an endless observer loop and freeze all login buttons.
+  let versionTimer=null;
+  function scheduleVersion(){
+    if(versionTimer)return;
+    versionTimer=setTimeout(()=>{versionTimer=null;version();},80);
+  }
+  document.addEventListener('DOMContentLoaded',()=>{
+    version();
+    // Only watch the body class/style changes that can affect login visibility.
+    // The callback is debounced and version() now writes text only when different.
+    try{
+      const observer=new MutationObserver(scheduleVersion);
+      observer.observe(document.body,{attributes:true,attributeFilter:['class']});
+      W.__v4714LoginObserver=observer;
+    }catch(_){ }
+    setTimeout(version,800);setTimeout(version,2600);setTimeout(version,6500);
+  });
   setTimeout(version,100);setTimeout(version,2300);setTimeout(version,6800);
-  console.log(VERSION+' loaded: authorized users enter immediately; all checkpoint/journal uploads continue in the background.');
+  console.log(VERSION+' loaded: login observer loop removed; authorized users enter immediately and synchronization continues in background.');
 })();
 </script>
 
