@@ -5848,7 +5848,7 @@ let main=document.getElementById('mainContent');
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V48.1</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V48.2</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -6390,7 +6390,7 @@ let main=document.getElementById('mainContent');
     let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
     let dailyReport = getDailyOperationReport(getTodayStr());
     container.innerHTML = `
-      <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V48.1</div><div class="v42-hero-sub">物流运营工作台 + 生产保供看板｜费用报表增加清关用时｜${fmtDate(getTodayStr())}</div></div>
+      <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V48.2</div><div class="v42-hero-sub">物流运营工作台 + 生产保供看板｜费用报表增加清关用时｜${fmtDate(getTodayStr())}</div></div>
       <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">到厂进度由下方生产保供看板展示，本区保留费用、清关、提箱和库存核心指标</span></div>
       <div class="card">
         <div class="card-header"><span class="card-title">📅 每日运营报表</span><span style="font-size:12px;color:#909399;">统计日期：${fmtDate(getTodayStr())}</span></div>
@@ -16242,7 +16242,7 @@ window.__v479JournalOwnsSync = true;
   document.head.appendChild(style);
   function version(){
     try{
-      if(document.title!=='Sistema Inteligente de Monitoramento de Contêineres V48.1')document.title='Sistema Inteligente de Monitoramento de Contêineres V48.1';
+      if(document.title!=='Sistema Inteligente de Monitoramento de Contêineres V48.2')document.title='Sistema Inteligente de Monitoramento de Contêineres V48.2';
       const card=document.querySelector('.login-card');if(card){const sub=[...card.querySelectorAll('div,p')].find(el=>/V4\d|Stable|Clean|Safe|Instant Access|修复/i.test(S(el.textContent)));if(sub){const t='V48.1 Fast Read Model：登录即时进入；逐行原子保存；服务器读取模型即时加载；完整快照仅用于备份。';if(S(sub.textContent)!==t)sub.textContent=t;}}
       document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.(9|10|11|12)|Ordered Local-First|Full Basic Data Export|Shared Container|Import Validation/i.test(S(el.textContent))){if(S(el.textContent)!=='V48.1')el.textContent='V48.1';}});
       document.body.classList.toggle('v4713-login-visible',isLoginVisible());
@@ -16269,6 +16269,490 @@ window.__v479JournalOwnsSync = true;
   });
   setTimeout(version,100);setTimeout(version,2300);setTimeout(version,6800);
   console.log(VERSION+' loaded: login observer loop removed; authorized users enter immediately and synchronization continues in background.');
+})();
+</script>
+
+<script>
+/* ==================== V48.2 On-Demand Web Architecture ====================
+   - Login reads only cms_get_bootstrap_v482 (small summary/meta payload).
+   - No full-state read, no V48.1 module JSON cache, no legacy snapshot fallback.
+   - Modules are loaded only when opened, using record_key cursor pagination.
+   - Previously loaded modules use IndexedDB cache + global_revision deltas.
+   - Saving remains atomic through cms_commit_operation, with a durable IndexedDB queue.
+   - The legacy full snapshot engine is kept only for an explicit complete backup.
+============================================================================ */
+(function(){
+  'use strict';
+  const W=window;
+  const VERSION='V48.2 On-Demand Web Architecture';
+  const MODULES=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig','nextIds','warningConfig'];
+  const ARRAY_MODULES=new Set(['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig']);
+  const SMALL_MODULES=['nextIds','warningConfig'];
+  const DB_NAME='cms_v482_web_cache';
+  const DB_VERSION=1;
+  const META_STORE='meta';
+  const RECORD_STORE='records';
+  const QUEUE_DB='cms_v480_business_queue';
+  const QUEUE_STORE='pending_operations';
+  const PAGE_SIZE=350;
+  const CHANGE_SIZE=500;
+  const RPC_TIMEOUT=12000;
+  const MAX_OPERATION_ROWS=3000;
+  const MAX_OPERATION_BYTES=8*1024*1024;
+  const RETRY_MS=10000;
+  const RECONCILE_MS=60000;
+
+  W.__v482Active=true;
+  W.__CMS_BUSINESS_TABLE_MODE=true;
+  W.__v479JournalOwnsSync=true;
+  W.__v4713AllowBackgroundSync=false;
+
+  const A=v=>Array.isArray(v)?v:[];
+  const S=v=>String(v==null?'':v).trim();
+  const U=v=>S(v).toUpperCase();
+  const N=v=>Number(v)||0;
+  const clone=v=>v==null?v:JSON.parse(JSON.stringify(v));
+  const now=()=>new Date().toISOString();
+  const yieldMain=()=>new Promise(r=>setTimeout(r,0));
+  function timeout(p,ms,msg){return Promise.race([Promise.resolve(p),new Promise((_,rej)=>setTimeout(()=>rej(new Error(msg||'请求超时')),ms))]);}
+  function sb(){try{return typeof initSupabaseClient==='function'?initSupabaseClient():null;}catch(_){return null;}}
+  function who(){try{return(cloudUser&&cloudUser.email)||(currentUser&&(currentUser.email||currentUser.name))||'unknown';}catch(_){return'unknown';}}
+  function isAdmin(){try{return typeof isAdminUser==='function'?isAdminUser():((currentUser&&currentUser.role)==='Admin');}catch(_){return false;}}
+  function canonical(v){if(v===null||typeof v!=='object')return JSON.stringify(v);if(Array.isArray(v))return'['+v.map(canonical).join(',')+']';return'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';}
+  function hash(v){let str=canonical(v),h=2166136261;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619);}return('00000000'+(h>>>0).toString(16)).slice(-8);}
+  function day(v){const s=S(v);return s?s.slice(0,10):'';}
+
+  function recordKey(module,x){
+    if(module==='nextIds'||module==='warningConfig')return module;
+    if(!x||typeof x!=='object')return'';
+    if(module==='containers')return S(x.containerRecordUid)||(S(x.id)?'ID:'+S(x.id):'')||[U(x.containerNo),U(x.batch),S(x.containerSeq||x.seq)].join('|');
+    if(module==='blList')return S(x.blUid)||(S(x.id)?'ID:'+S(x.id):'')||U(x.blNo||x.houseBlNo||x.masterBlNo);
+    if(module==='containerBlMap')return S(x.linkUid)||(S(x.id)?'ID:'+S(x.id):'')||[S(x.containerId),U(x.containerNo),U(x.blNo||x.houseBlNo||x.masterBlNo),U(x.batch)].join('|');
+    if(module==='transportTasks')return S(x.taskUid)||S(x.routeLegKey)||(S(x.id)?'ID:'+S(x.id):'')||[U(x.containerNo),S(x.containerId),U(x.from||x.origin),U(x.to||x.destination),day(x.estimatedArrival||x.arrivalDate)].join('|');
+    if(module==='locationStock')return S(x.stockUid)||(S(x.id)?'ID:'+S(x.id):'')||S(x.containerId)||U(x.containerNo);
+    if(module==='returnRecords')return S(x.returnUid)||(S(x.id)?'ID:'+S(x.id):'')||[S(x.containerId),U(x.containerNo),U(x.type),U(x.location),day(x.returnDate||x.unpackDate||x.createdAt)].join('|');
+    if(module==='pickupPlans')return S(x.planUid)||(S(x.id)?'ID:'+S(x.id):'')||[S(x.containerId),U(x.containerNo),day(x.arrivalDate),U(x.destination)].join('|');
+    if(module==='productionRecords')return S(x.recordUid)||(S(x.id)?'ID:'+S(x.id):'')||[U(x.batch),day(x.date),U(x.workshop||x.area)].join('|');
+    if(module==='productionPlans')return S(x.planUid)||(S(x.id)?'ID:'+S(x.id):'')||[day(x.date),U(x.workshop||x.area),U(x.batch),S(x.order||x.planOrder)].join('|');
+    if(module==='factoryCalendar')return day(x.date)||(S(x.id)?'ID:'+S(x.id):'');
+    if(module==='storageConfig')return S(x.configUid)||(S(x.id)?'ID:'+S(x.id):'')||[day(x.effectiveFrom||x.startDate),day(x.effectiveTo||x.endDate),S(x.fixedDays),S(x.fixedRate),S(x.overtimeRate)].join('|');
+    if(module==='demurrageConfig')return S(x.configUid)||(S(x.id)?'ID:'+S(x.id):'')||[U(x.shippingCompany||x.carrier),U(x.containerType),day(x.effectiveFrom||x.startDate),day(x.effectiveTo||x.endDate)].join('|');
+    return S(x.id)||hash(x);
+  }
+
+  function getValue(module){
+    switch(module){
+      case'containers':return containers;case'blList':return blList;case'containerBlMap':return containerBlMap;
+      case'transportTasks':return transportTasks;case'locationStock':return locationStock;case'returnRecords':return returnRecords;
+      case'pickupPlans':return pickupPlans;case'productionRecords':return productionRecords;case'productionPlans':return productionPlans;
+      case'factoryCalendar':return factoryCalendar;case'storageConfig':return storageConfig;case'demurrageConfig':return demurrageConfig;
+      case'nextIds':return nextIds;case'warningConfig':return warningConfig;default:return ARRAY_MODULES.has(module)?[]:{};
+    }
+  }
+  function setValue(module,value){
+    if(ARRAY_MODULES.has(module)){
+      const v=A(value);
+      switch(module){
+        case'containers':containers.splice(0,containers.length,...v);break;case'blList':blList.splice(0,blList.length,...v);break;
+        case'containerBlMap':containerBlMap.splice(0,containerBlMap.length,...v);break;case'transportTasks':transportTasks.splice(0,transportTasks.length,...v);break;
+        case'locationStock':locationStock.splice(0,locationStock.length,...v);break;case'returnRecords':returnRecords.splice(0,returnRecords.length,...v);break;
+        case'pickupPlans':pickupPlans.splice(0,pickupPlans.length,...v);break;case'productionRecords':productionRecords.splice(0,productionRecords.length,...v);break;
+        case'productionPlans':productionPlans.splice(0,productionPlans.length,...v);break;case'factoryCalendar':factoryCalendar.splice(0,factoryCalendar.length,...v);break;
+        case'storageConfig':storageConfig.splice(0,storageConfig.length,...v);break;case'demurrageConfig':demurrageConfig.splice(0,demurrageConfig.length,...v);break;
+      }
+    }else if(module==='nextIds'){
+      Object.keys(nextIds||{}).forEach(k=>delete nextIds[k]);Object.assign(nextIds,value||{});
+    }else if(module==='warningConfig'){
+      Object.keys(warningConfig||{}).forEach(k=>delete warningConfig[k]);Object.assign(warningConfig,value||{});
+    }
+  }
+  function moduleMap(module){
+    const out=new Map();
+    if(ARRAY_MODULES.has(module)){
+      A(getValue(module)).forEach(x=>{const k=recordKey(module,x);if(!k)throw new Error(module+' 存在无法识别唯一键的记录');if(out.has(k))throw new Error(module+' 存在重复业务键：'+k);out.set(k,clone(x));});
+    }else out.set(module,clone(getValue(module)||{}));
+    return out;
+  }
+
+  async function callRpc(name,args,ms){const client=sb();if(!client)throw new Error('Supabase未连接');const r=await timeout(client.rpc(name,args||{}),ms||RPC_TIMEOUT,name+' 超时');if(r&&r.error)throw r.error;return r&&r.data;}
+  function isSchemaError(e){return /cms_get_bootstrap_v482|cms_get_module_page_v482|cms_get_module_changes_v482|PGRST202|42P01|does not exist|schema cache/i.test(S(e&&e.message||e));}
+
+  let cacheDbPromise=null;
+  function openCacheDb(){
+    if(cacheDbPromise)return cacheDbPromise;
+    cacheDbPromise=new Promise((resolve,reject)=>{const req=indexedDB.open(DB_NAME,DB_VERSION);req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains(META_STORE))db.createObjectStore(META_STORE,{keyPath:'key'});if(!db.objectStoreNames.contains(RECORD_STORE)){const st=db.createObjectStore(RECORD_STORE,{keyPath:'id'});st.createIndex('module','module',{unique:false});}};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error||new Error('V48.2缓存数据库打开失败'));});
+    return cacheDbPromise;
+  }
+  async function metaGet(key){const db=await openCacheDb();return new Promise((res,rej)=>{const tx=db.transaction(META_STORE,'readonly'),r=tx.objectStore(META_STORE).get(key);r.onsuccess=()=>res(r.result||null);r.onerror=()=>rej(r.error);});}
+  async function metaPut(row){const db=await openCacheDb();return new Promise((res,rej)=>{const tx=db.transaction(META_STORE,'readwrite');tx.objectStore(META_STORE).put(row);tx.oncomplete=()=>res(true);tx.onerror=()=>rej(tx.error);});}
+  async function readCachedRows(module){const db=await openCacheDb();return new Promise((res,rej)=>{const tx=db.transaction(RECORD_STORE,'readonly'),idx=tx.objectStore(RECORD_STORE).index('module'),r=idx.getAll(IDBKeyRange.only(module));r.onsuccess=()=>res(A(r.result));r.onerror=()=>rej(r.error);});}
+  async function replaceCachedRows(module,rows,revision){
+    const db=await openCacheDb();
+    await new Promise((res,rej)=>{const tx=db.transaction(RECORD_STORE,'readwrite'),store=tx.objectStore(RECORD_STORE),idx=store.index('module'),cur=idx.openCursor(IDBKeyRange.only(module));cur.onsuccess=()=>{const c=cur.result;if(c){c.delete();c.continue();}};A(rows).forEach(row=>store.put({id:module+'|'+row.recordKey,module,recordKey:row.recordKey,payload:clone(row.payload||{}),rowVersion:N(row.rowVersion),globalRevision:N(row.globalRevision),deletedAt:row.deletedAt||null}));tx.oncomplete=()=>res(true);tx.onerror=()=>rej(tx.error);});
+    await metaPut({key:'module:'+module,module,revision:N(revision),updatedAt:now()});
+  }
+  async function patchCachedRows(module,rows,revision){
+    const db=await openCacheDb();
+    await new Promise((res,rej)=>{const tx=db.transaction(RECORD_STORE,'readwrite'),store=tx.objectStore(RECORD_STORE);A(rows).forEach(row=>{const id=module+'|'+row.recordKey;if(row.deletedAt)store.delete(id);else store.put({id,module,recordKey:row.recordKey,payload:clone(row.payload||{}),rowVersion:N(row.rowVersion),globalRevision:N(row.globalRevision),deletedAt:null});});tx.oncomplete=()=>res(true);tx.onerror=()=>rej(tx.error);});
+    await metaPut({key:'module:'+module,module,revision:N(revision),updatedAt:now()});
+  }
+
+  let queueDbPromise=null;
+  function openQueueDb(){if(queueDbPromise)return queueDbPromise;queueDbPromise=new Promise((resolve,reject)=>{const req=indexedDB.open(QUEUE_DB,1);req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains(QUEUE_STORE)){const st=db.createObjectStore(QUEUE_STORE,{keyPath:'opId'});st.createIndex('createdAt','createdAt');}};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error||new Error('本地安全队列打开失败'));});return queueDbPromise;}
+  async function queueAll(){const db=await openQueueDb();return new Promise((res,rej)=>{const tx=db.transaction(QUEUE_STORE,'readonly'),r=tx.objectStore(QUEUE_STORE).getAll();r.onsuccess=()=>res(A(r.result).sort((a,b)=>S(a.createdAt).localeCompare(S(b.createdAt))));r.onerror=()=>rej(r.error);});}
+  async function queuePut(op){const db=await openQueueDb();return new Promise((res,rej)=>{const tx=db.transaction(QUEUE_STORE,'readwrite');tx.objectStore(QUEUE_STORE).put(op);tx.oncomplete=()=>res(true);tx.onerror=()=>rej(tx.error);});}
+  async function queueDelete(id){const db=await openQueueDb();return new Promise((res,rej)=>{const tx=db.transaction(QUEUE_STORE,'readwrite');tx.objectStore(QUEUE_STORE).delete(id);tx.oncomplete=()=>res(true);tx.onerror=()=>rej(tx.error);});}
+
+  const loadedModules=new Set();
+  const loadingModules=new Map();
+  const baselines=new Map();
+  const moduleRevisions=new Map();
+  const committedOps=new Set();
+  let bootstrap=null;
+  let bootstrapEmail='';
+  let fullDashboard=false;
+  let processRunning=false;
+  let captureChain=Promise.resolve(true);
+  let retryTimer=null;
+  let reconcileTimer=null;
+  let realtimeChannel=null;
+  let authPromise=null;
+
+  function badge(){
+    let el=document.getElementById('v482StatusBadge')||document.getElementById('v480StorageBadge');
+    if(!el){el=document.createElement('button');el.id='v482StatusBadge';el.className='logout-btn';const box=document.querySelector('.navbar .user-info');if(box)box.insertBefore(el,box.firstChild);}
+    el.id='v482StatusBadge';el.onclick=()=>W.showV482Status();el.style.minWidth='150px';return el;
+  }
+  function setStatus(text,kind='ok'){
+    const el=badge();if(!el)return;el.textContent=text;el.style.background=kind==='ok'?'#2f9e44':kind==='warn'?'#e67700':kind==='error'?'#c92a2a':'#2f5aa8';
+  }
+  function cleanupLegacyUi(){['v4713SyncBadge','v479SaveIndicator','v478SaveIndicator','v480MigrateBtn','v480BackupBtn'].forEach(id=>{const el=document.getElementById(id);if(el)el.remove();});const old=document.getElementById('v480StorageBadge');if(old&&old!==document.getElementById('v482StatusBadge'))old.remove();}
+  function hideOldBadges(){cleanupLegacyUi();}
+
+  function rowsToValue(module,rows){
+    if(ARRAY_MODULES.has(module))return A(rows).filter(r=>!r.deletedAt).map(r=>clone(r.payload||{}));
+    const r=A(rows).find(x=>!x.deletedAt&&x.recordKey===module)||A(rows).find(x=>!x.deletedAt);
+    if(r)return clone(r.payload||{});
+    if(module==='nextIds')return{container:1,task:1,plan:1,production:1};
+    if(module==='warningConfig')return{storageWarningDays:5,demurrageWarningDays:7};
+    return{};
+  }
+  function setBaseline(module,rows){
+    const m=new Map();A(rows).forEach(r=>{if(!r.deletedAt)m.set(r.recordKey,{payload:clone(r.payload||{}),version:N(r.rowVersion),hash:hash(r.payload||{})});});
+    if(!ARRAY_MODULES.has(module)&&!m.has(module)){const payload=clone(getValue(module)||{});m.set(module,{payload,version:0,hash:hash(payload)});}
+    baselines.set(module,m);
+  }
+  function overlayPendingForModule(module,rows){return queueAll().then(list=>{const map=new Map(A(rows).filter(r=>!r.deletedAt).map(r=>[r.recordKey,clone(r)]));list.forEach(op=>A(op.changes).filter(c=>c.module===module).forEach(c=>{if(c.action==='delete')map.delete(c.key);else map.set(c.key,{recordKey:c.key,payload:clone(c.payload||{}),rowVersion:N(c.expectedVersion)+1,globalRevision:N(op.baseRevision),deletedAt:null});}));return[...map.values()];});}
+
+  async function fetchModuleFull(module,onProgress){
+    let after='',all=[],total=0,startRevision=N(bootstrap&&bootstrap.revision);
+    do{
+      const page=await callRpc('cms_get_module_page_v482',{p_module:module,p_after_key:after,p_limit:PAGE_SIZE},RPC_TIMEOUT);
+      const rows=A(page&&page.rows);all.push(...rows);total=N(page&&page.total);after=S(page&&page.nextKey);
+      if(onProgress)onProgress(all.length,total);await yieldMain();
+      if(!page||!page.hasMore||!after)break;
+    }while(true);
+    const delta=await fetchModuleChanges(module,startRevision,'');
+    if(delta.rows.length){const map=new Map(all.map(r=>[r.recordKey,r]));delta.rows.forEach(r=>{if(r.deletedAt)map.delete(r.recordKey);else map.set(r.recordKey,r);});all=[...map.values()].sort((a,b)=>S(a.recordKey).localeCompare(S(b.recordKey)));}
+    return{rows:all,revision:Math.max(N(delta.revision),N(bootstrap&&bootstrap.revision),startRevision)};
+  }
+  async function fetchModuleChanges(module,afterRevision,afterKey){
+    let rev=N(afterRevision),key=S(afterKey),all=[],serverRevision=rev;
+    do{
+      const data=await callRpc('cms_get_module_changes_v482',{p_module:module,p_after_revision:rev,p_after_key:key,p_limit:CHANGE_SIZE},RPC_TIMEOUT);
+      const rows=A(data&&data.rows);all.push(...rows);serverRevision=Math.max(serverRevision,N(data&&data.revision));
+      rev=N(data&&data.nextRevision);key=S(data&&data.nextKey);await yieldMain();
+      if(!data||!data.hasMore||!rows.length)break;
+    }while(true);
+    return{rows:all,revision:serverRevision};
+  }
+  function applyDeltaRows(module,rows){
+    let base=baselines.get(module)||new Map();
+    let current=moduleMap(module);
+    A(rows).forEach(r=>{if(r.deletedAt){current.delete(r.recordKey);base.delete(r.recordKey);}else{const p=clone(r.payload||{});current.set(r.recordKey,p);base.set(r.recordKey,{payload:p,version:N(r.rowVersion),hash:hash(p)});}});
+    setValue(module,ARRAY_MODULES.has(module)?[...current.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(x=>x[1]):(current.get(module)||{}));
+    baselines.set(module,base);
+  }
+
+  async function ensureModule(module,opts={}){
+    if(loadedModules.has(module)&&!opts.force)return true;
+    if(loadingModules.has(module))return loadingModules.get(module);
+    const promise=(async()=>{
+      try{
+        setStatus('按需加载：'+module,'syncing');
+        let cachedRows=[],cachedMeta=null;
+        if(!opts.force){
+          [cachedRows,cachedMeta]=await Promise.all([readCachedRows(module).catch(()=>[]),metaGet('module:'+module).catch(()=>null)]);
+        }
+        let rows=[],revision=0;
+        if(cachedRows.length||cachedMeta){
+          rows=cachedRows.map(r=>({recordKey:r.recordKey,payload:r.payload,rowVersion:r.rowVersion,globalRevision:r.globalRevision,deletedAt:r.deletedAt}));
+          setValue(module,rowsToValue(module,rows));setBaseline(module,rows);loadedModules.add(module);moduleRevisions.set(module,N(cachedMeta&&cachedMeta.revision));
+          const delta=await fetchModuleChanges(module,N(cachedMeta&&cachedMeta.revision),'');
+          if(delta.rows.length){applyDeltaRows(module,delta.rows);rows=[...baselines.get(module).entries()].map(([recordKey,e])=>({recordKey,payload:e.payload,rowVersion:e.version,globalRevision:delta.revision,deletedAt:null}));await patchCachedRows(module,delta.rows,delta.revision);}
+          revision=Math.max(N(delta.revision),N(cachedMeta&&cachedMeta.revision));
+        }else{
+          const result=await fetchModuleFull(module,(done,total)=>{const main=document.getElementById('v482ModuleProgress');if(main)main.textContent=`${done}/${total||'…'}`;});
+          rows=result.rows;revision=result.revision;setValue(module,rowsToValue(module,rows));setBaseline(module,rows);loadedModules.add(module);await replaceCachedRows(module,rows,revision);
+        }
+        moduleRevisions.set(module,revision);
+        const pendingList=await queueAll();
+        const serverRows=[...baselines.get(module).entries()].map(([recordKey,e])=>({recordKey,payload:e.payload,rowVersion:e.version,globalRevision:revision,deletedAt:null}));
+        const overlaid=await overlayPendingForModule(module,serverRows);
+        setValue(module,rowsToValue(module,overlaid));
+        pendingList.forEach(op=>A(op.changes).filter(c=>c.module===module).forEach(c=>{const base=baselines.get(module);if(c.action==='delete')base.delete(c.key);else base.set(c.key,{payload:clone(c.payload||{}),version:N(c.expectedVersion)+1,hash:hash(c.payload||{})});}));
+        await metaPut({key:'module:'+module,module,revision:N(revision),updatedAt:now()}).catch(()=>{});
+        setStatus('云端按需模式已就绪','ok');
+        return true;
+      }catch(e){console.error('V48.2 module load failed',module,e);setStatus('模块读取失败：'+module,'error');throw e;}
+      finally{loadingModules.delete(module);}
+    })();
+    loadingModules.set(module,promise);return promise;
+  }
+
+  const MENU_DEPS={
+    productionPlan:['productionPlans','productionRecords','factoryCalendar','containers','transportTasks','locationStock','nextIds'],
+    factoryCalendar:['factoryCalendar','nextIds'],
+    containers:['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','nextIds'],
+    blIra:['containers','blList','containerBlMap','nextIds'],
+    customs:['containers','blList','containerBlMap','nextIds'],
+    pickupPlan:['containers','blList','containerBlMap','pickupPlans','transportTasks','locationStock','returnRecords','nextIds'],
+    transportTasks:['containers','pickupPlans','transportTasks','locationStock','returnRecords','nextIds'],
+    gateMonitoring:['containers','pickupPlans','transportTasks','locationStock','returnRecords','nextIds'],
+    dockMonitoring:['containers','pickupPlans','transportTasks','locationStock','returnRecords','productionRecords','nextIds'],
+    locationConfirm:['containers','pickupPlans','transportTasks','locationStock','returnRecords','nextIds'],
+    returnConfirm:['containers','transportTasks','locationStock','returnRecords','nextIds'],
+    dynamicPlan:['containers','pickupPlans','transportTasks','locationStock','returnRecords','nextIds'],
+    locationStock:['containers','transportTasks','locationStock','returnRecords','productionRecords','nextIds'],
+    productionConfirm:['containers','transportTasks','locationStock','productionRecords','nextIds'],
+    rateConfig:['storageConfig','demurrageConfig','warningConfig','nextIds'],
+    feeReport:['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','storageConfig','demurrageConfig','warningConfig','nextIds']
+  };
+  const FULL_DASH_DEPS=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig','warningConfig','nextIds'];
+
+  function loadingCard(menu){const main=document.getElementById('mainContent');if(main)main.innerHTML=`<div class="card" style="min-height:240px;display:flex;align-items:center;justify-content:center"><div style="text-align:center;color:#52657a"><div style="font-size:30px;margin-bottom:12px">↻</div><div style="font-size:18px;font-weight:700">${uiText('正在按需读取','Carregando sob demanda','Loading on demand')} ${S(menu)}</div><div id="v482ModuleProgress" style="font-size:13px;margin-top:8px">${uiText('准备数据…','Preparando dados…','Preparing data…')}</div><div style="font-size:12px;margin-top:10px;color:#8795a5">${uiText('只读取当前页面需要的数据；其他菜单仍可点击。','Somente os dados desta página são carregados; os outros menus continuam disponíveis.','Only data needed by this page is loaded; other menus remain available.')}</div></div></div>`;}
+  function prepareDerivedState(menu){
+    try{if(typeof W.prepareSharedContainerStateV4711==='function')W.prepareSharedContainerStateV4711();else if(typeof prepareSharedState==='function')prepareSharedState();}catch(e){console.warn('V48.2 shared-container preparation skipped',e);}
+    try{if(typeof updateContainerStatus==='function')updateContainerStatus();}catch(e){console.warn('V48.2 status preparation skipped',e);}
+    if(menu==='feeReport'||menu==='rateConfig'||menu==='dashboard'){
+      const work=()=>{try{if(typeof updateDailyFees==='function')updateDailyFees();}catch(e){console.warn('V48.2 fee preparation skipped',e);}};
+      if(typeof requestIdleCallback==='function')requestIdleCallback(work,{timeout:1200});else setTimeout(work,0);
+    }
+  }
+  async function ensureMenu(menu){const deps=MENU_DEPS[menu]||[];for(const m of deps){if(currentMenu!==menu)return false;await ensureModule(m);}prepareDerivedState(menu);return true;}
+
+  const originalRenderContent=W.renderContent||renderContent;
+  const originalRenderDashboard=W.renderDashboard||renderDashboard;
+  function uiText(zh,pt,en){let lang='zh-CN';try{lang=currentLang||localStorage.getItem('cc_lang')||'zh-CN';}catch(_){ }return lang==='pt-BR'?pt:(lang==='en'?en:zh);}
+  function renderFastDashboard(container){
+    if(!bootstrap){container.innerHTML=`<div class="card" style="min-height:220px;display:flex;align-items:center;justify-content:center"><div style="text-align:center;color:#52657a"><div style="font-size:30px;margin-bottom:12px">↻</div><div style="font-size:18px;font-weight:700">${uiText('正在读取轻量云端首页','Carregando visão geral da nuvem','Loading cloud overview')}</div><div style="font-size:13px;margin-top:8px">${uiText('只读取统计和版本信息，不下载全部业务明细。','Somente estatísticas e versão são carregadas; os detalhes completos não são baixados.','Only statistics and version information are loaded; full details are not downloaded.')}</div></div></div>`;return;}
+    const b=bootstrap||{},c=b.counts||{},s=b.summary||{},loc=s.locationCounts||{};
+    const updated=b.updatedAt?new Date(b.updatedAt).toLocaleString():'-';
+    const t={
+      hero:uiText('服务器轻量首页｜模块按需分页读取｜修订号','Visão geral leve do servidor | Módulos sob demanda | Revisão','Light server overview | On-demand modules | Revision'),
+      overview:uiText('云端实时概览','Visão geral em tempo real','Real-time cloud overview'),
+      noFull:uiText('无需整库同步','Sem sincronização completa','No full-database sync'),
+      desc:uiText('本页数据由Supabase直接汇总返回。登录不会下载全部明细；进入具体模块后才读取对应数据。','Os indicadores são retornados diretamente pelo Supabase. O login não baixa todos os detalhes; cada módulo é carregado somente quando aberto.','Indicators are returned directly by Supabase. Login does not download all details; each module loads only when opened.'),
+      physical:uiText('实际物理集装箱','Contêineres físicos','Physical containers'),
+      relations:uiText('批次关联记录','Relações de lote','Batch relations'),
+      transit:uiText('运输中物理箱','Contêineres em transporte','Containers in transit'),
+      bl:uiText('提单记录','Registros de BL','BL records'),
+      pickup:uiText('提箱计划记录','Planos de retirada','Pickup plans'),
+      stock:uiText('云端库存分布','Distribuição de estoque na nuvem','Cloud stock distribution'),
+      noStock:uiText('暂无库存位置记录','Nenhum registro de localização','No location records'),
+      modules:uiText('模块数据量','Volume de dados por módulo','Module data volume'),
+      last:uiText('云端最后更新','Última atualização da nuvem','Last cloud update'),
+      tasks:uiText('运输任务','Tarefas de transporte','Transport tasks'),
+      stockRows:uiText('库存记录','Registros de estoque','Stock records'),
+      returns:uiText('掏箱/还箱记录','Registros de desova/devolução','Unpack/return records'),
+      production:uiText('生产计划记录','Registros do plano de produção','Production plan records'),
+      full:uiText('加载完整运营与生产看板','Carregar painel operacional e de produção completo','Load full operations and production dashboard')
+    };
+    container.innerHTML=`
+      <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V48.2</div><div class="v42-hero-sub">${t.hero} ${N(b.revision)}</div></div>
+      <div class="card"><div class="card-header"><span class="card-title">⚡ ${t.overview}</span><span class="status-badge status-success">${t.noFull}</span></div>
+        <div style="line-height:1.8;color:#52657a">${t.desc}</div>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card" onclick="jumpTo('containers')"><div class="stat-number">${N(s.physicalContainers)}</div><div class="stat-label">${t.physical}</div></div>
+        <div class="stat-card" onclick="jumpTo('containers')"><div class="stat-number">${N(c.containers)}</div><div class="stat-label">${t.relations}</div></div>
+        <div class="stat-card" onclick="jumpTo('transportTasks')"><div class="stat-number">${N(s.inTransit)}</div><div class="stat-label">${t.transit}</div></div>
+        <div class="stat-card" onclick="jumpTo('blIra')"><div class="stat-number">${N(c.blList)}</div><div class="stat-label">${t.bl}</div></div>
+        <div class="stat-card" onclick="jumpTo('pickupPlan')"><div class="stat-number">${N(c.pickupPlans)}</div><div class="stat-label">${t.pickup}</div></div>
+      </div>
+      <div class="card"><div class="card-title">📍 ${t.stock}</div><div class="location-stock-grid">${Object.keys(loc).length?Object.entries(loc).map(([k,v])=>`<div class="location-stock-item" onclick="jumpTo('locationStock')"><div class="location-stock-count">${N(v)}</div><div>${k}</div></div>`).join(''):`<div style="padding:18px;color:#8795a5">${t.noStock}</div>`}</div></div>
+      <div class="card"><div class="card-header"><span class="card-title">📦 ${t.modules}</span><span style="font-size:12px;color:#8795a5">${t.last}: ${updated}</span></div>
+        <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+          <div class="stat-card"><div class="stat-number">${N(c.transportTasks)}</div><div class="stat-label">${t.tasks}</div></div>
+          <div class="stat-card"><div class="stat-number">${N(c.locationStock)}</div><div class="stat-label">${t.stockRows}</div></div>
+          <div class="stat-card"><div class="stat-number">${N(c.returnRecords)}</div><div class="stat-label">${t.returns}</div></div>
+          <div class="stat-card"><div class="stat-number">${N(c.productionPlans)}</div><div class="stat-label">${t.production}</div></div>
+        </div>
+        <div style="margin-top:14px"><button class="btn btn-primary" onclick="loadFullDashboardV482()">${t.full}</button></div>
+      </div>`;
+  }
+  W.renderDashboard=function(container){if(fullDashboard)return originalRenderDashboard.call(this,container);return renderFastDashboard(container);};
+  try{renderDashboard=W.renderDashboard;}catch(_){ }
+
+  W.renderContent=function(){
+    const menu=currentMenu;
+    if(menu==='dashboard'||menu==='userManagement'||menu==='attachmentsCenter'){const r=originalRenderContent.apply(this,arguments);setTimeout(()=>{cleanupLegacyUi();version();},0);return r;}
+    const deps=MENU_DEPS[menu]||[];
+    if(deps.every(m=>loadedModules.has(m))){const r=originalRenderContent.apply(this,arguments);setTimeout(()=>{cleanupLegacyUi();version();},0);return r;}
+    loadingCard(menu);ensureMenu(menu).then(ok=>{if(ok&&currentMenu===menu){originalRenderContent();setTimeout(()=>{cleanupLegacyUi();version();},0);}}).catch(e=>{const main=document.getElementById('mainContent');if(main)main.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">读取失败</span></div><p>${S(e&&e.message||e)}</p><button class="btn btn-primary" onclick="renderContent()">重试</button></div>`;});
+  };
+  try{renderContent=W.renderContent;}catch(_){ }
+
+  W.loadFullDashboardV482=async function(){
+    const main=document.getElementById('mainContent');if(main)loadingCard('完整工作台');
+    try{for(const m of FULL_DASH_DEPS)await ensureModule(m);prepareDerivedState('dashboard');fullDashboard=true;if(currentMenu==='dashboard')originalRenderContent();}
+    catch(e){alert('完整工作台加载失败：'+S(e&&e.message||e));if(currentMenu==='dashboard')renderFastDashboard(document.getElementById('mainContent'));}
+  };
+
+  function validateChanges(changes){
+    if(changes.length>MAX_OPERATION_ROWS)return`本次操作涉及 ${changes.length} 条记录，超过安全上限 ${MAX_OPERATION_ROWS}。请分批操作。`;
+    const bytes=new Blob([JSON.stringify(changes)]).size;if(bytes>MAX_OPERATION_BYTES)return`本次操作数据量 ${(bytes/1024/1024).toFixed(2)}MB，超过8MB安全上限。请分批操作。`;
+    for(const c of changes){if(c.action!=='upsert')continue;const x=c.payload||{};if(c.module==='containers'&&N(c.expectedVersion)===0){const missing=[];if(!S(x.batch))missing.push('批次');if(!S(x.containerSeq||x.seq))missing.push('集装箱序号');if(!S(x.containerNo))missing.push('集装箱号');if(!S(x.shippingCompany||x.carrier||x.vessel))missing.push('船公司');if(!S(x.containerType))missing.push('箱型');if(!S(x.arrivalDate||x.eta||x.ata))missing.push('到港日期');if(missing.length)return`新增基础数据不完整（${S(x.containerNo)||c.key}）：缺少 ${missing.join('、')}`;}
+      if((c.module==='transportTasks'||c.module==='pickupPlans')&&!S(x.containerId)&&!S(x.containerNo))return`${c.module==='transportTasks'?'运输任务':'提箱计划'}缺少集装箱关联，已阻止保存。`;
+    }
+    return'';
+  }
+  function createOperation(reason){
+    const changes=[];
+    loadedModules.forEach(module=>{
+      const base=baselines.get(module);if(!base)return;
+      const cur=moduleMap(module);
+      cur.forEach((payload,key)=>{const old=base.get(key);const h=hash(payload);if(!old||old.hash!==h)changes.push({module,key,action:'upsert',expectedVersion:old?N(old.version):0,payload:clone(payload)});});
+      base.forEach((old,key)=>{if(!cur.has(key))changes.push({module,key,action:'delete',expectedVersion:N(old.version),payload:null});});
+    });
+    if(!changes.length)return null;
+    const blocked=validateChanges(changes);
+    return{opId:'v482_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10),reason:S(reason||'business_operation'),createdAt:now(),baseRevision:N(bootstrap&&bootstrap.revision),status:'pending',changes,blocked};
+  }
+  function applyOptimistic(op){A(op.changes).forEach(c=>{let base=baselines.get(c.module);if(!base){base=new Map();baselines.set(c.module,base);}if(c.action==='delete')base.delete(c.key);else base.set(c.key,{payload:clone(c.payload||{}),version:N(c.expectedVersion)+1,hash:hash(c.payload||{})});});}
+
+  async function refreshBootstrap(){
+    const b=await callRpc('cms_get_bootstrap_v482',{},RPC_TIMEOUT);if(!b||S(b.schemaVersion)!=='48.2.0')throw new Error('V48.2数据库补丁未正确启用');bootstrap=b;await metaPut({key:'bootstrap:'+bootstrapEmail,email:bootstrapEmail,data:clone(b),updatedAt:now()}).catch(()=>{});return b;
+  }
+  async function sendOperation(op){
+    try{
+      setStatus('本机已保存 · 云端写入中','syncing');
+      const result=await callRpc('cms_commit_operation',{p_operation_id:op.opId,p_changes:A(op.changes).map(c=>({module:c.module,key:c.key,action:c.action,expectedVersion:c.expectedVersion,payload:c.payload})),p_updated_by:who(),p_reason:op.reason},RPC_TIMEOUT);
+      committedOps.add(op.opId);await queueDelete(op.opId);if(bootstrap)bootstrap.revision=Math.max(N(bootstrap.revision),N(result&&result.revision));
+      const versions=result&&result.versions||{};
+      A(op.changes).forEach(c=>{const base=baselines.get(c.module),ent=base&&base.get(c.key);if(ent&&versions[c.module+'|'+c.key]!=null)ent.version=N(versions[c.module+'|'+c.key]);});
+      const touched=[...new Set(A(op.changes).map(c=>c.module))];for(const m of touched){if(loadedModules.has(m)){const rows=[...baselines.get(m).entries()].map(([recordKey,e])=>({recordKey,payload:e.payload,rowVersion:e.version,globalRevision:N(bootstrap&&bootstrap.revision),deletedAt:null}));await replaceCachedRows(m,rows,N(bootstrap&&bootstrap.revision));moduleRevisions.set(m,N(bootstrap&&bootstrap.revision));}}
+      setStatus('云端已快速保存','ok');setTimeout(()=>setStatus('云端按需模式已就绪','ok'),1800);return true;
+    }catch(e){
+      op.lastError=S(e&&e.message||e);op.lastAttemptAt=now();if(/CMS_CONFLICT/i.test(op.lastError)){op.status='conflict';await queuePut(op);setStatus('发现数据冲突 · 未覆盖云端','error');alert('数据冲突：云端记录已被其他操作更新。系统没有覆盖云端数据。请先刷新当前模块，核对后重新维护。');return false;}
+      if(isSchemaError(e)){setStatus('V48.2数据库补丁未部署','error');alert('请先在Supabase SQL Editor执行V48.2按需读取补丁。');return false;}
+      op.status='pending';await queuePut(op);setStatus(navigator.onLine?'云端暂不可用 · 已保存在本机':'当前离线 · 已保存在本机','warn');scheduleRetry();return false;
+    }
+  }
+  async function processQueue(){if(processRunning)return false;processRunning=true;try{const list=await queueAll();for(const op of list){if(op.status==='conflict'){setStatus('存在待处理数据冲突','error');return false;}const ok=await sendOperation(op);if(!ok)return false;}if(!list.length)setStatus('云端按需模式已就绪','ok');return true;}finally{processRunning=false;}}
+  function scheduleRetry(){if(retryTimer)return;retryTimer=setTimeout(()=>{retryTimer=null;if(navigator.onLine)processQueue();},RETRY_MS);}
+  async function capture(reason){
+    let op;try{op=createOperation(reason);}catch(e){alert('保存前数据校验失败：'+S(e&&e.message||e));return false;}
+    if(!op)return true;if(op.blocked){alert(op.blocked);return false;}
+    try{await queuePut(op);}catch(e){alert('浏览器本地安全队列写入失败：'+S(e&&e.message||e));setStatus('本地保存失败','error');return false;}
+    applyOptimistic(op);setStatus('本机已保存 · 云端后台写入','syncing');setTimeout(processQueue,0);return true;
+  }
+  function queueSave(reason){captureChain=captureChain.catch(()=>true).then(()=>capture(reason||'saveData'));return captureChain;}
+
+  queueSave.__v466Wrapped=true;
+  W.queueSaveV482=queueSave;
+  W.queueSaveV480=W.queueSaveV479=W.queueSaveV478=W.queueSaveV473=W.queueSaveV455=W.queueSystemSaveV4513=W.queueCloudPersistV435=queueSave;
+  const saveDataV482=function(reason){return queueSave(reason||'saveData');};saveDataV482.__v466Wrapped=true;
+  const saveCloudV482=function(reason){return queueSave(reason||'saveCloudState');};saveCloudV482.__v466Wrapped=true;
+  W.saveData=saveDataV482;W.saveCloudState=saveCloudV482;W.saveCloudStateV45=W.saveCloudStateV44=W.saveCloudStateV442=W.saveCloudState;
+  const saveRenderV482=function(){let ui=null;try{ui=typeof W.captureCurrentUiStateV4513==='function'?W.captureCurrentUiStateV4513():{scrollY:scrollY};}catch(_){ui={scrollY:scrollY};}W.renderContent();try{if(typeof W.restoreCurrentUiStateV4513==='function')setTimeout(()=>W.restoreCurrentUiStateV4513(ui),0);}catch(_){ }return queueSave('save_and_render_v482');};saveRenderV482.__v466Wrapped=true;W.saveAndRenderContentKeepState=saveRenderV482;
+  W.flushPendingSaveV482=async()=>{await captureChain;await processQueue();return(await queueAll()).length===0;};
+  W.flushPendingSaveV480=W.flushPendingSaveV479=W.flushPendingSaveV478=W.flushPendingSaveV473=W.flushPendingSaveV482;
+  try{saveData=W.saveData;saveCloudState=W.saveCloudState;saveAndRenderContentKeepState=W.saveAndRenderContentKeepState;queueSaveV473=W.queueSaveV473;}catch(_){ }
+
+  async function refreshLoadedModules(){
+    if(!bootstrap)return false;
+    const beforeRevision=N(bootstrap.revision),latest=await refreshBootstrap();let changed=false;
+    for(const m of [...loadedModules]){
+      const from=N(moduleRevisions.get(m));
+      if(from<N(latest.revision)){
+        const delta=await fetchModuleChanges(m,from,'');
+        if(delta.rows.length){applyDeltaRows(m,delta.rows);await patchCachedRows(m,delta.rows,delta.revision);changed=true;}
+        else await metaPut({key:'module:'+m,module:m,revision:N(delta.revision),updatedAt:now()}).catch(()=>{});
+        moduleRevisions.set(m,N(delta.revision));
+      }
+    }
+    if(changed||N(latest.revision)!==beforeRevision){
+      let editing=false;try{editing=(typeof isCurrentPageRefreshLocked==='function'&&isCurrentPageRefreshLocked())||(typeof isModalOpen==='function'&&isModalOpen())||(typeof isUserActivelyEditing==='function'&&isUserActivelyEditing());}catch(_){ }
+      if(!editing){prepareDerivedState(currentMenu);if(currentMenu==='dashboard'&&!fullDashboard)W.renderContent();else if(currentMenu!=='dashboard')W.renderContent();}
+      else setStatus('云端有更新 · 当前页面完成操作后显示','warn');
+    }
+    return true;
+  }
+  async function startRealtime(){
+    const client=sb();if(!client)return false;try{if(realtimeChannel)await client.removeChannel(realtimeChannel);}catch(_){ }
+    let timer=null;
+    realtimeChannel=client.channel('cms_v482_ops_'+Math.random().toString(36).slice(2)).on('postgres_changes',{event:'INSERT',schema:'public',table:'cms_operations'},payload=>{const row=payload&&payload.new;if(!row||committedOps.has(S(row.operation_id)))return;clearTimeout(timer);timer=setTimeout(()=>refreshLoadedModules().catch(()=>{}),350);}).subscribe(code=>{if(code==='SUBSCRIBED')setStatus('云端按需模式已就绪','ok');else if(code==='CHANNEL_ERROR'||code==='TIMED_OUT')setStatus('实时订阅异常 · 定时校验启用','warn');});
+    if(reconcileTimer)clearInterval(reconcileTimer);reconcileTimer=setInterval(()=>{if(document.visibilityState==='visible'&&!processRunning)refreshLoadedModules().catch(()=>{});},RECONCILE_MS);return true;
+  }
+
+  async function authorize(){
+    const client=sb();if(!client)throw new Error('Supabase未连接');const sr=await timeout(client.auth.getSession(),9000,'读取登录会话超时');if(sr&&sr.error)throw sr.error;const session=sr&&sr.data&&sr.data.session;if(!session||!session.user)return null;const user=session.user;const pr=await timeout(client.from('user_profiles').select('*').ilike('email',user.email).maybeSingle(),9000,'读取用户权限超时');if(pr&&pr.error)throw pr.error;return{user,profile:pr&&pr.data};
+  }
+  function mapProfile(profile,user){try{if(typeof mapProfileToCurrentUser==='function')return mapProfileToCurrentUser(profile,user);}catch(_){ }return{email:user.email,name:profile.name||profile.display_name||user.email,role:profile.role||'订购科',cloudRole:profile.role||'',carrier:profile.carrier||'',location:profile.location||''};}
+  function mount(profile,user){
+    const mapped=mapProfile(profile,user);try{cloudUser=user;W.cloudUser=user;cloudProfile=profile;W.cloudProfile=profile;}catch(_){W.cloudUser=user;W.cloudProfile=profile;}try{currentUser=mapped;W.currentUser=mapped;}catch(_){W.currentUser=mapped;}
+    try{currentMenu=(mapped.role==='订购科'||isAdmin())?'dashboard':(allMenus.find(m=>canAccessMenu(m))?.id||'containers');W.currentMenu=currentMenu;}catch(_){ }
+    const login=document.getElementById('loginPage'),main=document.getElementById('mainApp');if(login)login.style.display='none';if(main)main.style.display='block';
+    const role=document.getElementById('currentRole'),name=document.getElementById('currentUser');if(role)role.innerText=mapped.role||'';if(name)name.innerText=mapped.name||mapped.email||user.email||'';
+    hideOldBadges();try{renderSidebar();}catch(_){ }try{W.renderContent();}catch(_){ }
+  }
+  async function bootstrapSession(){
+    if(authPromise)return authPromise;
+    authPromise=(async()=>{
+      try{
+        const auth=await authorize();if(!auth)return false;const{user,profile}=auth;if(!profile||profile.is_active===false){alert('该账号尚未获得系统权限，请联系管理员。');return false;}
+        bootstrapEmail=S(user.email).toLowerCase();const cached=await metaGet('bootstrap:'+bootstrapEmail).catch(()=>null);if(cached&&cached.data)bootstrap=cached.data;
+        mount(profile,user);setStatus(bootstrap?'已显示本机首页 · 正在校验版本':'正在读取轻量云端首页','syncing');
+        try{await refreshBootstrap();if(!bootstrap.migrationComplete)throw new Error('业务表迁移尚未完成');W.renderContent();setStatus('云端按需模式已就绪','ok');await Promise.all(SMALL_MODULES.map(m=>ensureModule(m).catch(()=>false)));setTimeout(processQueue,0);startRealtime();}
+        catch(e){console.error('V48.2 bootstrap failed',e);if(isSchemaError(e)){setStatus('请执行V48.2 SQL补丁','error');alert('数据库尚未启用V48.2按需读取接口。请先执行V48.2 Supabase SQL补丁。');}else{setStatus(bootstrap?'云端校验失败 · 使用本机首页':'读取云端首页失败','error');if(!bootstrap)alert('读取云端首页失败：'+S(e&&e.message||e));}}
+        return true;
+      }catch(e){console.error('V48.2 login failed',e);alert('登录失败：'+S(e&&e.message||e));return false;}finally{authPromise=null;}
+    })();return authPromise;
+  }
+  W.ensureCloudSession=bootstrapSession;
+  W.loadData=async function(){const ok=await bootstrapSession();if(!ok){const l=document.getElementById('loginPage'),m=document.getElementById('mainApp');if(l)l.style.display='flex';if(m)m.style.display='none';}return ok;};
+  W.loginWithEmailPassword=async function(){
+    const email=S(document.getElementById('loginEmail')&&document.getElementById('loginEmail').value).toLowerCase(),password=S(document.getElementById('loginPassword')&&document.getElementById('loginPassword').value);if(!email)return alert('请输入邮箱');if(!password)return alert('请输入密码');const btn=document.querySelector('button[onclick="loginWithEmailPassword()"]'),old=btn&&btn.textContent;if(btn){btn.disabled=true;btn.textContent='正在验证账号…';}
+    try{const client=sb();if(!client)throw new Error('Supabase登录服务未初始化');const r=await timeout(client.auth.signInWithPassword({email,password}),12000,'账号验证超时');if(r&&r.error)throw r.error;await bootstrapSession();}catch(e){alert('邮箱登录失败：'+S(e&&e.message||e));}finally{if(btn){btn.disabled=false;btn.textContent=old||'邮箱 + 密码登录';}}
+  };
+  try{ensureCloudSession=W.ensureCloudSession;loadData=W.loadData;loginWithEmailPassword=W.loginWithEmailPassword;}catch(_){ }
+
+  W.loadCloudState=async()=>{try{await refreshBootstrap();await refreshLoadedModules();return true;}catch(e){console.warn(e);return false;}};
+  W.pullCloudStateAndRefresh=W.loadCloudState;W.startRealtimeSync=startRealtime;
+  try{loadCloudState=W.loadCloudState;pullCloudStateAndRefresh=W.pullCloudStateAndRefresh;startRealtimeSync=W.startRealtimeSync;}catch(_){ }
+
+  W.retryPendingBusinessOpsV480=W.retryPendingBusinessOpsV482=async()=>{const ok=await processQueue();if(ok)alert('本机待上传操作已完成同步。');return ok;};
+  W.migrateLocalToCloud=()=>W.retryPendingBusinessOpsV482();try{migrateLocalToCloud=W.migrateLocalToCloud;}catch(_){ }
+  W.showV482Status=async()=>{const q=await queueAll(),mods=[...loadedModules];alert(`V48.2 云端按需模式\n\n云端修订号：${N(bootstrap&&bootstrap.revision)}\n已加载模块：${mods.length?mods.join('、'):'仅轻量首页'}\n本机待上传：${q.length}\n冲突操作：${q.filter(x=>x.status==='conflict').length}\n\n登录读取：轻量首页\n明细读取：进入菜单后分页加载\n日常保存：单行原子事务\n完整快照：仅手工备份`);};
+
+  const legacyDownload=W.downloadCloudBackup;
+  W.downloadCloudBackup=async function(){
+    if(!confirm('完整备份需要按需读取全部业务模块，可能需要一些时间，但不会阻塞其他账号使用。是否继续？'))return;
+    try{setStatus('正在准备完整备份','syncing');for(const m of MODULES)await ensureModule(m);if(typeof legacyDownload==='function')legacyDownload.call(W);setStatus('完整备份已生成','ok');}catch(e){setStatus('完整备份失败','error');alert('完整备份失败：'+S(e&&e.message||e));}
+  };
+  try{downloadCloudBackup=W.downloadCloudBackup;}catch(_){ }
+
+  W.addEventListener('online',()=>{setStatus('网络已恢复 · 正在续传','syncing');processQueue();refreshLoadedModules().catch(()=>{});});
+  W.addEventListener('offline',()=>setStatus('当前离线 · 数据已保存在本机','warn'));
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){processQueue();refreshLoadedModules().catch(()=>{});}});
+
+  function version(){
+    try{document.title='Sistema Inteligente de Monitoramento de Contêineres V48.2';document.querySelectorAll('.v42-hero-title').forEach(el=>{el.textContent=S(el.textContent).replace(/V4\d+\.\d+/,'V48.2');});document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/^V4\d+(?:\.\d+)?(?:\s.*)?$/i.test(S(el.textContent)))el.textContent='V48.2';});const card=document.querySelector('.login-card');if(card){const sub=[...card.querySelectorAll('div,p')].find(el=>/V4\d|Stable|Clean|Safe|Instant Access|Fast Read|修复/i.test(S(el.textContent)));if(sub)sub.textContent='V48.2：轻量首页、模块按需分页读取、增量同步、逐行原子保存。';}hideOldBadges();}catch(_){ }
+  }
+  const style=document.createElement('style');style.textContent='#v4713SyncBadge,#v479SaveIndicator,#v478SaveIndicator{display:none!important}#v482StatusBadge{border:1px solid rgba(255,255,255,.35)}';document.head.appendChild(style);
+  document.addEventListener('DOMContentLoaded',()=>{version();setTimeout(version,800);setTimeout(version,2500);setTimeout(version,7200);});setTimeout(version,100);
+  console.log(VERSION+' loaded: no full-state login sync; modules load on demand and saves remain atomic.');
 })();
 </script>
 
