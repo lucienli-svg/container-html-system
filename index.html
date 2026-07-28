@@ -15097,5 +15097,291 @@ ${preview}
 })();
 </script>
 
+
+<script>
+/* ==================== V47.11 共箱集装箱 + 多提单/IRA清关汇总 ====================
+   兼容设计：
+   - containers 继续按“批次关系”保存和展示；同一箱号可对应多条批次记录。
+   - physicalContainerId 标识唯一物理集装箱；运营、费用、库存和数量按物理箱去重。
+   - containerBlMap 仍按批次关系行关联提单；共箱提箱资格按同一物理箱全部提单/IRA汇总。
+*/
+(function(){
+  'use strict';
+  const W=window;
+  const VERSION='V47.11 Shared Container Customs Core';
+  const S=v=>String(v==null?'':v).trim();
+  const U=v=>S(v).toUpperCase().replace(/\s+/g,'');
+  const A=v=>Array.isArray(v)?v:[];
+  const N=v=>Number(v)||0;
+  const esc=v=>S(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  const rows=name=>{
+    try{
+      if(name==='containers')return typeof containers!=='undefined'&&Array.isArray(containers)?containers:A(W.containers);
+      if(name==='blList')return typeof blList!=='undefined'&&Array.isArray(blList)?blList:A(W.blList);
+      if(name==='containerBlMap')return typeof containerBlMap!=='undefined'&&Array.isArray(containerBlMap)?containerBlMap:A(W.containerBlMap);
+      if(name==='pickupPlans')return typeof pickupPlans!=='undefined'&&Array.isArray(pickupPlans)?pickupPlans:A(W.pickupPlans);
+      if(name==='transportTasks')return typeof transportTasks!=='undefined'&&Array.isArray(transportTasks)?transportTasks:A(W.transportTasks);
+      if(name==='locationStock')return typeof locationStock!=='undefined'&&Array.isArray(locationStock)?locationStock:A(W.locationStock);
+      if(name==='returnRecords')return typeof returnRecords!=='undefined'&&Array.isArray(returnRecords)?returnRecords:A(W.returnRecords);
+      if(name==='productionRecords')return typeof productionRecords!=='undefined'&&Array.isArray(productionRecords)?productionRecords:A(W.productionRecords);
+    }catch(_){ }
+    return [];
+  };
+  function noKey(c){return U(typeof c==='object'?(c&&c.containerNo):c);}
+  function hash(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return (h>>>0).toString(36).toUpperCase();}
+  function physicalIdForNo(no){const k=noKey(no);return k?'PC_'+hash(k):'';}
+  function groupMap(){const m=new Map();rows('containers').forEach(c=>{const k=noKey(c);if(!k)return;if(!m.has(k))m.set(k,[]);m.get(k).push(c);});return m;}
+  function groupOf(c){return groupMap().get(noKey(c))||[];}
+  function rowSort(a,b){const ai=N(a&&a.id),bi=N(b&&b.id);if(ai&&bi&&ai!==bi)return ai-bi;return S(a&&a.createdAt).localeCompare(S(b&&b.createdAt))||S(a&&a.batch).localeCompare(S(b&&b.batch),'zh-CN',{numeric:true})||S(a&&a.containerSeq).localeCompare(S(b&&b.containerSeq),'zh-CN',{numeric:true});}
+  function canonicalOf(c){const g=groupOf(c).slice().sort(rowSort);return g[0]||c;}
+  function canonicalRows(){return [...groupMap().values()].map(g=>g.slice().sort(rowSort)[0]).filter(Boolean);}
+  function relationKey(c){return [noKey(c),U(c&&c.batch),U(c&&(c.containerSeq||c.seq))].join('|');}
+  function batchText(g){return [...new Set(g.map(x=>S(x.batch)).filter(Boolean))].join(' / ');}
+  function seqText(g){return g.map(x=>`${S(x.batch)||'-'} #${S(x.containerSeq||x.seq)||'-'}`).join(' / ');}
+  function blId(b){return S(b&&(b.houseBlNo||b.blNo||b.masterBlNo));}
+  function findBl(no){const k=U(no);return rows('blList').find(b=>[b.blNo,b.houseBlNo,b.masterBlNo].some(x=>U(x)===k));}
+  function rowBlRecords(c){const seen=new Set(),out=[];rows('containerBlMap').filter(m=>S(m.containerId)===S(c&&c.id)).forEach(m=>{const k=U(m.blNo||m.houseBlNo||m.masterBlNo);if(!k||seen.has(k))return;seen.add(k);const b=findBl(k);out.push({map:m,bl:b,key:k});});return out;}
+  function groupBlRecords(c){const seen=new Set(),out=[];groupOf(c).forEach(r=>rowBlRecords(r).forEach(x=>{if(!seen.has(x.key)){seen.add(x.key);out.push(x);}}));return out;}
+  function blDisplay(b){if(!b)return'';return S(b.carrier)==='长荣'&&S(b.masterBlNo)?`${S(b.masterBlNo)}|${S(b.houseBlNo||b.blNo)}`:S(b.blNo||b.houseBlNo||b.masterBlNo);}
+  function rowBlText(c){const arr=rowBlRecords(c).map(x=>blDisplay(x.bl)||S(x.map&&x.map.blNo)).filter(Boolean);return [...new Set(arr)].join(', ');}
+  function rowIraText(c){return [...new Set(rowBlRecords(c).map(x=>S(x.bl&&x.bl.iraNo)).filter(Boolean))].join(', ');}
+  function groupBlText(c){return [...new Set(groupBlRecords(c).map(x=>blDisplay(x.bl)||S(x.map&&x.map.blNo)).filter(Boolean))].join(' / ');}
+  function groupIraText(c){return [...new Set(groupBlRecords(c).map(x=>S(x.bl&&x.bl.iraNo)).filter(Boolean))].join(' / ');}
+  function dateOnly(v){if(!v)return'';try{if(typeof W.getDatePart==='function')return W.getDatePart(v)||S(v).slice(0,10);}catch(_){ }const s=S(v),m=s.match(/(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);return m?`${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`:s.slice(0,10);}
+  function maxDate(values){return values.map(dateOnly).filter(Boolean).sort().pop()||'';}
+  function customsSummary(c){
+    const g=groupOf(c),units=groupBlRecords(c),shared=g.length>1;
+    const required=units.length;
+    let cleared=0,iraReady=0,missingBl=0;
+    units.forEach(x=>{if(!x.bl){missingBl++;return;}if(x.bl.isCleared)cleared++;if(S(x.bl.iraNo))iraReady++;});
+    const allBls=required>0&&missingBl===0&&cleared===required;
+    const allIra=!shared||iraReady===required;
+    const eligible=allBls&&allIra;
+    const any=cleared>0;
+    let status='清关中';
+    if(eligible)status='已清关';
+    else if(required===0||missingBl>0||(shared&&iraReady<required&&allBls))status='清关资料缺失';
+    else if(any)status='部分清关';
+    const pending=units.filter(x=>!x.bl||!x.bl.isCleared||(shared&&!S(x.bl.iraNo))).map(x=>({bl:blDisplay(x.bl)||S(x.map&&x.map.blNo)||'未关联提单',ira:S(x.bl&&x.bl.iraNo)||'未维护IRA',cleared:!!(x.bl&&x.bl.isCleared)}));
+    const completionDate=eligible?maxDate(units.map(x=>x.bl&&x.bl.clearanceDate)):'';
+    return{physicalContainerId:(g[0]&&g[0].physicalContainerId)||physicalIdForNo(c),group:g,shared,required,cleared,iraReady,missingBl,eligible,status,pending,completionDate,progress:`${cleared}/${required||0}`,batchText:batchText(g),seqText:seqText(g),blText:groupBlText(c),iraText:groupIraText(c)};
+  }
+  function actualPickupForGroup(c){const g=groupOf(c),plans=rows('pickupPlans').filter(p=>noKey(p)===noKey(c)||g.some(r=>S(r.id)===S(p.containerId))),tasks=rows('transportTasks').filter(t=>noKey(t)===noKey(c)||g.some(r=>S(r.id)===S(t.containerId)));return maxDate([...g.map(x=>x.actualPickupTime),...plans.map(x=>x.actualPickupTime||x.pickupTime),...tasks.map(x=>x.actualPickupTime||x.pickupTime)]);}
+  function prepareSharedState(){
+    const gm=groupMap();
+    gm.forEach((g,k)=>{
+      g.sort(rowSort);
+      const pid=g.find(x=>S(x.physicalContainerId))?.physicalContainerId||physicalIdForNo(k);
+      const master=g[0];
+      const sharedFields=['vessel','carrier','containerType','eta'];
+      sharedFields.forEach(f=>{const val=g.map(x=>x[f]).find(v=>S(v));if(S(val))g.forEach(x=>{if(!S(x[f]))x[f]=val;});});
+      const pickup=actualPickupForGroup(master);
+      const summary=customsSummary(master);
+      const commonConflicts={};
+      ['vessel','containerType','eta'].forEach(f=>{const vals=[...new Set(g.map(x=>S(x[f])).filter(Boolean))];if(vals.length>1)commonConflicts[f]=vals;});
+      g.forEach((x,idx)=>{
+        x.physicalContainerId=pid;
+        x.physicalContainerKey=k;
+        x.isSharedContainer=g.length>1;
+        x.sharedBatchCount=g.length;
+        x.relatedBatchSummary=batchText(g);
+        x.isPhysicalCanonical=idx===0;
+        x.customsStatus=summary.status;
+        x.customsProgress=summary.progress;
+        x.pickupEligible=summary.eligible;
+        x.clearanceCompleteDate=summary.completionDate||'';
+        x.sharedInfoConflict=Object.keys(commonConflicts).length?commonConflicts:null;
+        if(pickup)x.actualPickupTime=pickup;
+      });
+    });
+    return gm;
+  }
+  function isCanonical(c){return S(canonicalOf(c)&&canonicalOf(c).id)===S(c&&c.id);}
+  function physicalKeyFromRecord(r){if(!r)return'';if(S(r.physicalContainerId))return S(r.physicalContainerId);const no=noKey(r);if(no)return physicalIdForNo(no);const c=rows('containers').find(x=>S(x.id)===S(r.containerId));return c?physicalIdForNo(c):S(r.containerId);}
+  function uniqueByPhysical(list){const seen=new Set(),out=[];A(list).forEach(x=>{const k=physicalKeyFromRecord(x);if(!k||seen.has(k))return;seen.add(k);out.push(x);});return out;}
+  function activePlanFor(c){const g=groupOf(c);return rows('pickupPlans').find(p=>p.status!=='cancelled'&&(noKey(p)===noKey(c)||g.some(r=>S(r.id)===S(p.containerId))));}
+  function sharedBadge(c){const n=groupOf(c).length;return n>1?`<span class="status-badge status-warning" title="该物理集装箱关联 ${n} 条批次记录">共箱 ${n}批次</span>`:'<span class="status-badge status-success">单批次</span>';}
+  function statusFor(c){try{const fn=W.getContainerFullStatus||(typeof getContainerFullStatus==='function'?getContainerFullStatus:null);if(fn)return fn(c);}catch(_){ }return{customs:S(c.customsStatus)||'清关中',loc:'港口',text:S(c.customsStatus)||'清关中',cls:'status-pending'};}
+  function fmt(v){try{return typeof W.fmtDate==='function'?W.fmtDate(v):(typeof fmtDate==='function'?fmtDate(v):dateOnly(v));}catch(_){return dateOnly(v);}}
+  function currentNextId(){try{if(!nextIds||typeof nextIds!=='object')return Date.now();if(!Number(nextIds.container))nextIds.container=1;return nextIds.container++;}catch(_){return Date.now()+Math.floor(Math.random()*1000);}}
+  function currentNextPlanId(){try{if(!nextIds||typeof nextIds!=='object')return Date.now();if(!Number(nextIds.plan))nextIds.plan=1;return nextIds.plan++;}catch(_){return Date.now()+Math.floor(Math.random()*1000);}}
+  function createBlMap(containerId,vessel,raw,no){
+    try{if(typeof createBlForContainer==='function'){createBlForContainer(containerId,vessel,raw,no);return;}}catch(_){ }
+    let bl=S(raw),key=bl;
+    if(S(vessel)==='长荣')key=S(bl.split('|')[1]||bl.split('|')[0]);
+    if(!key)key='待补充提单-'+S(no);
+    let item=findBl(key);
+    if(!item){item=S(vessel)==='长荣'?{carrier:'长荣',masterBlNo:S(bl.split('|')[0]||key),houseBlNo:key,iraNo:'',isCleared:false,channel:'绿色',clearanceDate:null,isPlaceholder:!bl}:{carrier:vessel,blNo:key,iraNo:'',isCleared:false,channel:'绿色',clearanceDate:null,isPlaceholder:!bl};rows('blList').push(item);}
+    if(!rows('containerBlMap').some(m=>S(m.containerId)===S(containerId)&&U(m.blNo)===U(key)))rows('containerBlMap').push({containerId,blNo:key});
+  }
+
+  // 对外能力
+  W.getPhysicalContainerKey=c=>physicalKeyFromRecord(c);
+  W.getPhysicalContainerGroup=c=>groupOf(c);
+  W.getPhysicalContainerCanonical=c=>canonicalOf(c);
+  W.getPhysicalContainerCustomsSummary=c=>customsSummary(c);
+  W.isPhysicalContainerPickupEligible=c=>customsSummary(c).eligible;
+  W.getPhysicalContainerCount=()=>canonicalRows().length;
+  W.getPhysicalContainers=()=>canonicalRows();
+  W.getSharedContainerBatchText=c=>batchText(groupOf(c));
+  W.getSharedContainerBlText=c=>groupBlText(c);
+  W.getSharedContainerIraText=c=>groupIraText(c);
+  W.prepareSharedContainerStateV4711=prepareSharedState;
+
+  // 运营模块只处理物理箱代表行；基础数据仍显示全部批次关系。
+  const baseOperational=W.isOperationalVisibleContainer||(typeof isOperationalVisibleContainer==='function'?isOperationalVisibleContainer:null);
+  W.isOperationalVisibleContainer=function(c){if(!isCanonical(c))return false;try{return baseOperational?baseOperational(c):true;}catch(_){return true;}};
+  try{isOperationalVisibleContainer=W.isOperationalVisibleContainer;}catch(_){ }
+
+  // 清关状态改为物理箱汇总状态。
+  W.updateContainerStatus=function(){prepareSharedState();return true;};
+  try{updateContainerStatus=W.updateContainerStatus;}catch(_){ }
+  W.getContainerClearanceCompleteDate=function(c){return customsSummary(c).completionDate||'';};
+  try{getContainerClearanceCompleteDate=W.getContainerClearanceCompleteDate;}catch(_){ }
+
+  // 每次保存前同步共箱元数据和生命周期字段，确保任一批次行操作后其余关联行保持一致。
+  const baseSave=W.saveData;
+  if(typeof baseSave==='function'){
+    W.saveData=function(){prepareSharedState();return baseSave.apply(this,arguments);};
+    try{saveData=W.saveData;}catch(_){ }
+  }
+
+  // 新增：同箱不同批次允许新增；完全相同关系阻止；公共字段以物理箱主记录为准。
+  W.saveAddContainer=function(){
+    const batch=S(document.getElementById('newBatch')?.value),seq=S(document.getElementById('newSeq')?.value),no=S(document.getElementById('newNo')?.value),vessel=S(document.getElementById('newVessel')?.value),type=S(document.getElementById('newType')?.value)||'普柜',etaRaw=S(document.getElementById('newEta')?.value),blsRaw=S(document.getElementById('newBls')?.value);
+    if(!batch||!no)return alert('请填写批次和集装箱号。');
+    const exact=rows('containers').find(c=>relationKey(c)===[U(no),U(batch),U(seq)].join('|'));
+    if(exact)return alert('该集装箱号、批次和序号的关系已经存在，系统已阻止重复录入。');
+    const existingGroup=groupMap().get(U(no))||[];
+    if(existingGroup.some(c=>U(c.batch)===U(batch)&&U(c.containerSeq||c.seq)!==U(seq))&&!confirm('该集装箱已关联当前批次，但批次内序号不同。确认新增另一条序号关系吗？'))return;
+    const master=existingGroup.slice().sort(rowSort)[0];
+    const id=currentNextId();
+    const row={id,batch,containerSeq:seq,containerNo:no,vessel:master?.vessel||vessel,containerType:master?.containerType||type,eta:master?.eta||fmt(etaRaw),actualPickupTime:master?.actualPickupTime||null,physicalContainerId:master?.physicalContainerId||physicalIdForNo(no)};
+    rows('containers').push(row);
+    const items=blsRaw?blsRaw.split(',').map(S).filter(Boolean):[''];items.forEach(x=>createBlMap(id,row.vessel,x,no));
+    prepareSharedState();W.saveData('add_shared_container_relation');try{closeModal();}catch(_){ }try{W.renderContainerTable(1);}catch(_){ }alert(existingGroup.length?'已新增共箱批次关系。该物理集装箱仍按1个集装箱统计。':'添加成功。');
+  };
+  try{saveAddContainer=W.saveAddContainer;}catch(_){ }
+
+  // 批量导入：重复规则调整为“箱号+批次+序号”；同箱不同批次新增为共箱关系。
+  W.importExcel=function(){
+    const file=document.getElementById('importFile')?.files?.[0];if(!file)return alert('请选择文件。');
+    const reader=new FileReader();
+    reader.onload=function(e){
+      try{
+        const workbook=XLSX.read(new Uint8Array(e.target.result),{type:'array',cellDates:true});
+        const sheet=workbook.Sheets[workbook.SheetNames[0]],data=XLSX.utils.sheet_to_json(sheet,{header:1,defval:'',raw:false});
+        let newPhysical=0,newLinks=0,sharedLinks=0,duplicate=0,seqConflict=0,commonConflict=0,placeholder=0;
+        const relationSet=new Set(rows('containers').map(relationKey));
+        for(let i=1;i<data.length;i++){
+          const r=data[i],batch=S(r[0]),seq=S(r[1]),no=S(r[2]),vessel=S(r[3]),type=S(r[4])||'普柜',eta=S(r[5]),bls=S(r[6]);
+          if(!batch&&!seq&&!no)continue;if(!no)continue;
+          const rk=[U(no),U(batch),U(seq)].join('|');if(relationSet.has(rk)){duplicate++;continue;}
+          const gm=groupMap(),g=gm.get(U(no))||[];
+          if(g.some(c=>U(c.batch)===U(batch)&&U(c.containerSeq||c.seq)!==U(seq))){seqConflict++;continue;}
+          const master=g.slice().sort(rowSort)[0];
+          if(master&&((vessel&&U(master.vessel)!==U(vessel))||(type&&U(master.containerType)!==U(type))||(eta&&dateOnly(master.eta)!==dateOnly(eta))))commonConflict++;
+          const id=currentNextId();
+          const row={id,batch,containerSeq:seq,containerNo:no,vessel:master?.vessel||vessel,containerType:master?.containerType||type,eta:master?.eta||fmt(eta),actualPickupTime:master?.actualPickupTime||null,physicalContainerId:master?.physicalContainerId||physicalIdForNo(no)};
+          rows('containers').push(row);relationSet.add(rk);newLinks++;if(master)sharedLinks++;else newPhysical++;
+          const items=bls?bls.split(',').map(S).filter(Boolean):[''];if(!bls)placeholder++;items.forEach(x=>createBlMap(id,row.vessel,x,no));
+        }
+        prepareSharedState();W.saveData('import_shared_container_relations');try{closeModal();}catch(_){ }try{W.renderContainerTable(1);}catch(_){ }
+        alert(`导入完成\n新增物理集装箱：${newPhysical}个\n新增批次关系：${newLinks}条\n其中新增共箱关系：${sharedLinks}条\n完全重复跳过：${duplicate}条\n同批次序号冲突跳过：${seqConflict}条\n公共信息冲突（沿用原物理箱信息）：${commonConflict}条${placeholder?`\n未填写提单：${placeholder}条（已生成待补充提单）`:''}`);
+      }catch(err){console.error(err);alert('导入失败：'+(err&&err.message||err));}
+    };
+    reader.readAsArrayBuffer(file);
+  };
+  try{importExcel=W.importExcel;}catch(_){ }
+
+  // 删除共箱中的一条关系时仅解除关联，不删除实际运输和费用链路。
+  const oldDelete=W.deleteContainer||(typeof deleteContainer==='function'?deleteContainer:null);
+  W.deleteContainer=function(id){
+    const c=rows('containers').find(x=>S(x.id)===S(id));if(!c)return alert('未找到基础数据。');
+    const g=groupOf(c).slice().sort(rowSort);if(g.length<=1)return oldDelete?oldDelete(id):undefined;
+    if(!confirm(`该箱号为共箱集装箱，共关联 ${g.length} 个批次。\n本次仅删除 ${S(c.batch)} #${S(c.containerSeq||'-')} 的批次关系，不删除物理集装箱、运输和费用记录。确认继续吗？`))return;
+    const replacement=g.find(x=>S(x.id)!==S(c.id));
+    ['pickupPlans','transportTasks','locationStock','returnRecords'].forEach(name=>rows(name).forEach(x=>{if(S(x.containerId)===S(c.id))x.containerId=replacement.id;if(noKey(x)===noKey(c)){x.containerNo=replacement.containerNo;x.physicalContainerId=replacement.physicalContainerId;}}));
+    rows('productionRecords').forEach(x=>{if(S(x.containerId)===S(c.id))x.containerId=replacement.id;if(Array.isArray(x.containerIds))x.containerIds=x.containerIds.map(v=>S(v)===S(c.id)?replacement.id:v);});
+    const maps=rows('containerBlMap');for(let i=maps.length-1;i>=0;i--)if(S(maps[i].containerId)===S(c.id))maps.splice(i,1);
+    const cs=rows('containers'),idx=cs.indexOf(c);if(idx>=0)cs.splice(idx,1);
+    const used=new Set(maps.map(m=>U(m.blNo)));const bls=rows('blList');for(let i=bls.length-1;i>=0;i--){const k=U(blId(bls[i]));if(k&&!used.has(k)&&bls[i].isPlaceholder)bls.splice(i,1);}
+    prepareSharedState();W.saveData('unlink_shared_batch');try{W.renderContainerTable(1);}catch(_){ }alert('批次关系已解除；该物理集装箱及其运输、费用记录已保留。');
+  };
+  try{deleteContainer=W.deleteContainer;}catch(_){ }
+
+  // 基础数据页面：显示所有批次关系，同时明确实际物理箱数量和清关汇总进度。
+  let basicPage=1,basicFilter='';const PAGE=100;
+  function pageBar(total,page){const pages=Math.max(1,Math.ceil(total/PAGE));return `<div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin:10px 0;font-size:12px;color:#606266"><span>批次关系 ${total} 条｜第 ${page}/${pages} 页</span><button class="btn btn-sm" ${page<=1?'disabled':''} onclick="renderContainerTable(${page-1})">上一页</button><button class="btn btn-sm" ${page>=pages?'disabled':''} onclick="renderContainerTable(${page+1})">下一页</button></div>`;}
+  W.renderContainerTable=function(page){
+    prepareSharedState();const box=document.getElementById('containerTable');if(!box)return;
+    const qb=U(document.getElementById('searchBatch')?.value),qn=U(document.getElementById('searchContainer')?.value),ql=S(document.getElementById('searchLocation')?.value),qs=S(document.getElementById('searchStatus')?.value),fk=[qb,qn,ql,qs].join('|');if(fk!==basicFilter){basicFilter=fk;basicPage=1;}if(N(page)>0)basicPage=N(page);
+    const list=rows('containers').slice().sort((a,b)=>S(a.batch).localeCompare(S(b.batch),'zh-CN',{numeric:true})||N(a.containerSeq)-N(b.containerSeq)||S(a.containerNo).localeCompare(S(b.containerNo),'en',{numeric:true})).filter(c=>{const st=statusFor(c),sum=customsSummary(c);return(!qb||U(c.batch).includes(qb))&&(!qn||noKey(c).includes(qn))&&(!ql||st.loc===ql)&&(!qs||st.text===qs||sum.status===qs);});
+    const pages=Math.max(1,Math.ceil(list.length/PAGE));basicPage=Math.min(Math.max(1,basicPage),pages);const start=(basicPage-1)*PAGE,slice=list.slice(start,start+PAGE),physical=new Set(list.map(noKey)).size,shared=new Set(list.filter(c=>groupOf(c).length>1).map(noKey)).size;
+    const body=slice.map((c,i)=>{const st=statusFor(c),sum=customsSummary(c);let lfd='-';try{lfd=(W.getDemurrageLastFreeDay&&W.getDemurrageLastFreeDay(c))||'-';}catch(_){ }return `<tr><td>${start+i+1}</td><td>${esc(c.batch||'-')}</td><td>${esc(c.containerSeq||c.seq||'-')}</td><td>${esc(c.containerNo||'-')}<div style="margin-top:4px">${sharedBadge(c)}</div></td><td>${esc(c.vessel||c.carrier||'-')}</td><td>${esc(c.containerType||'-')}</td><td>${esc(fmt(c.eta||c.arrivalDate)||'-')}</td><td>${esc(lfd)}</td><td>${esc(rowBlText(c)||'-')}</td><td>${esc(rowIraText(c)||'-')}</td><td><span class="status-badge ${sum.eligible?'status-ready':sum.status==='部分清关'?'status-warning':'status-clearing'}">${esc(sum.status)}</span><div style="font-size:11px;color:#606266;margin-top:4px">提单清关 ${sum.progress}${sum.shared?`｜IRA ${sum.iraReady}/${sum.required}`:''}</div></td><td><span class="status-badge status-pending">${esc(st.loc||'-')}</span></td><td><span class="status-badge ${esc(st.cls||'status-pending')}">${esc(st.text||'-')}</span></td><td><button class="btn btn-sm btn-warning" onclick="editContainer(${JSON.stringify(c.id)})">编辑</button> <button class="btn btn-sm btn-danger" onclick="deleteContainer(${JSON.stringify(c.id)})">删除关系</button></td></tr>`;}).join('');
+    const headers=['序号','批次','序号','集装箱号','船公司','箱型','到港','滞箱LFD','本批次提单','本批次IRA','物理箱清关汇总','位置','运输状态','操作'];
+    box.innerHTML=`<div style="padding:9px 12px;background:#f4f7fb;border-radius:6px;margin-bottom:8px;font-size:12px;color:#303133">当前筛选：批次关系 <b>${list.length}</b> 条｜实际物理集装箱 <b>${physical}</b> 个｜共箱集装箱 <b>${shared}</b> 个。费用、库存、运输和提箱均按物理集装箱统计一次。</div>${pageBar(list.length,basicPage)}<div class="table-wrapper"><table class="data-table"><thead><tr>${headers.map(x=>`<th>${x}</th>`).join('')}</tr></thead><tbody>${body||`<tr><td colspan="${headers.length}" style="padding:22px;text-align:center">暂无数据</td></tr>`}</tbody></table></div>${pageBar(list.length,basicPage)}`;
+  };
+  W.renderContainers=function(container){const main=container||document.getElementById('mainContent');if(!main)return;main.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📦 基础数据 <span class="status-badge status-ready">V47.11</span></span><div><button class="btn btn-primary" onclick="showAddContainer()">+ 新增</button><button class="btn export-btn" onclick="exportAllBasicDataV4710()">📊 导出全部基础数据</button><button class="btn export-btn" onclick="exportTemplate()">📥 导出模板</button><button class="btn btn-success" onclick="showImport()">📎 批量导入</button></div></div><div style="font-size:12px;color:#606266;margin-bottom:10px">同一箱号允许关联多个批次、提单和IRA。页面按批次关系展示；实际箱量、运输、库存、费用及提箱计划按唯一物理箱统计。</div><div class="search-bar"><input id="searchBatch" placeholder="批次"><input id="searchContainer" placeholder="集装箱号"><select id="searchLocation"><option value="">全部当前位置</option><option>港口</option><option>运输中</option><option>RG堆场</option><option>Rio Claro</option><option>IRA库房</option><option>工厂</option><option>已生产</option></select><select id="searchStatus"><option value="">全部状态</option><option>清关中</option><option>部分清关</option><option>清关资料缺失</option><option>已清关</option><option>运输中</option><option>已到门口</option><option>工厂内等待</option><option>卸货中</option><option>待还箱</option><option>已完成</option></select><button class="btn btn-primary" onclick="renderContainerTable(1)">查询</button><button class="btn" onclick="clearContainerSearch()">重置</button></div><div id="containerTable"></div></div>`;W.renderContainerTable(1);};
+  W.clearContainerSearch=function(){['searchBatch','searchContainer','searchLocation','searchStatus'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});basicFilter='';W.renderContainerTable(1);};
+  try{renderContainers=W.renderContainers;renderContainerTable=W.renderContainerTable;clearContainerSearch=W.clearContainerSearch;}catch(_){ }
+
+  // 提箱计划：同一物理箱只显示/发布一条，且全部提单清关、共箱全部IRA维护后才可进入待提箱。
+  function readyPhysical(){prepareSharedState();return canonicalRows().filter(c=>{const s=customsSummary(c);return s.eligible&&!actualPickupForGroup(c)&&!activePlanFor(c);});}
+  function renderReadyTable(list){const box=document.getElementById('pickupTable');if(!box)return;if(!list.length){box.innerHTML='<div style="padding:20px;text-align:center">暂无符合条件的待发布物理集装箱</div>';return;}const body=list.map(c=>{const s=customsSummary(c),id=c.id;return `<tr><td><input type="checkbox" class="pickup-checkbox" data-id="${esc(id)}"></td><td>${esc(s.batchText||'-')}</td><td>${esc(s.seqText||'-')}</td><td>${esc(c.containerNo||'-')}<div style="margin-top:4px">${sharedBadge(c)}</div></td><td>${esc(s.blText||'-')}</td><td>${esc(fmt(c.eta)||'-')}</td><td>${esc(s.iraText||'-')}</td><td><span class="status-badge status-ready">全部完成 ${s.progress}</span></td><td><input type="datetime-local" id="arrival_${esc(id)}" class="form-control" style="width:145px"></td><td><select id="carrier_${esc(id)}" class="form-control" style="width:82px"><option value="RG">RG</option><option value="JSL">JSL</option></select></td><td><select id="dest_${esc(id)}" class="form-control" style="width:105px" onchange="toggleDockRequired(${JSON.stringify(id)})"><option value="RG堆场">RG堆场</option><option value="Rio Claro">Rio Claro</option><option value="IRA库房">IRA库房</option><option value="工厂">工厂</option></select></td><td><input id="dock_${esc(id)}" class="form-control" style="width:82px" placeholder="如120B"></td><td><button class="btn btn-sm btn-primary" onclick="publishSingle(${JSON.stringify(id)})">发布</button></td></tr>`;}).join('');box.innerHTML=`<div class="table-wrapper"><table class="data-table"><thead><tr><th><input type="checkbox" id="selectAllCheckbox"></th><th>关联批次</th><th>批次序号</th><th>集装箱号</th><th>全部提单</th><th>到港时间</th><th>全部IRA</th><th>清关汇总</th><th>到货时间</th><th>运输公司</th><th>目的地</th><th>卸货口</th><th>操作</th></tr></thead><tbody>${body}</tbody></table></div>`;const all=document.getElementById('selectAllCheckbox');if(all)all.onclick=()=>document.querySelectorAll('.pickup-checkbox').forEach(x=>x.checked=all.checked);}
+  W.renderPickupPlan=function(container){const main=container||document.getElementById('mainContent');if(!main)return;const ready=readyPhysical(),published=uniqueByPhysical(rows('pickupPlans').filter(p=>p.status!=='cancelled'));main.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">🚚 提箱计划 <span class="status-badge status-ready">V47.11</span></span><div><button class="btn btn-success" onclick="batchPublish()">批量发布</button><button class="btn" onclick="selectAllPickup()">全选</button></div></div><div style="font-size:12px;color:#606266;margin-bottom:10px">共箱集装箱只有在全部关联提单完成清关，且每票提单对应IRA均已维护后，才进入可提箱状态；每个物理箱只生成一条提箱计划。</div><div class="search-bar"><input id="pickupSearchBatch" placeholder="批次"><input id="pickupSearchContainer" placeholder="集装箱号"><input id="pickupSearchBl" placeholder="提单号/IRA"><button class="btn btn-primary" onclick="filterPickupTable()">查询</button><button class="btn" onclick="clearPickupSearch()">重置</button></div><div id="pickupTable"></div></div><div class="card"><div class="card-header"><span class="card-title">📋 已发布提箱计划（物理箱 ${published.length} 个）</span></div><div id="publishedPlans"></div></div>`;renderReadyTable(ready);try{if(typeof renderPublishedPlans==='function')renderPublishedPlans(published);}catch(_){document.getElementById('publishedPlans').innerHTML='<div style="padding:16px">已发布计划请在运输任务中查看。</div>';}};
+  W.filterPickupTable=function(){const qb=U(document.getElementById('pickupSearchBatch')?.value),qn=U(document.getElementById('pickupSearchContainer')?.value),qx=U(document.getElementById('pickupSearchBl')?.value);renderReadyTable(readyPhysical().filter(c=>{const s=customsSummary(c);return(!qb||U(s.batchText).includes(qb))&&(!qn||noKey(c).includes(qn))&&(!qx||U(s.blText+' '+s.iraText).includes(qx));}));};
+  W.clearPickupSearch=function(){['pickupSearchBatch','pickupSearchContainer','pickupSearchBl'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});W.filterPickupTable();};
+  W.publishSingle=function(id){const c=rows('containers').find(x=>S(x.id)===S(id));if(!c)return alert('未找到集装箱。');const master=canonicalOf(c),sum=customsSummary(master);if(!sum.eligible){const pending=sum.pending.map(x=>`${x.bl} / ${x.ira}${x.cleared?'（提单已清关）':'（提单未清关）'}`).join('\n');return alert(`该物理集装箱尚未满足提箱条件。\n清关进度：${sum.progress}\n未完成项目：\n${pending||'未关联有效提单'}`);}if(activePlanFor(master))return alert('该物理集装箱已有未取消的提箱计划。');const arrival=document.getElementById(`arrival_${id}`)?.value,carrier=document.getElementById(`carrier_${id}`)?.value||'RG',destination=document.getElementById(`dest_${id}`)?.value||'RG堆场',dock=S(document.getElementById(`dock_${id}`)?.value);if(!arrival)return alert('请填写到货时间。');if(destination==='工厂'&&!dock)return alert('目的地为工厂时，卸货口必填。');rows('pickupPlans').push({id:currentNextPlanId(),planUid:'plan_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),containerId:master.id,physicalContainerId:master.physicalContainerId,containerNo:master.containerNo,containerSeq:sum.seqText,batch:sum.batchText,relatedBatches:sum.batchText,relatedBls:sum.blText,relatedIras:sum.iraText,arrivalDate:arrival,carrier,destination,unloadingDock:dock,status:'pending',needReconfirm:false,createdAt:new Date().toISOString()});W.saveData('publish_shared_pickup_plan');W.renderPickupPlan(document.getElementById('mainContent'));alert('提箱计划已发布。该计划对应1个物理集装箱，并同步关联全部批次、提单和IRA。');};
+  W.batchPublish=function(){const selected=[...document.querySelectorAll('.pickup-checkbox:checked')];if(!selected.length)return alert('请先选择集装箱。');const prepared=[];for(const cb of selected){const id=cb.dataset.id,c=rows('containers').find(x=>S(x.id)===S(id));if(!c)continue;const master=canonicalOf(c),sum=customsSummary(master),arrival=document.getElementById(`arrival_${id}`)?.value,carrier=document.getElementById(`carrier_${id}`)?.value||'RG',destination=document.getElementById(`dest_${id}`)?.value||'RG堆场',dock=S(document.getElementById(`dock_${id}`)?.value);if(!sum.eligible)return alert(`集装箱 ${master.containerNo} 尚未完成全部提单/IRA清关。`);if(activePlanFor(master))continue;if(!arrival)return alert(`集装箱 ${master.containerNo} 未填写到货时间。`);if(destination==='工厂'&&!dock)return alert(`集装箱 ${master.containerNo} 的工厂卸货口未填写。`);prepared.push({master,sum,arrival,carrier,destination,dock});}if(!prepared.length)return alert('没有可发布的物理集装箱计划。');prepared.forEach(({master,sum,arrival,carrier,destination,dock})=>rows('pickupPlans').push({id:currentNextPlanId(),planUid:'plan_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),containerId:master.id,physicalContainerId:master.physicalContainerId,containerNo:master.containerNo,containerSeq:sum.seqText,batch:sum.batchText,relatedBatches:sum.batchText,relatedBls:sum.blText,relatedIras:sum.iraText,arrivalDate:arrival,carrier,destination,unloadingDock:dock,status:'pending',needReconfirm:false,createdAt:new Date().toISOString()}));W.saveData('batch_publish_shared_pickup_plan');W.renderPickupPlan(document.getElementById('mainContent'));alert(`已发布 ${prepared.length} 个物理集装箱提箱计划。`);};
+  try{renderPickupPlan=W.renderPickupPlan;filterPickupTable=W.filterPickupTable;clearPickupSearch=W.clearPickupSearch;publishSingle=W.publishSingle;batchPublish=W.batchPublish;}catch(_){ }
+
+  // 提箱确认/运输任务发生后，生命周期同步到同一物理箱全部批次关系。
+  const baseConfirm=W.confirmPickupTask;
+  if(typeof baseConfirm==='function')W.confirmPickupTask=async function(){const r=await baseConfirm.apply(this,arguments);prepareSharedState();W.saveData('sync_shared_pickup_lifecycle');return r;};
+  ['confirmPickupTaskByKey','confirmPickupTaskByKeyV45','confirmPickupTaskByKeyV451','confirmPickupTaskByKeyV455','confirmPickupTaskByRefV477'].forEach(n=>{if(typeof W[n]==='function'){const f=W[n];W[n]=async function(){const r=await f.apply(this,arguments);prepareSharedState();W.saveData('sync_shared_pickup_lifecycle');return r;};}});
+  try{confirmPickupTask=W.confirmPickupTask;}catch(_){ }
+
+  // 生产保供按批次分别显示，但复用同一物理箱运输任务。
+  W.v42TaskFor=function(batch,seq){const rel=rows('containers').find(c=>U(c.batch)===U(batch)&&U(c.containerSeq||c.seq)===U(seq));if(!rel)return null;const key=noKey(rel);return rows('transportTasks').find(t=>!t.cancelled&&noKey(t)===key&&S(t.to)==='工厂')||rows('transportTasks').find(t=>!t.cancelled&&noKey(t)===key)||null;};
+  try{v42TaskFor=W.v42TaskFor;}catch(_){ }
+
+  // 日报数量统一按物理箱去重。
+  const baseDaily=W.getDailyOperationReport||(typeof getDailyOperationReport==='function'?getDailyOperationReport:null);
+  W.getDailyOperationReport=function(targetDate){prepareSharedState();const reps=canonicalRows().filter(c=>{try{return W.isOperationalVisibleContainer(c);}catch(_){return true;}}),prev=(()=>{try{return typeof addDaysToDateStr==='function'?addDaysToDateStr(targetDate,-1):'';}catch(_){return'';}})(),same=(v,d)=>dateOnly(v)===dateOnly(d),feeFn=W.calculateFeesForContainer;let todayAbnormalStorage=0,todayDemurrage=0;reps.forEach(c=>{try{const t=feeFn(c,targetDate),p=feeFn(c,prev);todayAbnormalStorage+=Math.max(0,N(t.abnormalStorageFee)-N(p.abnormalStorageFee));todayDemurrage+=Math.max(0,N(t.demurrageFee)-N(p.demurrageFee));}catch(_){ }});const clearanceCompleted=reps.filter(c=>{const s=customsSummary(c);return s.eligible&&same(s.completionDate,targetDate);}).length;const plannedPickup=uniqueByPhysical(rows('pickupPlans').filter(p=>p.status!=='cancelled'&&same(p.arrivalDate,targetDate))).length;let actualPickup=uniqueByPhysical(rows('pickupPlans').filter(p=>p.status==='confirmed'&&same(p.actualPickupTime,targetDate))).length;if(!actualPickup)actualPickup=reps.filter(c=>same(actualPickupForGroup(c),targetDate)).length;const plannedFactoryArrival=uniqueByPhysical(rows('pickupPlans').filter(p=>p.status!=='cancelled'&&p.destination==='工厂'&&same(p.arrivalDate,targetDate))).length;const actualFactoryArrival=uniqueByPhysical(rows('transportTasks').filter(t=>t.to==='工厂'&&(t.status==='arrived'||t.actualArrival)&&same(t.actualArrival,targetDate))).length;const pending=reps.filter(c=>customsSummary(c).eligible&&!actualPickupForGroup(c));const abnormal=pending.filter(c=>{try{return N(feeFn(c,targetDate).abnormalStorageFee)>0;}catch(_){return false;}}).length;return{todayAbnormalStorage,todayDemurrage,clearanceCompleted,plannedPickup,actualPickup,plannedFactoryArrival,actualFactoryArrival,clearedPendingPickup:pending.length,clearedPendingPickupAbnormal:abnormal,clearedPendingPickupNormal:Math.max(0,pending.length-abnormal)};};
+  try{getDailyOperationReport=W.getDailyOperationReport;}catch(_){ }
+
+  // 费用：每个物理箱只计算一次；影子批次行返回0，费用报表只显示一行并列出全部批次/提单/IRA。
+  const baseFee=W.calculateFeesForContainer;
+  if(typeof baseFee==='function'){
+    W.calculateFeesForContainer=function(c,date){const master=canonicalOf(c);if(!isCanonical(c)){const z=baseFee(master,date)||{};return Object.assign({},z,{normalStorageFee:0,abnormalStorageFee:0,storageFee:0,demurrageFee:0,isSharedShadow:true});}return baseFee(master,date);};
+    try{calculateFeesForContainer=W.calculateFeesForContainer;}catch(_){ }
+  }
+  const baseUpdateFees=W.updateDailyFees;
+  if(typeof baseUpdateFees==='function')W.updateDailyFees=function(){prepareSharedState();const raw=baseUpdateFees.apply(this,arguments)||W.cachedFeeData||{},reps=canonicalRows(),fees={},sum=k=>reps.reduce((n,c)=>{const f=(raw.fees&&raw.fees[c.id])||(baseFee?baseFee(c,raw.date):{});fees[c.id]=f;return n+N(f&&f[k]);},0),dedupe=list=>{const seen=new Set(),out=[];A(list).forEach(x=>{const c=rows('containers').find(r=>S(r.id)===S(x.id))||rows('containers').find(r=>noKey(r)===noKey(x));const k=noKey(c||x);if(!k||seen.has(k))return;seen.add(k);const s=c?customsSummary(c):null;out.push(Object.assign({},x,{id:c&&canonicalOf(c).id||x.id,batch:s?s.batchText:x.batch,relatedBatches:s?s.batchText:x.batch,containerNo:c&&c.containerNo||x.containerNo}));});return out;};const data=Object.assign({},raw,{cacheVersion:'V47.11-physical-dedup',fees,totalStorage:sum('storageFee'),totalNormalStorage:sum('normalStorageFee'),totalAbnormalStorage:sum('abnormalStorageFee'),totalDemurrage:sum('demurrageFee'),storageWarningList:dedupe(raw.storageWarningList),demurrageWarningList:dedupe(raw.demurrageWarningList),demurrageConfigMissingList:dedupe(raw.demurrageConfigMissingList)});try{cachedFeeData=data;}catch(_){ }W.cachedFeeData=data;return data;};
+  try{updateDailyFees=W.updateDailyFees;}catch(_){ }
+
+  let feePage=1;const FEE_PAGE=80;
+  function feeRows(date){prepareSharedState();return canonicalRows().map(c=>{const s=customsSummary(c),f=(baseFee?baseFee(c,date):{}),ret=rows('returnRecords').find(r=>(r.isReturnConfirmed||r.type==='return'||r.returnDate)&&(noKey(r)===noKey(c)||S(r.containerId)===S(c.id)));const pickup=actualPickupForGroup(c);return Object.assign({},c,f,{batch:s.batchText,relatedBatches:s.batchText,relatedBls:s.blText,relatedIras:s.iraText,clearanceCompleteDate:s.completionDate,pickupDate:pickup,returnDate:ret&&dateOnly(ret.returnDate||ret.returnConfirmedAt),customsProgress:s.progress});});}
+  W.renderFeeTableV471=function(page){const box=document.getElementById('feeTableV471');if(!box)return;if(N(page)>0)feePage=N(page);const q=U(document.getElementById('feeSearchV471')?.value),rs=S(document.getElementById('feeRateStatusV471')?.value),list=feeRows((typeof getTodayStr==='function'?getTodayStr():new Date().toISOString().slice(0,10))).filter(c=>(!q||U([c.batch,c.containerNo,c.vessel,c.relatedBls,c.relatedIras].join(' ')).includes(q))&&(!rs||(rs==='missing'?c.demurrageConfigMissing:!c.demurrageConfigMissing))),pages=Math.max(1,Math.ceil(list.length/FEE_PAGE));feePage=Math.min(Math.max(1,feePage),pages);const start=(feePage-1)*FEE_PAGE,slice=list.slice(start,start+FEE_PAGE),body=slice.map(c=>`<tr><td>${esc(c.batch||'-')}</td><td>${esc(c.containerNo||'-')}</td><td>${esc(c.relatedBls||'-')}</td><td>${esc(c.relatedIras||'-')}</td><td>${esc(c.customsProgress||'-')}</td><td>${esc(c.vessel||'-')}</td><td>${esc(c.containerType||'-')}</td><td>${esc(fmt(c.eta)||'-')}</td><td>${esc(c.clearanceCompleteDate?fmt(c.clearanceCompleteDate):'-')}</td><td>${esc(c.pickupDate?fmt(c.pickupDate):'-')}</td><td>${esc(c.returnDate?fmt(c.returnDate):'-')}</td><td>${N(c.storageDays)}</td><td>R$ ${N(c.normalStorageFee).toFixed(2)}</td><td>R$ ${N(c.abnormalStorageFee).toFixed(2)}</td><td>R$ ${N(c.storageFee).toFixed(2)}</td><td>${N(c.demurrageDays)}</td><td>${N(c.demurrageOvertimeDays)}</td><td>$ ${N(c.demurrageRatePerDay).toFixed(2)}</td><td>$ ${N(c.demurrageFee).toFixed(2)}</td><td>${c.demurrageConfigMissing?'未配置':'已配置'}</td></tr>`).join('');box.innerHTML=`<div style="margin:8px 0;font-size:12px;color:#606266">共 ${list.length} 个物理集装箱｜第 ${feePage}/${pages} 页</div><div class="table-wrapper"><table class="data-table"><thead><tr>${['关联批次','箱号','全部提单','全部IRA','清关进度','船公司','箱型','到港','清关完成','提箱','还箱','堆存天数','正常堆存费','异常堆存费','堆存费合计','滞箱占用天数','超期天数','日费率','滞箱费','费率状态'].map(x=>`<th>${x}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div><div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px"><button class="btn btn-sm" ${feePage<=1?'disabled':''} onclick="renderFeeTableV471(${feePage-1})">上一页</button><button class="btn btn-sm" ${feePage>=pages?'disabled':''} onclick="renderFeeTableV471(${feePage+1})">下一页</button></div>`;};
+  W.renderFeeReport=function(container){const main=container||document.getElementById('mainContent');if(!main)return;const data=feeRows((typeof getTodayStr==='function'?getTodayStr():new Date().toISOString().slice(0,10))),sum=k=>data.reduce((n,x)=>n+N(x[k]),0);main.innerHTML=`<div class="card"><div class="card-header"><span class="card-title">📈 费用报表 <span class="status-badge status-ready">V47.11</span></span><button class="btn export-btn" onclick="exportFeeReport()">📥 导出Excel</button></div><div style="font-size:12px;color:#606266;margin-bottom:10px">共箱集装箱仅按1个物理集装箱计算费用；关联批次、提单和IRA在同一行汇总展示。</div><div class="stats-grid"><div class="stat-card"><div class="stat-number">${data.length}</div><div class="stat-label">实际物理集装箱</div></div><div class="stat-card"><div class="stat-number">R$ ${sum('storageFee').toFixed(2)}</div><div class="stat-label">堆存费合计</div></div><div class="stat-card"><div class="stat-number">$ ${sum('demurrageFee').toFixed(2)}</div><div class="stat-label">滞箱费总额</div></div></div><div class="search-bar"><input id="feeSearchV471" placeholder="批次 / 箱号 / 提单 / IRA"><select id="feeRateStatusV471"><option value="">全部费率状态</option><option value="ok">已配置</option><option value="missing">未配置</option></select><button class="btn btn-primary" onclick="renderFeeTableV471(1)">查询</button></div><div id="feeTableV471"></div></div>`;W.renderFeeTableV471(1);};
+  W.exportFeeReport=function(){if(typeof XLSX==='undefined')return alert('Excel组件未加载。');const data=feeRows((typeof getTodayStr==='function'?getTodayStr():new Date().toISOString().slice(0,10))).map(c=>({关联批次:c.batch,集装箱号:c.containerNo,关联提单:c.relatedBls,关联IRA:c.relatedIras,清关进度:c.customsProgress,船公司:c.vessel,箱型:c.containerType,到港日期:fmt(c.eta),清关完成日期:c.clearanceCompleteDate?fmt(c.clearanceCompleteDate):'-',提箱日期:c.pickupDate?fmt(c.pickupDate):'-',还箱日期:c.returnDate?fmt(c.returnDate):'-',堆存天数:N(c.storageDays),正常堆存费_雷亚尔:N(c.normalStorageFee).toFixed(2),异常堆存费_雷亚尔:N(c.abnormalStorageFee).toFixed(2),堆存费合计_雷亚尔:N(c.storageFee).toFixed(2),滞箱占用天数:N(c.demurrageDays),滞箱超期天数:N(c.demurrageOvertimeDays),滞箱日费率_美元:N(c.demurrageRatePerDay).toFixed(2),滞箱费_美元:N(c.demurrageFee).toFixed(2),费率状态:c.demurrageConfigMissing?'未配置':'已配置'}));const ws=XLSX.utils.json_to_sheet(data),wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'费用报表');XLSX.writeFile(wb,`费用报表_物理集装箱_${new Date().toISOString().slice(0,10)}.xlsx`);};
+  try{renderFeeReport=W.renderFeeReport;}catch(_){ }
+
+  // 基础数据Excel：保留每条批次关系，同时增加物理箱及共箱汇总字段。
+  W.exportAllBasicDataV4710=function(){if(typeof XLSX==='undefined')return alert('Excel组件未加载。');prepareSharedState();const list=rows('containers').slice().sort((a,b)=>S(a.batch).localeCompare(S(b.batch),'zh-CN',{numeric:true})||N(a.containerSeq)-N(b.containerSeq));const data=list.map((c,i)=>{const s=customsSummary(c),st=statusFor(c);let lfd='';try{lfd=W.getDemurrageLastFreeDay?W.getDemurrageLastFreeDay(c):'';}catch(_){ }return{数据序号:i+1,物理集装箱唯一标识:c.physicalContainerId,批次:c.batch,集装箱序号:c.containerSeq||c.seq||'',集装箱号:c.containerNo,是否共箱:s.shared?'是':'否',共箱批次数:s.group.length,关联批次汇总:s.batchText,本批次提单:rowBlText(c),本批次IRA:rowIraText(c),全部关联提单:s.blText,全部关联IRA:s.iraText,提单清关进度:s.progress,物理箱清关状态:s.status,是否允许提箱:s.eligible?'是':'否',船公司:c.vessel||c.carrier,箱型:c.containerType,到港日期:fmt(c.eta),滞箱费最后免费日:fmt(lfd),当前位置:st.loc,运输状态:st.text};});const ws=XLSX.utils.json_to_sheet(data),wb=XLSX.utils.book_new();ws['!autofilter']={ref:ws['!ref']};XLSX.utils.book_append_sheet(wb,ws,'全部基础数据');XLSX.writeFile(wb,`基础数据_含共箱关系_${new Date().toISOString().slice(0,10)}.xlsx`);};
+
+  // 云端加载/恢复后自动迁移，不新增顶层数据结构，兼容旧备份。
+  const oldLoad=W.loadCloudState;if(typeof oldLoad==='function')W.loadCloudState=async function(){const r=await oldLoad.apply(this,arguments);prepareSharedState();return r;};
+  const oldApply=W.applyCloudState;if(typeof oldApply==='function')W.applyCloudState=function(){const r=oldApply.apply(this,arguments);prepareSharedState();return r;};
+  try{if(typeof W.loadCloudState==='function')loadCloudState=W.loadCloudState;if(typeof W.applyCloudState==='function')applyCloudState=W.applyCloudState;}catch(_){ }
+
+  function setVersion(){try{document.title='Sistema Inteligente de Monitoramento de Contêineres V47.11';document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.10|Full Basic Data Export|V47\.9|Ordered Local-First Journal/i.test(S(el.textContent)))el.textContent='V47.11';});}catch(_){ }}
+  prepareSharedState();try{W.updateDailyFees&&W.updateDailyFees(true);}catch(_){ }setVersion();document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>{prepareSharedState();setVersion();},700));setTimeout(()=>{prepareSharedState();setVersion();},2200);
+  W.__v4711SharedContainerStatus=function(){prepareSharedState();const groups=[...groupMap().values()];return{version:VERSION,batchRelations:rows('containers').length,physicalContainers:groups.length,sharedContainers:groups.filter(g=>g.length>1).length,pickupEligible:groups.filter(g=>customsSummary(g[0]).eligible).length,partialClearance:groups.filter(g=>customsSummary(g[0]).status==='部分清关').length,missingCustomsData:groups.filter(g=>customsSummary(g[0]).status==='清关资料缺失').length};};
+  console.log(VERSION+' loaded: shared containers retain multiple batch/BL/IRA relations while counts, transport and fees remain physical-container unique.');
+})();
+
+</script>
 </body>
 </html>
