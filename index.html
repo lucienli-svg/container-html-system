@@ -15853,6 +15853,10 @@ window.__v479JournalOwnsSync = true;
   }
   function moduleMap(module,value){const out=new Map();if(ARRAY_MODULES.has(module)){A(value).forEach(x=>{const k=recordKey(module,x);if(!k)throw new Error(module+' 存在无法识别唯一键的记录');if(out.has(k))throw new Error(module+' 存在重复业务键：'+k);out.set(k,clone(x));});}else out.set(module,clone(value||{}));return out;}
   function coreCount(st){return CORE_MODULES.reduce((n,m)=>n+A(st&&st[m]).length,0);}
+  W.__v480LegacyLoad=legacyLoad;
+  W.__v480LegacyFlush=legacyFlush;
+  W.__v480GetState=()=>clone(state());
+  W.__v480ApplyState=applyState;
 
   let mode='checking'; // checking | business | legacy | unavailable | migration
   let revision=0;
@@ -16543,6 +16547,9 @@ window.__v479JournalOwnsSync = true;
 
   const originalRenderContent=W.renderContent||renderContent;
   const originalRenderDashboard=W.renderDashboard||renderDashboard;
+  W.__v482OriginalRenderContent=originalRenderContent;
+  W.__v482OriginalRenderDashboard=originalRenderDashboard;
+  W.__v482SetFullDashboard=v=>{fullDashboard=!!v;};
   function uiText(zh,pt,en){let lang='zh-CN';try{lang=currentLang||localStorage.getItem('cc_lang')||'zh-CN';}catch(_){ }return lang==='pt-BR'?pt:(lang==='en'?en:zh);}
   function renderFastDashboard(container){
     if(!bootstrap){container.innerHTML=`<div class="card" style="min-height:220px;display:flex;align-items:center;justify-content:center"><div style="text-align:center;color:#52657a"><div style="font-size:30px;margin-bottom:12px">↻</div><div style="font-size:18px;font-weight:700">${uiText('正在读取轻量云端首页','Carregando visão geral da nuvem','Loading cloud overview')}</div><div style="font-size:13px;margin-top:8px">${uiText('只读取统计和版本信息，不下载全部业务明细。','Somente estatísticas e versão são carregadas; os detalhes completos não são baixados.','Only statistics and version information are loaded; full details are not downloaded.')}</div></div></div>`;return;}
@@ -16753,6 +16760,209 @@ window.__v479JournalOwnsSync = true;
   const style=document.createElement('style');style.textContent='#v4713SyncBadge,#v479SaveIndicator,#v478SaveIndicator{display:none!important}#v482StatusBadge{border:1px solid rgba(255,255,255,.35)}';document.head.appendChild(style);
   document.addEventListener('DOMContentLoaded',()=>{version();setTimeout(version,800);setTimeout(version,2500);setTimeout(version,7200);});setTimeout(version,100);
   console.log(VERSION+' loaded: no full-state login sync; modules load on demand and saves remain atomic.');
+})();
+</script>
+
+
+<script>
+/* ==================== V48.3 Verified Migration Recovery ====================
+   - Never presents empty business tables as valid data when migration_complete=false.
+   - Loads the last verified app_state snapshot for read-only recovery display.
+   - Migrates through a server staging area, verifies every module, then atomically switches.
+   - Any network/import/validation failure aborts only the stage; live tables and app_state remain safe.
+============================================================================ */
+(function(){
+  'use strict';
+  const W=window;
+  const VERSION='V48.3 Verified Migration Recovery';
+  const MODULES=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig','nextIds','warningConfig'];
+  const ARRAY_MODULES=new Set(['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig']);
+  const CORE_MODULES=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans'];
+  const IMPORT_BATCH=80;
+  const VERIFY_PAGE=250;
+  const RPC_TIMEOUT=45000;
+  const S=v=>String(v==null?'':v).trim();
+  const U=v=>S(v).toUpperCase();
+  const A=v=>Array.isArray(v)?v:[];
+  const N=v=>Number(v)||0;
+  const clone=v=>v==null?v:JSON.parse(JSON.stringify(v));
+  const day=v=>{const s=S(v);return s?s.slice(0,10):'';};
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  let recoveryMode=false;
+  let checking=false;
+  let activeToken='';
+
+  function sb(){try{return typeof initSupabaseClient==='function'?initSupabaseClient():null;}catch(_){return null;}}
+  function who(){try{return(cloudUser&&cloudUser.email)||(currentUser&&(currentUser.email||currentUser.name))||'unknown';}catch(_){return'unknown';}}
+  function isAdmin(){try{return typeof isAdminUser==='function'?isAdminUser():((currentUser&&currentUser.role)==='Admin');}catch(_){return false;}}
+  function timeout(p,ms,msg){return Promise.race([Promise.resolve(p),new Promise((_,rej)=>setTimeout(()=>rej(new Error(msg||'请求超时')),ms))]);}
+  async function rpc(name,args,ms=RPC_TIMEOUT){const c=sb();if(!c)throw new Error('Supabase未连接');const r=await timeout(c.rpc(name,args||{}),ms,name+' 超时');if(r&&r.error)throw r.error;return r&&r.data;}
+  function status(text,kind='warn'){
+    let el=document.getElementById('v482StatusBadge')||document.getElementById('v480StorageBadge');
+    if(!el){el=document.createElement('button');el.id='v482StatusBadge';el.className='logout-btn';const box=document.querySelector('.navbar .user-info');if(box)box.insertBefore(el,box.firstChild);}
+    el.textContent=text;el.style.minWidth='170px';el.style.background=kind==='ok'?'#2f9e44':kind==='error'?'#c92a2a':kind==='syncing'?'#2f5aa8':'#e67700';
+    el.onclick=()=>W.showV483MigrationStatus();
+  }
+  function setReadonly(on){const app=document.getElementById('mainApp');if(app)app.classList.toggle('v483-recovery-readonly',!!on);}
+  function recordKey(module,x){
+    if(module==='nextIds'||module==='warningConfig')return module;
+    if(!x||typeof x!=='object')return'';
+    if(module==='containers')return S(x.containerRecordUid)||(S(x.id)?'ID:'+S(x.id):'')||[U(x.containerNo),U(x.batch),S(x.containerSeq||x.seq)].join('|');
+    if(module==='blList')return S(x.blUid)||(S(x.id)?'ID:'+S(x.id):'')||U(x.blNo||x.houseBlNo||x.masterBlNo);
+    if(module==='containerBlMap')return S(x.linkUid)||(S(x.id)?'ID:'+S(x.id):'')||[S(x.containerId),U(x.containerNo),U(x.blNo||x.houseBlNo||x.masterBlNo),U(x.batch)].join('|');
+    if(module==='transportTasks')return S(x.taskUid)||S(x.routeLegKey)||(S(x.id)?'ID:'+S(x.id):'')||[U(x.containerNo),S(x.containerId),U(x.from||x.origin),U(x.to||x.destination),day(x.estimatedArrival||x.arrivalDate)].join('|');
+    if(module==='locationStock')return S(x.stockUid)||(S(x.id)?'ID:'+S(x.id):'')||S(x.containerId)||U(x.containerNo);
+    if(module==='returnRecords')return S(x.returnUid)||(S(x.id)?'ID:'+S(x.id):'')||[S(x.containerId),U(x.containerNo),U(x.type),U(x.location),day(x.returnDate||x.unpackDate||x.createdAt)].join('|');
+    if(module==='pickupPlans')return S(x.planUid)||(S(x.id)?'ID:'+S(x.id):'')||[S(x.containerId),U(x.containerNo),day(x.arrivalDate),U(x.destination)].join('|');
+    if(module==='productionRecords')return S(x.recordUid)||(S(x.id)?'ID:'+S(x.id):'')||[U(x.batch),day(x.date),U(x.workshop||x.area)].join('|');
+    if(module==='productionPlans')return S(x.planUid)||(S(x.id)?'ID:'+S(x.id):'')||[day(x.date),U(x.workshop||x.area),U(x.batch),S(x.order||x.planOrder)].join('|');
+    if(module==='factoryCalendar')return day(x.date)||(S(x.id)?'ID:'+S(x.id):'');
+    if(module==='storageConfig')return S(x.configUid)||(S(x.id)?'ID:'+S(x.id):'')||[day(x.effectiveFrom||x.startDate),day(x.effectiveTo||x.endDate),S(x.fixedDays),S(x.fixedRate),S(x.overtimeRate)].join('|');
+    if(module==='demurrageConfig')return S(x.configUid)||(S(x.id)?'ID:'+S(x.id):'')||[U(x.shippingCompany||x.carrier),U(x.containerType),day(x.effectiveFrom||x.startDate),day(x.effectiveTo||x.endDate)].join('|');
+    return S(x.id)||hash(x);
+  }
+  function canonical(v){if(v===null||typeof v!=='object')return JSON.stringify(v);if(Array.isArray(v))return'['+v.map(canonical).join(',')+']';return'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';}
+  function hash(v){const str=canonical(v);let h=2166136261;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619);}return('00000000'+(h>>>0).toString(16)).slice(-8);}
+  function moduleRows(module,value){
+    const out=new Map();
+    if(ARRAY_MODULES.has(module)){
+      A(value).forEach(x=>{const k=recordKey(module,x);if(!k)throw new Error(module+' 存在无法识别唯一键的记录');if(out.has(k))throw new Error(module+' 存在重复业务键：'+k);out.set(k,clone(x));});
+    }else out.set(module,clone(value||{}));
+    return [...out.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([record_key,payload])=>({record_key,payload}));
+  }
+  function signatures(st){const out={};MODULES.forEach(m=>{const rows=moduleRows(m,st[m]);out[m]={count:rows.length,hash:hash(rows.map(r=>[r.record_key,r.payload]))};});return out;}
+  function coreCount(st){return CORE_MODULES.reduce((n,m)=>n+A(st&&st[m]).length,0);}
+
+  function addMigrationButton(){
+    const box=document.querySelector('.navbar .user-info');if(!box||!isAdmin())return;
+    let btn=document.getElementById('v483RecoveryMigrateBtn');
+    if(!btn){btn=document.createElement('button');btn.id='v483RecoveryMigrateBtn';btn.className='logout-btn';btn.textContent='恢复并迁移业务表';btn.style.background='#e67700';btn.onclick=()=>W.migrateVerifiedSnapshotV483();box.insertBefore(btn,box.querySelector('.logout-btn'));}
+    btn.style.display=recoveryMode?'inline-block':'none';
+  }
+  function showRecoveryBanner(message){
+    let bar=document.getElementById('v483RecoveryBanner');
+    if(!bar){bar=document.createElement('div');bar.id='v483RecoveryBanner';bar.innerHTML='<strong>业务表迁移恢复模式</strong><span id="v483RecoveryText"></span>';const main=document.getElementById('mainApp');if(main)main.insertBefore(bar,main.firstChild);}
+    const text=document.getElementById('v483RecoveryText');if(text)text.textContent=message||'当前展示旧云端快照，页面暂时只读。请使用Admin账号完成安全迁移。';
+    bar.style.display=recoveryMode?'flex':'none';
+  }
+  async function renderLegacyRecovery(){
+    recoveryMode=true;setReadonly(true);status('迁移未完成 · 正在读取旧快照','syncing');
+    const legacy=W.__v480LegacyLoad;if(typeof legacy!=='function')throw new Error('未找到旧快照读取引擎');
+    const ok=await legacy.call(W);if(ok===false)throw new Error('旧快照读取失败');
+    try{W.__v482SetFullDashboard&&W.__v482SetFullDashboard(true);}catch(_){ }
+    try{if(typeof W.__v482OriginalRenderContent==='function')W.__v482OriginalRenderContent();else if(typeof renderContent==='function')renderContent();}catch(e){console.warn(e);}
+    status('业务表未迁移 · 已显示旧快照','warn');
+    showRecoveryBanner('当前数据来自已验证的旧云端快照，不是空业务表。页面只读；请点击“恢复并迁移业务表”。');
+    addMigrationButton();
+    return true;
+  }
+  async function checkMigrationState(){
+    if(checking)return;checking=true;
+    try{
+      const b=await rpc('cms_get_bootstrap_v482',{},15000);
+      if(b&&b.migrationComplete){recoveryMode=false;setReadonly(false);showRecoveryBanner('');addMigrationButton();status('云端按需模式已就绪','ok');return true;}
+      await renderLegacyRecovery();return false;
+    }catch(e){console.error('V48.3 migration state check failed',e);status('迁移状态检查失败','error');return false;}
+    finally{checking=false;}
+  }
+
+  async function fetchStageModule(token,module){
+    let after='',rows=[];
+    do{
+      const page=await rpc('cms_get_migration_stage_page_v483',{p_migration_token:token,p_module:module,p_after_key:after,p_limit:VERIFY_PAGE},RPC_TIMEOUT);
+      rows.push(...A(page&&page.rows).map(r=>({record_key:S(r.recordKey),payload:clone(r.payload||{})})));
+      after=S(page&&page.nextKey);await sleep(0);
+      if(!page||!page.hasMore||!after)break;
+    }while(true);
+    return rows.sort((a,b)=>a.record_key.localeCompare(b.record_key));
+  }
+
+  W.migrateVerifiedSnapshotV483=async function(){
+    if(!isAdmin())return alert('只有Admin可以执行业务表迁移。');
+    if(!recoveryMode){const b=await rpc('cms_get_bootstrap_v482',{},15000).catch(()=>null);if(b&&b.migrationComplete)return alert('业务表迁移已经完成。');}
+    if(!confirm('系统将从已验证的旧云端快照读取数据，先导入数据库暂存区，逐模块校验完全一致后，再一次性切换正式业务表。迁移失败不会清空旧快照或正式业务表。是否继续？'))return false;
+    let token='';
+    try{
+      status('正在读取迁移源数据','syncing');
+      if(typeof W.__v480LegacyFlush==='function')await Promise.resolve(W.__v480LegacyFlush.call(W)).catch(()=>{});
+      const load=W.__v480LegacyLoad;if(typeof load!=='function')throw new Error('未找到旧快照读取引擎');
+      const loaded=await load.call(W);if(loaded===false)throw new Error('旧快照读取失败');
+      const st=typeof W.__v480GetState==='function'?W.__v480GetState():null;
+      if(!st||coreCount(st)===0)throw new Error('旧快照中没有可迁移的核心业务数据，已停止。');
+      const expected=signatures(st);
+      const expectedCounts=Object.fromEntries(MODULES.map(m=>[m,expected[m].count]));
+      const total=MODULES.reduce((n,m)=>n+expected[m].count,0);
+      status(`准备迁移 ${total} 条业务记录`,'syncing');
+      const begin=await rpc('cms_begin_migration_v483',{p_updated_by:who()},20000);
+      if(begin&&begin.alreadyComplete){location.reload();return true;}
+      token=S(begin&&begin.token);activeToken=token;if(!token)throw new Error('未获得安全迁移令牌。请确认已执行V48.3 SQL补丁。');
+
+      let done=0;
+      for(const module of MODULES){
+        const rows=moduleRows(module,st[module]);
+        for(let i=0;i<rows.length;i+=IMPORT_BATCH){
+          const part=rows.slice(i,i+IMPORT_BATCH);
+          status(`暂存迁移 ${module}：${Math.min(i+part.length,rows.length)}/${rows.length}（总计 ${done+part.length}/${total}）`,'syncing');
+          await rpc('cms_import_stage_v483',{p_module:module,p_rows:part,p_migration_token:token,p_updated_by:who()},RPC_TIMEOUT);
+          done+=part.length;await sleep(0);
+        }
+      }
+
+      for(const module of MODULES){
+        status(`正在校验暂存数据：${module}`,'syncing');
+        const rows=await fetchStageModule(token,module);
+        const sig={count:rows.length,hash:hash(rows.map(r=>[r.record_key,r.payload]))};
+        if(sig.count!==expected[module].count||sig.hash!==expected[module].hash){
+          throw new Error(`暂存校验不一致：${module}，源数据 ${expected[module].count}/${expected[module].hash}，暂存数据 ${sig.count}/${sig.hash}`);
+        }
+      }
+
+      status('校验完成 · 正在原子切换业务表','syncing');
+      const result=await rpc('cms_finalize_migration_v483',{p_migration_token:token,p_expected_counts:expectedCounts,p_updated_by:who()},RPC_TIMEOUT);
+      if(!result||!result.migrationComplete)throw new Error('数据库没有确认迁移完成');
+      activeToken='';recoveryMode=false;setReadonly(false);status('业务表迁移完成 · 正在重新加载','ok');
+      alert(`业务表迁移成功。\n共迁移并验证 ${total} 条记录。\n系统将重新加载云端按需模式。`);
+      location.reload();return true;
+    }catch(e){
+      console.error('V48.3 verified migration failed',e);
+      if(token){try{await rpc('cms_abort_migration_v483',{p_migration_token:token,p_updated_by:who()},20000);}catch(abortError){console.warn('V48.3 stage abort failed',abortError);}}
+      activeToken='';recoveryMode=true;setReadonly(true);status('迁移失败 · 旧快照仍安全','error');showRecoveryBanner('迁移失败，系统仍显示旧云端快照且保持只读。请记录错误信息，修复后重新迁移。');addMigrationButton();
+      alert('业务表迁移失败：'+S(e&&e.message||e)+'\n\n旧app_state快照没有删除，正式业务表也没有被本次迁移部分覆盖。');return false;
+    }
+  };
+
+  W.showV483MigrationStatus=async function(){
+    let b=null;try{b=await rpc('cms_get_bootstrap_v482',{},12000);}catch(_){ }
+    alert(`V48.3迁移状态\n\n迁移完成：${b&&b.migrationComplete?'是':'否'}\n云端修订号：${N(b&&b.revision)}\n当前模式：${recoveryMode?'旧快照只读恢复':'业务表按需读取'}\n活动迁移令牌：${activeToken?'有（迁移进行中）':'无'}\n\n迁移未完成时，系统不会再把空业务表显示为真实数据。`);
+  };
+
+  const v482Render=W.renderContent;
+  W.renderContent=function(){if(recoveryMode&&typeof W.__v482OriginalRenderContent==='function')return W.__v482OriginalRenderContent.apply(this,arguments);return v482Render.apply(this,arguments);};
+  try{renderContent=W.renderContent;}catch(_){ }
+
+  const baseEnsure=W.ensureCloudSession;
+  W.ensureCloudSession=async function(){const ok=await baseEnsure.apply(this,arguments);if(ok)await checkMigrationState();return ok;};
+  W.loadData=async function(){const ok=await W.ensureCloudSession();if(!ok){const l=document.getElementById('loginPage'),m=document.getElementById('mainApp');if(l)l.style.display='flex';if(m)m.style.display='none';}return ok;};
+  W.loginWithEmailPassword=async function(){
+    const email=S(document.getElementById('loginEmail')&&document.getElementById('loginEmail').value).toLowerCase(),password=S(document.getElementById('loginPassword')&&document.getElementById('loginPassword').value);if(!email)return alert('请输入邮箱');if(!password)return alert('请输入密码');
+    const btn=document.querySelector('button[onclick="loginWithEmailPassword()"]'),old=btn&&btn.textContent;if(btn){btn.disabled=true;btn.textContent='正在验证账号…';}
+    try{const c=sb();if(!c)throw new Error('Supabase登录服务未初始化');const r=await timeout(c.auth.signInWithPassword({email,password}),12000,'账号验证超时');if(r&&r.error)throw r.error;await W.ensureCloudSession();}
+    catch(e){alert('邮箱登录失败：'+S(e&&e.message||e));}
+    finally{if(btn){btn.disabled=false;btn.textContent=old||'邮箱 + 密码登录';}}
+  };
+  try{ensureCloudSession=W.ensureCloudSession;loadData=W.loadData;loginWithEmailPassword=W.loginWithEmailPassword;}catch(_){ }
+
+  const css=document.createElement('style');css.textContent=`
+    #v483RecoveryBanner{display:none;align-items:center;gap:16px;padding:10px 18px;background:#fff3bf;color:#7a4b00;border-bottom:1px solid #ffd43b;font-size:14px;position:relative;z-index:20}
+    #v483RecoveryBanner strong{white-space:nowrap}
+    .v483-recovery-readonly #mainContent input,.v483-recovery-readonly #mainContent select,.v483-recovery-readonly #mainContent textarea,.v483-recovery-readonly #mainContent button{pointer-events:none;opacity:.72}
+    .v483-recovery-readonly #mainContent a{pointer-events:none}
+    #v483RecoveryMigrateBtn{border:1px solid rgba(255,255,255,.35)}
+  `;document.head.appendChild(css);
+
+  function version(){try{document.title='Sistema Inteligente de Monitoramento de Contêineres V48.3';document.querySelectorAll('.v42-hero-title').forEach(el=>{el.textContent=S(el.textContent).replace(/V4\d+\.\d+/,'V48.3');});const card=document.querySelector('.login-card');if(card){const sub=[...card.querySelectorAll('div,p')].find(el=>/V4\d|Stable|Clean|Safe|Instant Access|Fast Read|修复|轻量首页/i.test(S(el.textContent)));if(sub)sub.textContent='V48.3：安全迁移恢复、暂存校验、原子切换、按需读取。';}}catch(_){ }}
+  document.addEventListener('DOMContentLoaded',()=>{version();setTimeout(version,900);setTimeout(()=>{addMigrationButton();},1500);});setTimeout(version,100);
+  console.log(VERSION+' loaded: incomplete migrations show verified legacy data and use staged atomic recovery.');
 })();
 </script>
 
