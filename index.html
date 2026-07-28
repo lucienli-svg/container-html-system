@@ -2582,7 +2582,7 @@ let main=document.getElementById('mainContent');
       alert('IRA号已更新');
     };
 
-    window.editClearanceRecord = function(identifier){
+    window.editClearanceRecord = async function(identifier){
       let bl = blList.find(b => getBlIdentifier(b) === identifier);
       if(!bl){ alert('未找到提单记录'); return; }
       let newChannel = prompt('修改清关通道：绿色 / 黄色 / 红色', bl.channel || '绿色');
@@ -2596,10 +2596,9 @@ let main=document.getElementById('mainContent');
       bl.channel = newChannel;
       bl.clearanceDate = fmtDate(newDate);
       bl.isCleared = true;
-      updateContainerStatus();
-      saveData();
       renderCustomsTable();
-      alert('清关信息已更新');
+      const ok = window.queueTargetedSaveV485 ? await window.queueTargetedSaveV485([{module:'blList',payload:bl}],'edit_customs_clearance') : await saveData('edit_customs_clearance');
+      if(ok) alert('清关信息已更新，正在写入云端。');
     };
 
     window.editDynamicTask = function(taskId){
@@ -2986,21 +2985,20 @@ let main=document.getElementById('mainContent');
       renderCustomsTable();
     }
     
-    window.saveCustomsChannel = function(identifier){
+    window.saveCustomsChannel = async function(identifier){
       let sid = safeId(identifier);
       let channelEl = document.getElementById(`ch_${sid}`);
       if(!channelEl){ alert('未找到清关通道'); return; }
       let bl = blList.find(b => getBlIdentifier(b) === identifier);
       if(bl){
         bl.channel = channelEl.value;
-        // 只保存通道，不改变清关完成状态，不要求清关时间
-        saveData();
         renderCustomsTable();
-        alert('清关通道已保存');
+        const ok = window.queueTargetedSaveV485 ? await window.queueTargetedSaveV485([{module:'blList',payload:bl}],'save_customs_channel') : await saveData('save_customs_channel');
+        if(ok) alert('清关通道已保存，正在写入云端。');
       }
     };
 
-    window.doClearance = function(identifier){
+    window.doClearance = async function(identifier){
       let sid = safeId(identifier);
       let date = document.getElementById(`clrDate_${sid}`).value;
       let channel = document.getElementById(`ch_${sid}`).value;
@@ -3010,23 +3008,22 @@ let main=document.getElementById('mainContent');
         bl.clearanceDate = fmtDate(date);
         bl.channel = channel;
         bl.isCleared = true;
-        updateContainerStatus();
-        saveData();
+        // 清关只改变当前提单记录。物理箱汇总状态在相关页面按需计算，禁止遍历并改写全部集装箱。
         renderCustomsTable();
-        alert('清关已完成');
+        const ok = window.queueTargetedSaveV485 ? await window.queueTargetedSaveV485([{module:'blList',payload:bl}],'complete_customs_clearance') : await saveData('complete_customs_clearance');
+        if(ok) alert('清关已完成，正在写入云端。');
       }
     };
     
-    window.revokeClearance = function(identifier){
+    window.revokeClearance = async function(identifier){
       if(confirm('确定撤销？')){
         let bl = blList.find(b => getBlIdentifier(b) === identifier);
         if(bl){
           bl.clearanceDate = null;
           bl.isCleared = false;
-          updateContainerStatus();
-          saveData();
           renderCustomsTable();
-          alert('已撤销');
+          const ok = window.queueTargetedSaveV485 ? await window.queueTargetedSaveV485([{module:'blList',payload:bl}],'revoke_customs_clearance') : await saveData('revoke_customs_clearance');
+          if(ok) alert('清关状态已撤销，正在写入云端。');
         }
       }
     };
@@ -16182,7 +16179,7 @@ window.__v479JournalOwnsSync = true;
   document.head.appendChild(style);
   function version(){
     try{
-      if(document.title!=='Sistema Inteligente de Monitoramento de Contêineres V48.4')document.title='Sistema Inteligente de Monitoramento de Contêineres V48.4';
+      if(document.title!=='Sistema Inteligente de Monitoramento de Contêineres V48.4')document.title='Sistema Inteligente de Monitoramento de Contêineres V48.5';
       const card=document.querySelector('.login-card');if(card){const sub=[...card.querySelectorAll('div,p')].find(el=>/V4\d|Stable|Clean|Safe|Instant Access|修复/i.test(S(el.textContent)));if(sub){const t='V48.1 Fast Read Model：登录即时进入；逐行原子保存；服务器读取模型即时加载；完整快照仅用于备份。';if(S(sub.textContent)!==t)sub.textContent=t;}}
       document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.(9|10|11|12)|Ordered Local-First|Full Basic Data Export|Shared Container|Import Validation/i.test(S(el.textContent))){if(S(el.textContent)!=='V48.1')el.textContent='V48.1';}});
       document.body.classList.toggle('v4713-login-visible',isLoginVisible());
@@ -16223,7 +16220,7 @@ window.__v479JournalOwnsSync = true;
 (function(){
   'use strict';
   const W=window;
-  const VERSION='V48.4 Server-First Performance Core';
+  const VERSION='V48.5 Targeted Save & Realtime Fix';
   const MODULES=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig','nextIds','warningConfig'];
   const ARRAY_MODULES=new Set(['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig']);
   const SMALL_MODULES=['nextIds','warningConfig'];
@@ -16257,6 +16254,18 @@ window.__v479JournalOwnsSync = true;
   function canonical(v){if(v===null||typeof v!=='object')return JSON.stringify(v);if(Array.isArray(v))return'['+v.map(canonical).join(',')+']';return'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';}
   function hash(v){let str=canonical(v),h=2166136261;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619);}return('00000000'+(h>>>0).toString(16)).slice(-8);}
   function day(v){const s=S(v);return s?s.slice(0,10):'';}
+
+  // V48.5: these fields are UI/derived values. They must never become business-row changes.
+  const CONTAINER_DERIVED_FIELDS=new Set([
+    'physicalContainerId','physicalContainerKey','isSharedContainer','sharedBatchCount',
+    'relatedBatchSummary','isPhysicalCanonical','customsStatus','customsProgress',
+    'pickupEligible','clearanceCompleteDate','sharedInfoConflict'
+  ]);
+  function persistentPayload(module,value){
+    const p=clone(value||{});
+    if(module==='containers'&&p&&typeof p==='object'){CONTAINER_DERIVED_FIELDS.forEach(k=>delete p[k]);}
+    return p;
+  }
 
   function recordKey(module,x){
     if(module==='nextIds'||module==='warningConfig')return module;
@@ -16305,8 +16314,8 @@ window.__v479JournalOwnsSync = true;
   function moduleMap(module){
     const out=new Map();
     if(ARRAY_MODULES.has(module)){
-      A(getValue(module)).forEach(x=>{const k=recordKey(module,x);if(!k)throw new Error(module+' 存在无法识别唯一键的记录');if(out.has(k))throw new Error(module+' 存在重复业务键：'+k);out.set(k,clone(x));});
-    }else out.set(module,clone(getValue(module)||{}));
+      A(getValue(module)).forEach(x=>{const k=recordKey(module,x);if(!k)throw new Error(module+' 存在无法识别唯一键的记录');if(out.has(k))throw new Error(module+' 存在重复业务键：'+k);out.set(k,persistentPayload(module,x));});
+    }else out.set(module,persistentPayload(module,getValue(module)||{}));
     return out;
   }
 
@@ -16361,18 +16370,18 @@ window.__v479JournalOwnsSync = true;
     return{};
   }
   function setBaseline(module,rows){
-    const m=new Map();A(rows).forEach(r=>{if(!r.deletedAt)m.set(r.recordKey,{payload:clone(r.payload||{}),version:N(r.rowVersion),hash:hash(r.payload||{})});});
-    if(!ARRAY_MODULES.has(module)&&!m.has(module)){const payload=clone(getValue(module)||{});m.set(module,{payload,version:0,hash:hash(payload)});}
+    const m=new Map();A(rows).forEach(r=>{if(!r.deletedAt){const p=persistentPayload(module,r.payload||{});m.set(r.recordKey,{payload:p,version:N(r.rowVersion),hash:hash(p)});}});
+    if(!ARRAY_MODULES.has(module)&&!m.has(module)){const payload=persistentPayload(module,getValue(module)||{});m.set(module,{payload,version:0,hash:hash(payload)});}
     baselines.set(module,m);
   }
   async function setBaselineAsync(module,rows){
     const m=new Map(),list=A(rows);
     for(let i=0;i<list.length;i++){
       const r=list[i];
-      if(!r.deletedAt){const p=clone(r.payload||{});m.set(r.recordKey,{payload:p,version:N(r.rowVersion),hash:hash(p)});}
+      if(!r.deletedAt){const p=persistentPayload(module,r.payload||{});m.set(r.recordKey,{payload:p,version:N(r.rowVersion),hash:hash(p)});}
       if(i>0&&i%200===0)await yieldMain();
     }
-    if(!ARRAY_MODULES.has(module)&&!m.has(module)){const payload=clone(getValue(module)||{});m.set(module,{payload,version:0,hash:hash(payload)});}
+    if(!ARRAY_MODULES.has(module)&&!m.has(module)){const payload=persistentPayload(module,getValue(module)||{});m.set(module,{payload,version:0,hash:hash(payload)});}
     baselines.set(module,m);
   }
   function overlayPendingForModule(module,rows){return queueAll().then(list=>{const map=new Map(A(rows).filter(r=>!r.deletedAt).map(r=>[r.recordKey,clone(r)]));list.forEach(op=>A(op.changes).filter(c=>c.module===module).forEach(c=>{if(c.action==='delete')map.delete(c.key);else map.set(c.key,{recordKey:c.key,payload:clone(c.payload||{}),rowVersion:N(c.expectedVersion)+1,globalRevision:N(op.baseRevision),deletedAt:null});}));return[...map.values()];});}
@@ -16402,7 +16411,7 @@ window.__v479JournalOwnsSync = true;
   function applyDeltaRows(module,rows){
     let base=baselines.get(module)||new Map();
     let current=moduleMap(module);
-    A(rows).forEach(r=>{if(r.deletedAt){current.delete(r.recordKey);base.delete(r.recordKey);}else{const p=clone(r.payload||{});current.set(r.recordKey,p);base.set(r.recordKey,{payload:p,version:N(r.rowVersion),hash:hash(p)});}});
+    A(rows).forEach(r=>{if(r.deletedAt){current.delete(r.recordKey);base.delete(r.recordKey);}else{const raw=clone(r.payload||{}),p=persistentPayload(module,raw);current.set(r.recordKey,raw);base.set(r.recordKey,{payload:p,version:N(r.rowVersion),hash:hash(p)});}});
     setValue(module,ARRAY_MODULES.has(module)?[...current.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(x=>x[1]):(current.get(module)||{}));
     baselines.set(module,base);
   }
@@ -16427,7 +16436,7 @@ window.__v479JournalOwnsSync = true;
         setValue(module,[...map.values()]);
       }else if(c.action!=='delete')setValue(module,clone(c.payload||{}));
       const base=baselines.get(module)||new Map();
-      if(c.action==='delete')base.delete(c.key);else base.set(c.key,{payload:clone(c.payload||{}),version:N(c.expectedVersion)+1,hash:hash(c.payload||{})});
+      if(c.action==='delete')base.delete(c.key);else{const p=persistentPayload(module,c.payload||{});base.set(c.key,{payload:p,version:N(c.expectedVersion)+1,hash:hash(p)});}
       baselines.set(module,base);
     }));
   }
@@ -16574,11 +16583,37 @@ window.__v479JournalOwnsSync = true;
     const blocked=validateChanges(changes);
     return{opId:'v484_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10),reason:S(reason||'business_operation'),createdAt:now(),baseRevision:N(bootstrap&&bootstrap.revision),status:'pending',changes,blocked};
   }
-  function applyOptimistic(op){A(op.changes).forEach(c=>{let base=baselines.get(c.module);if(!base){base=new Map();baselines.set(c.module,base);}if(c.action==='delete')base.delete(c.key);else base.set(c.key,{payload:clone(c.payload||{}),version:N(c.expectedVersion)+1,hash:hash(c.payload||{})});});}
+  function applyOptimistic(op){A(op.changes).forEach(c=>{let base=baselines.get(c.module);if(!base){base=new Map();baselines.set(c.module,base);}if(c.action==='delete')base.delete(c.key);else{const p=persistentPayload(c.module,c.payload||{});base.set(c.key,{payload:p,version:N(c.expectedVersion)+1,hash:hash(p)});}});}
+
+  // V48.5: save explicitly changed rows without scanning/hashing an entire loaded module.
+  function createTargetedOperation(items,reason){
+    const changes=[];
+    A(items).forEach(item=>{
+      const module=S(item&&item.module),action=S(item&&item.action)||'upsert';
+      if(!MODULES.includes(module))throw new Error('不支持的业务模块：'+module);
+      if(!loadedModules.has(module))throw new Error('业务模块尚未加载：'+module);
+      const payload=action==='delete'?null:persistentPayload(module,item.payload||{});
+      const key=S(item.key)||(action==='delete'?'':recordKey(module,payload));
+      if(!key)throw new Error(module+' 无法识别业务记录唯一键');
+      const base=baselines.get(module)||new Map(),old=base.get(key);
+      if(action==='upsert'&&old&&old.hash===hash(payload))return;
+      changes.push({module,key,action,expectedVersion:old?N(old.version):0,payload});
+    });
+    if(!changes.length)return null;
+    const blocked=validateChanges(changes);
+    return{opId:'v485_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10),reason:S(reason||'targeted_operation'),createdAt:now(),baseRevision:N(bootstrap&&bootstrap.revision),status:'pending',changes,blocked};
+  }
+  async function queueTargetedSave(items,reason){
+    let op;try{op=createTargetedOperation(items,reason);}catch(e){alert('定向保存校验失败：'+S(e&&e.message||e));return false;}
+    if(!op)return true;if(op.blocked){alert(op.blocked);return false;}
+    try{await queuePut(op);}catch(e){alert('浏览器本地安全队列写入失败：'+S(e&&e.message||e));setStatus('本地保存失败','error');return false;}
+    applyOptimistic(op);setStatus('本机已记录 · 云端快速写入中','syncing');setTimeout(processQueue,0);return true;
+  }
+  W.queueTargetedSaveV485=queueTargetedSave;
 
   async function refreshBootstrap(){
     const b=await callRpc('cms_get_bootstrap_v484',{},RPC_TIMEOUT);
-    if(!b||S(b.schemaVersion)!=='48.4.0')throw new Error('V48.4数据库补丁未正确启用');
+    if(!b||S(b.schemaVersion)!=='48.5.0')throw new Error('V48.5数据库补丁未正确启用');
     bootstrap=b;
     const settings=b.settings||{},pending=await queueAll().catch(()=>[]),pendingModules=new Set(pending.flatMap(op=>A(op.changes).map(c=>c.module)));
     if(settings.nextIds&&!pendingModules.has('nextIds')){const e=settings.nextIds,p=clone(e.payload||{});setValue('nextIds',p);baselines.set('nextIds',new Map([['nextIds',{payload:p,version:N(e.rowVersion),hash:hash(p)}]]));loadedModules.add('nextIds');moduleRevisions.set('nextIds',N(b.revision));}
@@ -16596,7 +16631,7 @@ window.__v479JournalOwnsSync = true;
       setStatus('云端已快速保存','ok');setTimeout(()=>setStatus('云端服务器模式已就绪','ok'),1800);return true;
     }catch(e){
       op.lastError=S(e&&e.message||e);op.lastAttemptAt=now();if(/CMS_CONFLICT/i.test(op.lastError)){op.status='conflict';await queuePut(op);setStatus('发现数据冲突 · 未覆盖云端','error');alert('数据冲突：云端记录已被其他操作更新。系统没有覆盖云端数据。请先刷新当前模块，核对后重新维护。');return false;}
-      if(isSchemaError(e)){setStatus('V48.4数据库补丁未部署','error');alert('请先在Supabase SQL Editor执行V48.4服务器优先性能补丁。');return false;}
+      if(isSchemaError(e)){setStatus('V48.5数据库补丁未部署','error');alert('请先在Supabase SQL Editor执行V48.5性能修复补丁。');return false;}
       op.status='pending';await queuePut(op);setStatus(navigator.onLine?'云端暂不可用 · 已保存在本机':'当前离线 · 已保存在本机','warn');scheduleRetry();return false;
     }
   }
@@ -16640,7 +16675,7 @@ window.__v479JournalOwnsSync = true;
   async function startRealtime(){
     const client=sb();if(!client)return false;try{if(realtimeChannel)await client.removeChannel(realtimeChannel);}catch(_){ }
     let timer=null;
-    realtimeChannel=client.channel('cms_v484_ops_'+Math.random().toString(36).slice(2)).on('postgres_changes',{event:'INSERT',schema:'public',table:'cms_operations'},payload=>{const row=payload&&payload.new;if(!row||committedOps.has(S(row.operation_id)))return;clearTimeout(timer);timer=setTimeout(()=>refreshLoadedModules().catch(()=>{}),350);}).subscribe(code=>{if(code==='SUBSCRIBED')setStatus('云端服务器模式已就绪','ok');else if(code==='CHANNEL_ERROR'||code==='TIMED_OUT')setStatus('实时订阅异常 · 定时校验启用','warn');});
+    realtimeChannel=client.channel('cms_v484_ops_'+Math.random().toString(36).slice(2)).on('postgres_changes',{event:'INSERT',schema:'public',table:'cms_operations'},payload=>{const row=payload&&payload.new;if(!row||committedOps.has(S(row.operation_id)))return;clearTimeout(timer);timer=setTimeout(()=>refreshLoadedModules().catch(()=>{}),350);}).subscribe(code=>{if(code==='SUBSCRIBED')setStatus('云端服务器模式已就绪','ok');else if(code==='CHANNEL_ERROR'||code==='TIMED_OUT')setStatus('实时推送不可用 · 定时校验正常运行','warn');});
     if(reconcileTimer)clearInterval(reconcileTimer);reconcileTimer=setInterval(()=>{if(document.visibilityState==='visible'&&!processRunning)refreshLoadedModules().catch(()=>{});},RECONCILE_MS);return true;
   }
 
@@ -16670,7 +16705,7 @@ window.__v479JournalOwnsSync = true;
         setStatus('云端服务器模式已就绪','ok');
         setTimeout(processQueue,0);startRealtime();
         return true;
-      }catch(e){console.error('V48.4 login failed',e);if(isSchemaError(e)){setStatus('请执行V48.4 SQL补丁','error');alert('数据库尚未启用V48.4服务器优先接口。请先执行V48.4 Supabase SQL补丁。');}else{setStatus('读取云端首页失败','error');alert('登录后读取云端首页失败：'+S(e&&e.message||e));}return false;}finally{authPromise=null;}
+      }catch(e){console.error('V48.4 login failed',e);if(isSchemaError(e)){setStatus('请执行V48.5 SQL补丁','error');alert('数据库尚未启用V48.5性能修复。请先执行V48.5 Supabase SQL补丁。');}else{setStatus('读取云端首页失败','error');alert('登录后读取云端首页失败：'+S(e&&e.message||e));}return false;}finally{authPromise=null;}
     })();return authPromise;
   }
   W.ensureCloudSession=bootstrapSession;
@@ -16687,7 +16722,7 @@ window.__v479JournalOwnsSync = true;
 
   W.retryPendingBusinessOpsV480=W.retryPendingBusinessOpsV484=async()=>{const ok=await processQueue();if(ok)alert('本机待上传操作已完成同步。');return ok;};
   W.migrateLocalToCloud=()=>W.retryPendingBusinessOpsV484();try{migrateLocalToCloud=W.migrateLocalToCloud;}catch(_){ }
-  W.showV484Status=async()=>{const q=await queueAll(),mods=[...loadedModules];alert(`V48.4 云端服务器模式\n\n云端修订号：${N(bootstrap&&bootstrap.revision)}\n已加载模块：${mods.length?mods.join('、'):'仅轻量首页'}\n本机待上传：${q.length}\n冲突操作：${q.filter(x=>x.status==='conflict').length}\n\n登录读取：服务器预计算轻量首页\n菜单读取：单次云端数据包\n日常保存：单行原子事务\n完整快照：仅手工备份`);};
+  W.showV484Status=async()=>{const q=await queueAll(),mods=[...loadedModules];alert(`V48.5 云端服务器模式\n\n云端修订号：${N(bootstrap&&bootstrap.revision)}\n已加载模块：${mods.length?mods.join('、'):'仅轻量首页'}\n本机待上传：${q.length}\n冲突操作：${q.filter(x=>x.status==='conflict').length}\n\n登录读取：服务器预计算轻量首页\n菜单读取：单次云端数据包\n日常保存：单行原子事务\n完整快照：仅手工备份`);};
 
   const legacyDownload=W.downloadCloudBackup;
   W.downloadCloudBackup=async function(){
@@ -16701,11 +16736,27 @@ window.__v479JournalOwnsSync = true;
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){processQueue();refreshLoadedModules().catch(()=>{});}});
 
   function version(){
-    try{document.title='Sistema Inteligente de Monitoramento de Contêineres V48.4';document.querySelectorAll('.v42-hero-title').forEach(el=>{el.textContent=S(el.textContent).replace(/V4\d+\.\d+/,'V48.4');});document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/^V4\d+(?:\.\d+)?(?:\s.*)?$/i.test(S(el.textContent)))el.textContent='V48.4';});const card=document.querySelector('.login-card');if(card){const sub=[...card.querySelectorAll('div,p')].find(el=>/V4\d|Stable|Clean|Safe|Instant Access|Fast Read|修复/i.test(S(el.textContent)));if(sub)sub.textContent='V48.4：服务器预计算首页、单请求菜单读取、增量刷新、逐行原子保存。';}hideOldBadges();}catch(_){ }
+    try{document.title='Sistema Inteligente de Monitoramento de Contêineres V48.5';document.querySelectorAll('.v42-hero-title').forEach(el=>{el.textContent=S(el.textContent).replace(/V4\d+\.\d+/,'V48.4');});document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/^V4\d+(?:\.\d+)?(?:\s.*)?$/i.test(S(el.textContent)))el.textContent='V48.5';});const card=document.querySelector('.login-card');if(card){const sub=[...card.querySelectorAll('div,p')].find(el=>/V4\d|Stable|Clean|Safe|Instant Access|Fast Read|修复/i.test(S(el.textContent)));if(sub)sub.textContent='V48.5：服务器轻量读取、清关单记录定向保存、实时订阅修复。';}hideOldBadges();}catch(_){ }
   }
   const style=document.createElement('style');style.textContent='#v4713SyncBadge,#v479SaveIndicator,#v478SaveIndicator{display:none!important}#v484StatusBadge{border:1px solid rgba(255,255,255,.35)}';document.head.appendChild(style);
   document.addEventListener('DOMContentLoaded',()=>{version();setTimeout(version,800);setTimeout(version,2500);setTimeout(version,7200);});setTimeout(version,100);
-  console.log(VERSION+' loaded: server-first bootstrap, one-request menu bundles, delta refresh, and atomic row saves.');
+  console.log(VERSION+' loaded: targeted customs saves, derived-field isolation, and realtime publication fix.');
+})();
+</script>
+
+<script>
+/* V48.5 final UI marker */
+(function(){
+  const W=window,S=v=>String(v==null?'':v).trim();
+  function mark(){
+    try{
+      document.title='Sistema Inteligente de Monitoramento de Contêineres V48.5';
+      document.querySelectorAll('.v42-hero-title').forEach(el=>{el.textContent=S(el.textContent).replace(/V4\d+\.\d+/,'V48.5');});
+      const b=document.getElementById('v484StatusBadge');if(b)b.id='v485StatusBadge';
+    }catch(_){ }
+  }
+  W.showV485Status=W.showV484Status;
+  document.addEventListener('DOMContentLoaded',()=>{mark();setTimeout(mark,900);setTimeout(mark,2600);});setTimeout(mark,100);
 })();
 </script>
 
