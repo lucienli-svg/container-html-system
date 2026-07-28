@@ -712,7 +712,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V47.14 Login Hotfix：修复登录页监听循环；登录与后台同步继续保持分离。
+        V48.0 Business Row Storage：登录即时进入；日常业务按行原子保存；完整快照仅用于备份。
       </div>
       <button class="login-btn" onclick="loginWithGoogle()" style="width:100%;margin-bottom:14px;">使用 Google 登录</button>
 
@@ -14023,7 +14023,7 @@ ${preview}
     try{if(typeof realtimeChannel!=='undefined'&&realtimeChannel&&client){client.removeChannel(realtimeChannel);realtimeChannel=null;}}catch(_){}
     try{if(W.__cloudFallbackPoller){clearInterval(W.__cloudFallbackPoller);W.__cloudFallbackPoller=null;}}catch(_){}
   }
-  function startRealtime(){if(W.__v479JournalOwnsSync)return;const client=sb();if(!client)return;stopLegacySync();try{if(realtime473)client.removeChannel(realtime473);}catch(_){ }realtime473=client.channel('cms_v473_'+TAB_ID).on('postgres_changes',{event:'*',schema:'public',table:'app_state',filter:'id=eq.'+BASE_ID},()=>setTimeout(()=>pull('realtime'),500)).subscribe(status=>{if(status==='SUBSCRIBED')hint('安全实时同步已开启');else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT')hint('实时同步异常，已启用轮询');});if(poller473)clearInterval(poller473);poller473=setInterval(()=>{if(typeof cloudUser!=='undefined'&&cloudUser&&document.visibilityState==='visible')pull('polling');},45000);try{if(typeof BroadcastChannel!=='undefined'){if(channel473)channel473.close();channel473=new BroadcastChannel('cms-v473-'+BASE_ID);channel473.onmessage=e=>{if(e.data&&e.data.from!==TAB_ID)pull('broadcast');};}}catch(_){}}
+  function startRealtime(){if(W.__CMS_BUSINESS_TABLE_MODE){try{stopLegacySync();}catch(_){ }return;}if(W.__v479JournalOwnsSync)return;const client=sb();if(!client)return;stopLegacySync();try{if(realtime473)client.removeChannel(realtime473);}catch(_){ }realtime473=client.channel('cms_v473_'+TAB_ID).on('postgres_changes',{event:'*',schema:'public',table:'app_state',filter:'id=eq.'+BASE_ID},()=>setTimeout(()=>pull('realtime'),500)).subscribe(status=>{if(status==='SUBSCRIBED')hint('安全实时同步已开启');else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT')hint('实时同步异常，已启用轮询');});if(poller473)clearInterval(poller473);poller473=setInterval(()=>{if(typeof cloudUser!=='undefined'&&cloudUser&&document.visibilityState==='visible')pull('polling');},45000);try{if(typeof BroadcastChannel!=='undefined'){if(channel473)channel473.close();channel473=new BroadcastChannel('cms-v473-'+BASE_ID);channel473.onmessage=e=>{if(e.data&&e.data.from!==TAB_ID)pull('broadcast');};}}catch(_){}}
 
   async function transact(reason,mutate,msg){const before=clone(state()),ui=captureUi();try{const r=mutate();if(r===false)return false;try{if(typeof W.normalizeStateV455==='function')W.normalizeStateV455(true);}catch(_){ }render(ui);hint((msg||'操作完成')+'，正在安全保存…');const ok=await queue(reason);if(!ok){apply(before,currentManifest,'rollback_local');render(ui);return false;}hint((msg||'操作完成')+'，已保存');return true;}catch(e){apply(before,currentManifest,'rollback_exception');render(ui);alert('操作失败：'+(e.message||e));return false;}}
   function decode(k){try{let s=S(k);while(s.length%4)s+='=';return JSON.parse(decodeURIComponent(escape(atob(s))));}catch(_){return{id:k};}}
@@ -14693,10 +14693,17 @@ ${preview}
 </script>
 
 <script>
+// V48.0: business-table mode owns cloud persistence and realtime sync.
+window.__CMS_BUSINESS_TABLE_MODE = true;
+window.__v479JournalOwnsSync = true;
+</script>
+
+<script>
 /* ==================== V47.9 Ordered Local-First Journal：即时捕获 + 有序事务 + 防回滚同步 ==================== */
 (function(){
   'use strict';
   const W=window;
+  if(W.__CMS_BUSINESS_TABLE_MODE){ console.log('V47.9 journal disabled: V48.0 business-table mode is active.'); return; }
   const VERSION='V47.9 Ordered Local-First Journal';
   const BASE_ID=(typeof CLOUD_STATE_ID!=='undefined'?CLOUD_STATE_ID:'container-monitoring-main');
   const WRITE_PREFIX=BASE_ID+':v479:op:';
@@ -15749,6 +15756,199 @@ ${preview}
 
 
 <script>
+/* ==================== V48.0 Business Row Storage Core ====================
+   Architecture:
+   - Daily operations are committed atomically through cms_commit_operation RPC.
+   - Each business record is stored as one row in its own Supabase business table.
+   - IndexedDB is only a durable retry queue; the UI never waits for network latency.
+   - Full app_state snapshots are retained only for manual/periodic backup and rollback.
+   - Legacy snapshot mode remains available until the supplied SQL schema is installed
+     and an Admin completes the verified migration.
+============================================================================ */
+(function(){
+  'use strict';
+  const W=window;
+  const VERSION='V48.0 Business Row Storage';
+  const SCHEMA_VERSION='48.0.0';
+  const MODULES=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig','nextIds','warningConfig'];
+  const ARRAY_MODULES=new Set(['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig']);
+  const CORE_MODULES=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans'];
+  const TABLES={
+    containers:'cms_containers',
+    blList:'cms_bills_of_lading',
+    containerBlMap:'cms_container_bl_links',
+    transportTasks:'cms_transport_tasks',
+    locationStock:'cms_location_stock',
+    returnRecords:'cms_return_records',
+    pickupPlans:'cms_pickup_plans',
+    productionRecords:'cms_production_records',
+    productionPlans:'cms_production_plans',
+    factoryCalendar:'cms_factory_calendar',
+    storageConfig:'cms_storage_config',
+    demurrageConfig:'cms_demurrage_config',
+    nextIds:'cms_system_settings',
+    warningConfig:'cms_system_settings'
+  };
+  const DB_NAME='cms_v480_business_queue';
+  const DB_STORE='pending_operations';
+  const MAX_OPERATION_ROWS=3000;
+  const MAX_OPERATION_BYTES=8*1024*1024;
+  const RPC_TIMEOUT=9000;
+  const RETRY_MS=8000;
+  const RECONCILE_MS=60000;
+  const legacyLoad=W.loadCloudState;
+  const legacySave=W.queueSaveV473||W.persistAuthoritativeV474||W.saveCloudState||W.saveData;
+  const legacyFlush=W.flushPendingSaveV473||W.flushPendingSaveV471||null;
+  W.__v480LegacyBackupSave=legacySave;
+  W.__v479JournalOwnsSync=true;
+
+  const A=v=>Array.isArray(v)?v:[];
+  const S=v=>String(v==null?'':v).trim();
+  const U=v=>S(v).toUpperCase();
+  const N=v=>Number(v)||0;
+  const now=()=>new Date().toISOString();
+  const clone=v=>v==null?v:JSON.parse(JSON.stringify(v));
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  function timeout(p,ms,msg){return Promise.race([Promise.resolve(p),new Promise((_,rej)=>setTimeout(()=>rej(new Error(msg||'请求超时')),ms))]);}
+  function sb(){try{return typeof initSupabaseClient==='function'?initSupabaseClient():null;}catch(_){return null;}}
+  function who(){try{return(cloudUser&&cloudUser.email)||(currentUser&&(currentUser.email||currentUser.name))||'unknown';}catch(_){return'unknown';}}
+  function isAdmin(){try{return typeof isAdminUser==='function'?isAdminUser():((currentUser&&currentUser.role)==='Admin');}catch(_){return false;}}
+  function get(name,fallback){try{return eval(name);}catch(_){return W[name]===undefined?fallback:W[name];}}
+  function replaceArray(name,value){const target=get(name,null);if(Array.isArray(target))target.splice(0,target.length,...A(value));else try{W[name]=A(value);}catch(_){} }
+  function replaceObject(name,value){const target=get(name,null);if(target&&typeof target==='object'&&!Array.isArray(target)){Object.keys(target).forEach(k=>delete target[k]);Object.assign(target,value||{});}else try{W[name]=value||{};}catch(_){} }
+  function state(){return{
+    containers:A(get('containers',[])),blList:A(get('blList',[])),containerBlMap:A(get('containerBlMap',[])),transportTasks:A(get('transportTasks',[])),locationStock:A(get('locationStock',[])),returnRecords:A(get('returnRecords',[])),pickupPlans:A(get('pickupPlans',[])),productionRecords:A(get('productionRecords',[])),productionPlans:A(get('productionPlans',[])),factoryCalendar:A(get('factoryCalendar',[])),storageConfig:A(get('storageConfig',[])),demurrageConfig:A(get('demurrageConfig',[])),nextIds:clone(get('nextIds',{})||{}),warningConfig:clone(get('warningConfig',{})||{})
+  };}
+  function applyState(st){if(!st)return;MODULES.forEach(m=>ARRAY_MODULES.has(m)?replaceArray(m,st[m]):replaceObject(m,st[m]));try{if(typeof W.prepareSharedContainerStateV4711==='function')W.prepareSharedContainerStateV4711();else if(typeof prepareSharedState==='function')prepareSharedState();}catch(_){ }try{if(typeof updateContainerStatus==='function')updateContainerStatus();}catch(_){ }try{if(typeof updateDailyFees==='function')updateDailyFees();}catch(_){ }}
+  function render(){try{if(typeof renderSidebar==='function')renderSidebar();if(typeof renderContent==='function')renderContent();if(typeof applyLanguage==='function')applyLanguage();}catch(e){console.warn('V48 render skipped',e);}}
+
+  function canonical(v){if(v===null||typeof v!=='object')return JSON.stringify(v);if(Array.isArray(v))return'['+v.map(canonical).join(',')+']';return'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';}
+  function hashText(str){let h=2166136261;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619);}return('00000000'+(h>>>0).toString(16)).slice(-8);}
+  function hash(v){return hashText(canonical(v));}
+  function day(v){const s=S(v);return s?s.slice(0,10):'';}
+  function recordKey(module,x){
+    if(module==='nextIds'||module==='warningConfig')return module;
+    if(!x||typeof x!=='object')return'';
+    if(module==='containers')return S(x.containerRecordUid)||(S(x.id)?'ID:'+S(x.id):'')||[U(x.containerNo),U(x.batch),S(x.containerSeq||x.seq)].join('|');
+    if(module==='blList')return S(x.blUid)||(S(x.id)?'ID:'+S(x.id):'')||U(x.blNo||x.houseBlNo||x.masterBlNo);
+    if(module==='containerBlMap')return S(x.linkUid)||(S(x.id)?'ID:'+S(x.id):'')||[S(x.containerId),U(x.containerNo),U(x.blNo||x.houseBlNo||x.masterBlNo),U(x.batch)].join('|');
+    if(module==='transportTasks')return S(x.taskUid)||S(x.routeLegKey)||(S(x.id)?'ID:'+S(x.id):'')||[U(x.containerNo),S(x.containerId),U(x.from||x.origin),U(x.to||x.destination),day(x.estimatedArrival||x.arrivalDate)].join('|');
+    if(module==='locationStock')return S(x.stockUid)||(S(x.id)?'ID:'+S(x.id):'')||S(x.containerId)||U(x.containerNo);
+    if(module==='returnRecords')return S(x.returnUid)||(S(x.id)?'ID:'+S(x.id):'')||[S(x.containerId),U(x.containerNo),U(x.type),U(x.location),day(x.returnDate||x.unpackDate||x.createdAt)].join('|');
+    if(module==='pickupPlans')return S(x.planUid)||(S(x.id)?'ID:'+S(x.id):'')||[S(x.containerId),U(x.containerNo),day(x.arrivalDate),U(x.destination)].join('|');
+    if(module==='productionRecords')return S(x.recordUid)||(S(x.id)?'ID:'+S(x.id):'')||[U(x.batch),day(x.date),U(x.workshop||x.area)].join('|');
+    if(module==='productionPlans')return S(x.planUid)||(S(x.id)?'ID:'+S(x.id):'')||[day(x.date),U(x.workshop||x.area),U(x.batch),S(x.order||x.planOrder)].join('|');
+    if(module==='factoryCalendar')return day(x.date)||(S(x.id)?'ID:'+S(x.id):'');
+    if(module==='storageConfig')return S(x.configUid)||(S(x.id)?'ID:'+S(x.id):'')||[day(x.effectiveFrom||x.startDate),day(x.effectiveTo||x.endDate),S(x.fixedDays),S(x.fixedRate),S(x.overtimeRate)].join('|');
+    if(module==='demurrageConfig')return S(x.configUid)||(S(x.id)?'ID:'+S(x.id):'')||[U(x.shippingCompany||x.carrier),U(x.containerType),day(x.effectiveFrom||x.startDate),day(x.effectiveTo||x.endDate)].join('|');
+    return S(x.id)||hash(x);
+  }
+  function moduleMap(module,value){const out=new Map();if(ARRAY_MODULES.has(module)){A(value).forEach(x=>{const k=recordKey(module,x);if(!k)throw new Error(module+' 存在无法识别唯一键的记录');if(out.has(k))throw new Error(module+' 存在重复业务键：'+k);out.set(k,clone(x));});}else out.set(module,clone(value||{}));return out;}
+  function coreCount(st){return CORE_MODULES.reduce((n,m)=>n+A(st&&st[m]).length,0);}
+
+  let mode='checking'; // checking | business | legacy | unavailable | migration
+  let revision=0;
+  let shadow=new Map(); // module -> Map(key,{payload,version,hash})
+  let remoteChannel=null,reconcileTimer=null,retryTimer=null,processRunning=false,captureChain=Promise.resolve(true),lastConflict=null;
+  const committedOps=new Set();
+
+  function resetShadow(st,versions){shadow=new Map();MODULES.forEach(m=>{const mm=new Map(),vm=(versions&&versions[m])||{};moduleMap(m,st[m]).forEach((payload,key)=>mm.set(key,{payload:clone(payload),version:N(vm[key]),hash:hash(payload)}));shadow.set(m,mm);});}
+  function shadowEntry(m,k){return shadow.get(m)&&shadow.get(m).get(k);}
+  function applyChangeToShadow(c){let mm=shadow.get(c.module);if(!mm){mm=new Map();shadow.set(c.module,mm);}if(c.action==='delete')mm.delete(c.key);else mm.set(c.key,{payload:clone(c.payload),version:N(c.expectedVersion)+1,hash:hash(c.payload)});}
+  function applyRemoteRow(module,row,renderAfter){if(!MODULES.includes(module)||!row)return;const key=S(row.record_key);if(!key)return;let mm=shadow.get(module);if(!mm){mm=new Map();shadow.set(module,mm);}if(row.deleted_at){mm.delete(key);if(ARRAY_MODULES.has(module)){const arr=get(module,[]),idx=A(arr).findIndex(x=>recordKey(module,x)===key);if(idx>=0)arr.splice(idx,1);}else replaceObject(module,{});}else{const payload=clone(row.payload||{});mm.set(key,{payload,version:N(row.row_version),hash:hash(payload)});if(ARRAY_MODULES.has(module)){const arr=get(module,[]),idx=A(arr).findIndex(x=>recordKey(module,x)===key);if(idx>=0)arr[idx]=payload;else arr.push(payload);}else replaceObject(module,payload);}if(renderAfter)render();}
+
+  function indicator(){let el=document.getElementById('v480StorageBadge');if(!el){el=document.createElement('button');el.id='v480StorageBadge';el.className='logout-btn';el.style.cssText='border:1px solid rgba(255,255,255,.35);min-width:128px';el.onclick=()=>W.showBusinessStorageStatusV480();const box=document.querySelector('.navbar .user-info');if(box)box.insertBefore(el,box.firstChild);}return el;}
+  function setStatus(text,kind,persist){const el=indicator();if(el){el.textContent=text;el.style.background=kind==='ok'?'#2f9e44':kind==='error'?'#c92a2a':kind==='warn'?'#e67700':'#2f5aa8';}try{if(typeof W.setV4713SyncStatus==='function')W.setV4713SyncStatus(text,kind,persist);}catch(_){ }}
+  function mountButtons(){const box=document.querySelector('.navbar .user-info');if(!box)return;let migrate=document.getElementById('v480MigrateBtn');if(!migrate&&isAdmin()){migrate=document.createElement('button');migrate.id='v480MigrateBtn';migrate.className='logout-btn';migrate.textContent='迁移业务表';migrate.onclick=()=>W.migrateSnapshotToBusinessV480();box.insertBefore(migrate,box.querySelector('.logout-btn'));}if(migrate)migrate.style.display=(mode==='business'?'none':'inline-block');let backup=document.getElementById('v480BackupBtn');if(!backup&&isAdmin()){backup=document.createElement('button');backup.id='v480BackupBtn';backup.className='logout-btn';backup.textContent='云端快照备份';backup.onclick=()=>W.createBusinessSnapshotBackupV480();box.insertBefore(backup,box.querySelector('.logout-btn'));}const old=[...box.querySelectorAll('button')].find(b=>S(b.textContent)==='本地→云端');if(old){old.textContent='重试云端同步';old.onclick=()=>W.retryPendingBusinessOpsV480();old.removeAttribute('onclick');}}
+
+  let dbPromise=null;
+  function openDb(){if(dbPromise)return dbPromise;dbPromise=new Promise((resolve,reject)=>{try{const req=indexedDB.open(DB_NAME,1);req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains(DB_STORE)){const s=db.createObjectStore(DB_STORE,{keyPath:'opId'});s.createIndex('createdAt','createdAt');}};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error||new Error('IndexedDB打开失败'));}catch(e){reject(e);}});return dbPromise;}
+  async function idbPut(op){const db=await openDb();return new Promise((resolve,reject)=>{const tx=db.transaction(DB_STORE,'readwrite');tx.objectStore(DB_STORE).put(op);tx.oncomplete=()=>resolve(true);tx.onerror=()=>reject(tx.error||new Error('本地事务写入失败'));});}
+  async function idbDelete(id){const db=await openDb();return new Promise((resolve,reject)=>{const tx=db.transaction(DB_STORE,'readwrite');tx.objectStore(DB_STORE).delete(id);tx.oncomplete=()=>resolve(true);tx.onerror=()=>reject(tx.error||new Error('本地事务删除失败'));});}
+  async function idbAll(){const db=await openDb();return new Promise((resolve,reject)=>{const tx=db.transaction(DB_STORE,'readonly'),r=tx.objectStore(DB_STORE).getAll();r.onsuccess=()=>resolve(A(r.result).sort((a,b)=>S(a.createdAt).localeCompare(S(b.createdAt))||S(a.opId).localeCompare(S(b.opId))));r.onerror=()=>reject(r.error||new Error('本地事务读取失败'));});}
+  async function pendingTouches(module,key){const list=await idbAll();return list.some(op=>A(op.changes).some(c=>c.module===module&&c.key===key));}
+
+  function diffFields(before,after){const keys=new Set([...Object.keys(before||{}),...Object.keys(after||{})]),out=new Set();keys.forEach(k=>{if(canonical(before&&before[k])!==canonical(after&&after[k]))out.add(k);});return out;}
+  function validateOperation(changes,current,previousCore){
+    if(previousCore>=20&&coreCount(current)===0)return'已拦截异常清空：当前操作会将全部业务数据清零。';
+    if(changes.length>MAX_OPERATION_ROWS)return`本次操作涉及 ${changes.length} 条记录，超过安全上限 ${MAX_OPERATION_ROWS}。请分批操作。`;
+    const bytes=new Blob([JSON.stringify(changes)]).size;if(bytes>MAX_OPERATION_BYTES)return`本次操作数据量 ${(bytes/1024/1024).toFixed(2)}MB，超过8MB安全上限，请分批操作。`;
+    for(const c of changes){if(c.action!=='upsert')continue;const x=c.payload||{};if(c.module==='containers'&&N(c.expectedVersion)===0){const missing=[];if(!S(x.batch))missing.push('批次');if(!S(x.containerSeq||x.seq))missing.push('集装箱序号');if(!S(x.containerNo))missing.push('集装箱号');if(!S(x.shippingCompany||x.carrier||x.vessel))missing.push('船公司');if(!S(x.containerType))missing.push('箱型');if(!S(x.arrivalDate||x.eta||x.ata))missing.push('到港日期');const hasBl=A(current.containerBlMap).some(m=>S(m.containerId)===S(x.id)&&S(m.blNo||m.houseBlNo||m.masterBlNo)&&!/^待补充提单-/i.test(S(m.blNo||m.houseBlNo||m.masterBlNo)));if(!hasBl)missing.push('提单号');if(missing.length)return`新增基础数据不完整（${S(x.containerNo)||c.key}）：缺少 ${missing.join('、')}`;}
+      if(c.module==='transportTasks'&&!S(x.containerId)&&!S(x.containerNo))return'运输任务缺少集装箱关联，已阻止保存。';
+      if(c.module==='pickupPlans'&&!S(x.containerId)&&!S(x.containerNo))return'提箱计划缺少集装箱关联，已阻止保存。';
+    }
+    try{const active=new Map();A(current.pickupPlans).filter(p=>p&&!p.cancelled&&p.status!=='cancelled').forEach(p=>{const cont=A(current.containers).find(c=>S(c.id)===S(p.containerId)||U(c.containerNo)===U(p.containerNo));const pk=cont?(S(cont.masterContainerId)||U(cont.containerNo)):U(p.containerNo)||S(p.containerId);if(pk){if(active.has(pk)&&S(active.get(pk).id)!==S(p.id))throw new Error('同一物理集装箱存在多条有效提箱计划：'+(p.containerNo||pk));active.set(pk,p);}});}catch(e){return e.message;}
+    return'';
+  }
+
+  function createOperation(reason){const current=state(),changes=[];const previousCore=[...shadow.entries()].filter(([m])=>CORE_MODULES.includes(m)).reduce((n,[,mm])=>n+mm.size,0);for(const m of MODULES){const cur=moduleMap(m,current[m]),old=shadow.get(m)||new Map();cur.forEach((payload,key)=>{const prev=old.get(key);const h=hash(payload);if(!prev||prev.hash!==h)changes.push({module:m,key,action:'upsert',expectedVersion:prev?N(prev.version):0,before:prev?clone(prev.payload):null,payload:clone(payload)});});old.forEach((prev,key)=>{if(!cur.has(key))changes.push({module:m,key,action:'delete',expectedVersion:N(prev.version),before:clone(prev.payload),payload:null});});}
+    if(!changes.length)return null;const blocked=validateOperation(changes,current,previousCore);if(blocked)return{blocked};return{opId:'op-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10),reason:S(reason)||'business_operation',createdAt:now(),createdBy:who(),baseRevision:revision,status:'pending',changes};}
+
+  async function callRpc(name,args,ms){const client=sb();if(!client)throw new Error('Supabase未连接');const r=await timeout(client.rpc(name,args||{}),ms||RPC_TIMEOUT,name+' 超时');if(r&&r.error)throw r.error;return r&&r.data;}
+  function isSchemaMissing(e){const s=S(e&&e.message||e);return /cms_get_state|cms_commit_operation|schema cache|Could not find the function|PGRST202|42P01|does not exist/i.test(s);}
+  function isConflict(e){return /CMS_CONFLICT\|/i.test(S(e&&e.message||e));}
+  function parseConflict(e){const s=S(e&&e.message||e),m=s.match(/CMS_CONFLICT\|([^|]+)\|([^|]+)\|([^|]+)\|([^|\s]+)/i);return m?{module:m[1],key:m[2],expected:N(m[3]),actual:N(m[4])}:null;}
+
+  async function rebaseOperation(op){const next=clone(op),conflicts=[];for(const c of A(next.changes)){let row=null;try{row=await callRpc('cms_get_record',{p_module:c.module,p_record_key:c.key},6000);}catch(e){return{ok:false,error:e};}const exists=row&&row.exists&&!row.deletedAt,server=exists?(row.payload||{}):null,version=exists?N(row.rowVersion):0;
+      if(c.action==='delete'){if(!exists){c._drop=true;continue;}if(c.before&&canonical(c.before)===canonical(server)){c.expectedVersion=version;c.before=clone(server);continue;}conflicts.push(c);continue;}
+      if(!exists){if(N(c.expectedVersion)===0){c.before=null;c.expectedVersion=0;continue;}conflicts.push(c);continue;}
+      if(N(c.expectedVersion)===0){if(canonical(c.payload)===canonical(server)){c._drop=true;continue;}conflicts.push(c);continue;}
+      const localFields=diffFields(c.before||{},c.payload||{}),serverFields=diffFields(c.before||{},server||{}),same=[...localFields].filter(k=>serverFields.has(k));if(same.length){c.conflictFields=same;conflicts.push(c);continue;}const merged=clone(server||{});const before=c.before||{},after=c.payload||{};localFields.forEach(k=>{if(Object.prototype.hasOwnProperty.call(after,k))merged[k]=clone(after[k]);else delete merged[k];});c.before=clone(server);c.payload=merged;c.expectedVersion=version;}
+    next.changes=next.changes.filter(c=>!c._drop);if(conflicts.length)return{ok:false,conflicts};if(!next.changes.length)return{ok:true,noop:true,op:next};next.rebasedAt=now();next.status='pending';await idbPut(next);return{ok:true,op:next};}
+
+  async function sendOperation(op,allowRebase){try{setStatus('本机已保存 · 云端写入中','syncing',true);const result=await callRpc('cms_commit_operation',{p_operation_id:op.opId,p_changes:op.changes.map(c=>({module:c.module,key:c.key,action:c.action,expectedVersion:c.expectedVersion,payload:c.payload})),p_updated_by:who(),p_reason:op.reason},RPC_TIMEOUT);revision=N(result&&result.revision)||revision;const versions=result&&result.versions||{};A(op.changes).forEach(c=>{const ent=shadowEntry(c.module,c.key);if(ent&&versions[c.module+'|'+c.key]!=null)ent.version=N(versions[c.module+'|'+c.key]);});committedOps.add(op.opId);await idbDelete(op.opId);setStatus('云端已快速保存','ok');lastConflict=null;return true;}catch(e){if(isConflict(e)&&allowRebase){const rebased=await rebaseOperation(op);if(rebased.ok&&rebased.noop){await idbDelete(op.opId);return true;}if(rebased.ok)return sendOperation(rebased.op,false);lastConflict={opId:op.opId,error:e,conflicts:rebased.conflicts||[]};op.status='conflict';op.conflictAt=now();op.conflictMessage=S(e.message||e);await idbPut(op);setStatus('发现数据冲突 · 未覆盖云端','error',true);return false;}if(isSchemaMissing(e)){mode='unavailable';setStatus('业务表未部署 · 使用兼容保存','warn',true);return false;}console.warn('V48 cloud commit deferred',e);op.status='pending';op.lastError=S(e&&e.message||e);op.lastAttemptAt=now();await idbPut(op);setStatus(navigator.onLine?'云端暂不可用 · 已保存在本机':'当前离线 · 已保存在本机','warn',true);scheduleRetry();return false;}}
+  async function processQueue(){if(processRunning||mode!=='business')return false;processRunning=true;try{const list=await idbAll();for(const op of list){if(op.status==='conflict'){lastConflict=lastConflict||{opId:op.opId,conflicts:[]};setStatus('存在待处理数据冲突','error',true);return false;}const ok=await sendOperation(op,true);if(!ok)return false;}if(!list.length)setStatus('业务表实时保存已就绪','ok');return true;}finally{processRunning=false;}}
+  function scheduleRetry(){if(retryTimer)return;retryTimer=setTimeout(async()=>{retryTimer=null;await processQueue();const list=await idbAll();if(list.length&&!list.some(x=>x.status==='conflict'))scheduleRetry();},RETRY_MS);}
+
+  async function capture(reason){if(mode!=='business'){if(typeof legacySave==='function'){setStatus('兼容快照保存中','warn',true);const ok=await legacySave.call(W,reason||'legacy_fallback');setStatus(ok===false?'兼容保存失败':'兼容快照已保存',ok===false?'error':'warn');return ok!==false;}return false;}let op;try{op=createOperation(reason);}catch(e){alert('数据校验失败：'+(e.message||e));return false;}if(!op)return true;if(op.blocked){alert(op.blocked);return false;}try{await idbPut(op);}catch(e){alert('浏览器本地安全队列写入失败：'+(e.message||e));setStatus('本地保存失败','error',true);return false;}A(op.changes).forEach(applyChangeToShadow);setStatus('本机已保存 · 云端后台同步中','syncing',true);setTimeout(processQueue,0);return true;}
+  function queue(reason){captureChain=captureChain.catch(()=>true).then(()=>capture(reason||'saveData'));return captureChain;}
+
+  async function applyPendingAfterLoad(){const list=await idbAll();for(const op of list){for(const c of A(op.changes)){if(c.action==='delete'){if(ARRAY_MODULES.has(c.module)){const arr=get(c.module,[]),i=A(arr).findIndex(x=>recordKey(c.module,x)===c.key);if(i>=0)arr.splice(i,1);}else replaceObject(c.module,{});}else{if(ARRAY_MODULES.has(c.module)){const arr=get(c.module,[]),i=A(arr).findIndex(x=>recordKey(c.module,x)===c.key);if(i>=0)arr[i]=clone(c.payload);else arr.push(clone(c.payload));}else replaceObject(c.module,c.payload);}applyChangeToShadow(c);}}return list.length;}
+  async function loadBusinessState(){const data=await callRpc('cms_get_state',{},12000);if(!data||data.schemaVersion==null)throw new Error('业务表返回数据格式无效');if(!data.migrationComplete){mode='legacy';const ok=typeof legacyLoad==='function'?await legacyLoad.call(W):false;setStatus('业务表待迁移 · 当前使用兼容快照','warn',true);mountButtons();return ok;}mode='business';revision=N(data.revision);applyState(data.state||{});resetShadow(state(),data.versions||{});const pending=await applyPendingAfterLoad();render();startRealtime();mountButtons();setStatus(pending?'已加载本机待上传操作 · 正在续传':'业务表实时保存已就绪',pending?'syncing':'ok',!!pending);setTimeout(processQueue,0);return true;}
+  async function load(){try{return await loadBusinessState();}catch(e){if(isSchemaMissing(e)){mode='unavailable';const ok=typeof legacyLoad==='function'?await legacyLoad.call(W):false;setStatus('业务表未部署 · 当前使用兼容快照','warn',true);mountButtons();return ok;}console.error('V48 business load failed',e);mode='legacy';const ok=typeof legacyLoad==='function'?await legacyLoad.call(W):false;setStatus('业务表读取异常 · 已回退兼容数据','error',true);return ok;}}
+
+  function moduleFromTable(table){return Object.keys(TABLES).find(k=>TABLES[k]===table)||'';}
+  async function startRealtime(){if(mode!=='business')return false;const client=sb();if(!client)return false;try{if(remoteChannel)await client.removeChannel(remoteChannel);}catch(_){ }let ch=client.channel('cms_v480_business_'+Math.random().toString(36).slice(2));const unique=[...new Set(Object.values(TABLES))];unique.forEach(table=>{ch=ch.on('postgres_changes',{event:'*',schema:'public',table},async payload=>{const row=(payload&&payload.new&&Object.keys(payload.new).length)?payload.new:payload.old;if(!row)return;const module=table==='cms_system_settings'?S(row.record_key):moduleFromTable(table);if(!MODULES.includes(module))return;if(committedOps.has(S(row.operation_id)))return;if(await pendingTouches(module,S(row.record_key)))return;applyRemoteRow(module,row,true);revision=Math.max(revision,N(row.global_revision));});});remoteChannel=ch.subscribe(code=>{if(code==='SUBSCRIBED')setStatus('业务表实时同步已开启','ok');else if(code==='CHANNEL_ERROR'||code==='TIMED_OUT')setStatus('实时订阅异常 · 定时校验已开启','warn',true);});if(reconcileTimer)clearInterval(reconcileTimer);reconcileTimer=setInterval(()=>{if(document.visibilityState==='visible'&&mode==='business')reconcile().catch(()=>{});},RECONCILE_MS);return true;}
+  async function reconcile(){if(mode!=='business'||processRunning)return false;const pending=await idbAll();if(pending.length)return processQueue();try{const data=await callRpc('cms_get_state_meta',{},5000);if(data&&N(data.revision)>revision){setStatus('检测到云端更新 · 正在同步','syncing',true);await loadBusinessState();}return true;}catch(_){return false;}}
+
+  function snapshotRows(st){const out={};MODULES.forEach(m=>{out[m]=[...moduleMap(m,st[m]).entries()].map(([key,payload])=>({record_key:key,payload}));});return out;}
+  function snapshotSignature(st){const sig={};MODULES.forEach(m=>{const rows=[...moduleMap(m,st[m]).entries()].sort((a,b)=>a[0].localeCompare(b[0]));sig[m]={count:rows.length,hash:hash(rows.map(([k,v])=>[k,v]))};});return sig;}
+  async function migrate(){if(!isAdmin())return alert('只有Admin可以执行业务表迁移。');if(mode==='business')return alert('业务表迁移已经完成。');if(!confirm('将当前已验证的完整数据迁移到业务表。迁移期间旧快照继续有效；只有全部记录校验一致后才会切换。是否继续？'))return false;try{mode='migration';setStatus('正在准备业务表迁移','syncing',true);if(typeof legacyFlush==='function')await legacyFlush.call(W);if(typeof legacyLoad==='function')await legacyLoad.call(W);const source=clone(state());if(coreCount(source)===0)throw new Error('当前没有可迁移的业务数据，已停止。');const rows=snapshotRows(source),expected=snapshotSignature(source);const begin=await callRpc('cms_begin_migration',{p_updated_by:who()},10000),token=begin&&begin.token;if(!token)throw new Error('未获得迁移令牌');for(const m of MODULES){const list=rows[m];for(let i=0;i<list.length;i+=200){setStatus(`迁移 ${m}：${Math.min(i+200,list.length)}/${list.length}`,'syncing',true);await callRpc('cms_import_rows',{p_module:m,p_rows:list.slice(i,i+200),p_migration_token:token,p_updated_by:who()},15000);}}
+      const staged=await callRpc('cms_get_state',{},15000),actual=snapshotSignature(staged.state||{}),bad=MODULES.filter(m=>actual[m].count!==expected[m].count||actual[m].hash!==expected[m].hash);if(bad.length){await callRpc('cms_abort_migration',{p_migration_token:token,p_updated_by:who()},10000).catch(()=>{});throw new Error('迁移后逐模块校验不一致：'+bad.join('、'));}
+      await callRpc('cms_finalize_migration',{p_migration_token:token,p_expected_counts:Object.fromEntries(MODULES.map(m=>[m,expected[m].count])),p_updated_by:who()},10000);await loadBusinessState();alert('业务表迁移完成。日常操作已切换为逐行原子保存，完整快照不再参与日常保存。');return true;
+    }catch(e){console.error('V48 migration failed',e);mode='legacy';setStatus('业务表迁移失败 · 旧快照仍安全有效','error',true);alert('业务表迁移失败：'+(e.message||e)+'\n旧快照没有被替换，现有数据仍然安全。');return false;}}
+
+  async function backup(){if(!isAdmin())return alert('只有Admin可以创建云端完整快照备份。');if(typeof legacySave!=='function')return alert('未找到完整快照备份引擎。');try{setStatus('正在创建完整云端备份','syncing',true);const ok=await legacySave.call(W,'v480_manual_backup_only');setStatus(ok===false?'云端备份失败':'完整云端备份已创建',ok===false?'error':'ok');if(ok!==false)alert('完整云端快照备份已创建。此备份仅用于恢复，不参与日常业务保存。');return ok!==false;}catch(e){alert('云端备份失败：'+(e.message||e));return false;}}
+  async function resolveConflicts(){const list=await idbAll(),conflicted=list.filter(x=>x.status==='conflict');if(!conflicted.length)return alert('没有待处理的数据冲突。');for(const op of conflicted){op.status='pending';await idbPut(op);const rebased=await rebaseOperation(op);if(!rebased.ok){const fields=(rebased.conflicts||[]).flatMap(c=>c.conflictFields||[]);alert('云端和本机修改了同一条记录的相同字段，系统没有自动覆盖。\n冲突操作：'+op.reason+'\n冲突字段：'+(fields.join('、')||'记录删除/新增冲突')+'\n请先导出备份，再刷新查看云端数据后重新维护。');op.status='conflict';await idbPut(op);return false;}if(rebased.noop)await idbDelete(op.opId);}lastConflict=null;return processQueue();}
+
+  W.loadCloudState=load;
+  W.pullCloudStateAndRefresh=load;
+  W.startRealtimeSync=startRealtime;
+  W.queueSaveV480=queue;
+  W.queueSaveV479=W.queueSaveV478=W.queueSaveV473=W.queueSaveV455=W.queueSystemSaveV4513=W.queueCloudPersistV435=queue;
+  W.saveData=reason=>queue(reason||'saveData');
+  W.saveCloudState=reason=>queue(reason||'saveCloudState');
+  W.saveCloudStateV45=W.saveCloudStateV44=W.saveCloudStateV442=W.saveCloudState;
+  W.flushPendingSaveV480=async()=>{await captureChain;await processQueue();return(await idbAll()).length===0;};
+  W.flushPendingSaveV479=W.flushPendingSaveV478=W.flushPendingSaveV473=W.flushPendingSaveV480;
+  W.saveAndRenderContentKeepState=function(){let ui=null;try{ui=typeof W.captureCurrentUiStateV4513==='function'?W.captureCurrentUiStateV4513():{scrollY:scrollY};}catch(_){ui={scrollY:scrollY};}render();try{if(typeof W.restoreCurrentUiStateV4513==='function')setTimeout(()=>W.restoreCurrentUiStateV4513(ui),0);}catch(_){ }return queue('save_and_render_v480');};
+  W.migrateSnapshotToBusinessV480=migrate;
+  W.retryPendingBusinessOpsV480=async()=>{if(mode!=='business')return load();const ok=await processQueue();if(ok)alert('本机待上传操作已完成同步。');return ok;};
+  W.resolveBusinessConflictsV480=resolveConflicts;
+  W.createBusinessSnapshotBackupV480=backup;
+  W.showBusinessStorageStatusV480=async function(){const pending=await idbAll();const conflict=pending.filter(x=>x.status==='conflict').length;alert(`V48.0 业务表存储状态\n\n模式：${mode}\n云端修订号：${revision}\n本机待上传：${pending.length}\n待处理冲突：${conflict}\n\n日常保存：业务表逐行原子事务\n完整快照：仅用于备份和恢复`);};
+  W.__v480Status=async()=>({version:VERSION,schemaVersion:SCHEMA_VERSION,mode,revision,pending:(await idbAll()).length,conflict:lastConflict,shadowModules:shadow.size});
+  try{loadCloudState=W.loadCloudState;pullCloudStateAndRefresh=W.pullCloudStateAndRefresh;startRealtimeSync=W.startRealtimeSync;saveData=W.saveData;saveCloudState=W.saveCloudState;saveAndRenderContentKeepState=W.saveAndRenderContentKeepState;queueSaveV473=W.queueSaveV473;}catch(_){ }
+
+  W.addEventListener('online',()=>{if(mode==='business')processQueue();});
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&mode==='business'){processQueue();reconcile();}});
+  document.addEventListener('DOMContentLoaded',()=>{setTimeout(()=>{mountButtons();indicator();},700);});
+  const oldRender=W.renderContent;if(typeof oldRender==='function'){W.renderContent=function(){const r=oldRender.apply(this,arguments);setTimeout(mountButtons,0);return r;};try{renderContent=W.renderContent;}catch(_){ }}
+  console.log(VERSION+' loaded: daily saves use atomic business-row RPC commits; snapshots are backup-only.');
+})();
+</script>
+
+<script>
 /* ==================== V47.13 Instant Access & Background Sync ====================
    - Authentication/profile validation is separated from business-data synchronization.
    - The main application opens immediately after authorization.
@@ -15759,7 +15959,7 @@ ${preview}
 (function(){
   'use strict';
   const W=window;
-  const VERSION='V47.14 Login Responsiveness Hotfix';
+  const VERSION='V48.0 Business Row Storage + Login Hotfix';
   const MODULES=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig'];
   const OBJECTS=['nextIds','warningConfig'];
   const CORE=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans'];
@@ -15919,7 +16119,7 @@ ${preview}
       const ok=await fastEnsureCloudSession();
       if(!ok&&document.getElementById('loginPage')?.style.display!=='none')throw new Error('账号已验证，但未能读取有效用户权限');
     }catch(e){
-      console.error('V47.14 email login failed',e);
+      console.error('V48.0 email login failed',e);
       alert('邮箱登录失败：'+(e&&e.message||e));
     }finally{
       if(btn){btn.disabled=false;btn.textContent=old||'邮箱 + 密码登录';}
@@ -15949,9 +16149,9 @@ ${preview}
   document.head.appendChild(style);
   function version(){
     try{
-      if(document.title!=='Sistema Inteligente de Monitoramento de Contêineres V47.14')document.title='Sistema Inteligente de Monitoramento de Contêineres V47.14';
-      const card=document.querySelector('.login-card');if(card){const sub=[...card.querySelectorAll('div,p')].find(el=>/V4\d|Stable|Clean|Safe|Instant Access|修复/i.test(S(el.textContent)));if(sub){const t='V47.14 Login Hotfix：修复登录页监听循环；登录与后台同步继续保持分离。';if(S(sub.textContent)!==t)sub.textContent=t;}}
-      document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.(9|10|11|12)|Ordered Local-First|Full Basic Data Export|Shared Container|Import Validation/i.test(S(el.textContent))){if(S(el.textContent)!=='V47.14')el.textContent='V47.14';}});
+      if(document.title!=='Sistema Inteligente de Monitoramento de Contêineres V48.0')document.title='Sistema Inteligente de Monitoramento de Contêineres V48.0';
+      const card=document.querySelector('.login-card');if(card){const sub=[...card.querySelectorAll('div,p')].find(el=>/V4\d|Stable|Clean|Safe|Instant Access|修复/i.test(S(el.textContent)));if(sub){const t='V48.0 Business Row Storage：登录即时进入；日常业务按行原子保存；完整快照仅用于备份。';if(S(sub.textContent)!==t)sub.textContent=t;}}
+      document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.(9|10|11|12)|Ordered Local-First|Full Basic Data Export|Shared Container|Import Validation/i.test(S(el.textContent))){if(S(el.textContent)!=='V48.0')el.textContent='V48.0';}});
       document.body.classList.toggle('v4713-login-visible',isLoginVisible());
     }catch(_){ }
   }
