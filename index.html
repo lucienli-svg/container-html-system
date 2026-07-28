@@ -712,7 +712,7 @@
     <div class="login-card">
       <div class="login-title">📦 集装箱智能监控 Cloud</div>
       <div style="font-size:13px;color:#606266;line-height:1.8;margin-bottom:20px;">
-        V48.0 Business Row Storage：登录即时进入；日常业务按行原子保存；完整快照仅用于备份。
+        V48.1 Fast Read Model：登录即时进入；逐行原子保存；服务器读取模型即时加载；完整快照仅用于备份。
       </div>
       <button class="login-btn" onclick="loginWithGoogle()" style="width:100%;margin-bottom:14px;">使用 Google 登录</button>
 
@@ -5848,7 +5848,7 @@ let main=document.getElementById('mainContent');
       let storageWarningCount = cachedFeeData.storageWarningList.length;
       let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
       container.innerHTML = `
-        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.12</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
+        <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V48.1</div><div class="v42-hero-sub">物流运营 + 生产保供驾驶舱｜${fmtDate(getTodayStr())}</div></div>
         <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">保留费用、清关、提箱和库存核心指标；到厂进度由下方生产保供看板展示</span></div>
         <div class="v42-kpi-grid">
           <div class="v42-kpi warn" onclick="showDailyReportDetail('todayAbnormalStorage')"><div class="v42-kpi-num">R$ ${dailyReport.todayAbnormalStorage.toFixed(2)}</div><div class="v42-kpi-label">今日新增异常堆存费</div></div>
@@ -6390,7 +6390,7 @@ let main=document.getElementById('mainContent');
     let demurrageWarningCount = cachedFeeData.demurrageWarningList.length;
     let dailyReport = getDailyOperationReport(getTodayStr());
     container.innerHTML = `
-      <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V42.12</div><div class="v42-hero-sub">物流运营工作台 + 生产保供看板｜费用报表增加清关用时｜${fmtDate(getTodayStr())}</div></div>
+      <div class="v42-hero"><div class="v42-hero-title">GWM CONTAINER MONITORING — V48.1</div><div class="v42-hero-sub">物流运营工作台 + 生产保供看板｜费用报表增加清关用时｜${fmtDate(getTodayStr())}</div></div>
       <div class="v42-section-title"><h3>📊 物流运营工作台</h3><span class="v42-mini-note">到厂进度由下方生产保供看板展示，本区保留费用、清关、提箱和库存核心指标</span></div>
       <div class="card">
         <div class="card-header"><span class="card-title">📅 每日运营报表</span><span style="font-size:12px;color:#909399;">统计日期：${fmtDate(getTodayStr())}</span></div>
@@ -15756,7 +15756,7 @@ window.__v479JournalOwnsSync = true;
 
 
 <script>
-/* ==================== V48.0 Business Row Storage Core ====================
+/* ==================== V48.1 Fast Read Model Core ====================
    Architecture:
    - Daily operations are committed atomically through cms_commit_operation RPC.
    - Each business record is stored as one row in its own Supabase business table.
@@ -15768,7 +15768,7 @@ window.__v479JournalOwnsSync = true;
 (function(){
   'use strict';
   const W=window;
-  const VERSION='V48.0 Business Row Storage';
+  const VERSION='V48.1 Fast Read Model';
   const SCHEMA_VERSION='48.0.0';
   const MODULES=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig','nextIds','warningConfig'];
   const ARRAY_MODULES=new Set(['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig']);
@@ -15819,7 +15819,15 @@ window.__v479JournalOwnsSync = true;
   function state(){return{
     containers:A(get('containers',[])),blList:A(get('blList',[])),containerBlMap:A(get('containerBlMap',[])),transportTasks:A(get('transportTasks',[])),locationStock:A(get('locationStock',[])),returnRecords:A(get('returnRecords',[])),pickupPlans:A(get('pickupPlans',[])),productionRecords:A(get('productionRecords',[])),productionPlans:A(get('productionPlans',[])),factoryCalendar:A(get('factoryCalendar',[])),storageConfig:A(get('storageConfig',[])),demurrageConfig:A(get('demurrageConfig',[])),nextIds:clone(get('nextIds',{})||{}),warningConfig:clone(get('warningConfig',{})||{})
   };}
-  function applyState(st){if(!st)return;MODULES.forEach(m=>ARRAY_MODULES.has(m)?replaceArray(m,st[m]):replaceObject(m,st[m]));try{if(typeof W.prepareSharedContainerStateV4711==='function')W.prepareSharedContainerStateV4711();else if(typeof prepareSharedState==='function')prepareSharedState();}catch(_){ }try{if(typeof updateContainerStatus==='function')updateContainerStatus();}catch(_){ }try{if(typeof updateDailyFees==='function')updateDailyFees();}catch(_){ }}
+  function applyState(st){
+    if(!st)return;
+    MODULES.forEach(m=>ARRAY_MODULES.has(m)?replaceArray(m,st[m]):replaceObject(m,st[m]));
+    // 先让真实云端数据进入页面；高成本派生计算放到浏览器空闲阶段，避免登录卡死。
+    try{if(typeof W.prepareSharedContainerStateV4711==='function')W.prepareSharedContainerStateV4711();else if(typeof prepareSharedState==='function')prepareSharedState();}catch(_){ }
+    try{if(typeof updateContainerStatus==='function')updateContainerStatus();}catch(_){ }
+    const deferred=()=>{try{if(typeof updateDailyFees==='function')updateDailyFees();}catch(_){ }};
+    if(typeof requestIdleCallback==='function')requestIdleCallback(deferred,{timeout:2500});else setTimeout(deferred,300);
+  }
   function render(){try{if(typeof renderSidebar==='function')renderSidebar();if(typeof renderContent==='function')renderContent();if(typeof applyLanguage==='function')applyLanguage();}catch(e){console.warn('V48 render skipped',e);}}
 
   function canonical(v){if(v===null||typeof v!=='object')return JSON.stringify(v);if(Array.isArray(v))return'['+v.map(canonical).join(',')+']';return'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';}
@@ -15852,7 +15860,26 @@ window.__v479JournalOwnsSync = true;
   let remoteChannel=null,reconcileTimer=null,retryTimer=null,processRunning=false,captureChain=Promise.resolve(true),lastConflict=null;
   const committedOps=new Set();
 
-  function resetShadow(st,versions){shadow=new Map();MODULES.forEach(m=>{const mm=new Map(),vm=(versions&&versions[m])||{};moduleMap(m,st[m]).forEach((payload,key)=>mm.set(key,{payload:clone(payload),version:N(vm[key]),hash:hash(payload)}));shadow.set(m,mm);});}
+  let shadowReadyPromise=Promise.resolve(true);
+  async function resetShadowAsync(st,versions,stateMaps){
+    const next=new Map();
+    let processed=0;
+    for(const m of MODULES){
+      const mm=new Map(),vm=(versions&&versions[m])||{};
+      let entries;
+      if(stateMaps&&stateMaps[m]&&typeof stateMaps[m]==='object') entries=Object.entries(stateMaps[m]);
+      else entries=[...moduleMap(m,st[m]).entries()];
+      for(const [key,payload] of entries){
+        mm.set(key,{payload:clone(payload),version:N(vm[key]),hash:hash(payload)});
+        processed++;
+        if(processed%120===0) await new Promise(r=>setTimeout(r,0));
+      }
+      next.set(m,mm);
+    }
+    shadow=next;
+    return true;
+  }
+  function resetShadow(st,versions,stateMaps){shadowReadyPromise=resetShadowAsync(st,versions,stateMaps);return shadowReadyPromise;}
   function shadowEntry(m,k){return shadow.get(m)&&shadow.get(m).get(k);}
   function applyChangeToShadow(c){let mm=shadow.get(c.module);if(!mm){mm=new Map();shadow.set(c.module,mm);}if(c.action==='delete')mm.delete(c.key);else mm.set(c.key,{payload:clone(c.payload),version:N(c.expectedVersion)+1,hash:hash(c.payload)});}
   function applyRemoteRow(module,row,renderAfter){if(!MODULES.includes(module)||!row)return;const key=S(row.record_key);if(!key)return;let mm=shadow.get(module);if(!mm){mm=new Map();shadow.set(module,mm);}if(row.deleted_at){mm.delete(key);if(ARRAY_MODULES.has(module)){const arr=get(module,[]),idx=A(arr).findIndex(x=>recordKey(module,x)===key);if(idx>=0)arr.splice(idx,1);}else replaceObject(module,{});}else{const payload=clone(row.payload||{});mm.set(key,{payload,version:N(row.row_version),hash:hash(payload)});if(ARRAY_MODULES.has(module)){const arr=get(module,[]),idx=A(arr).findIndex(x=>recordKey(module,x)===key);if(idx>=0)arr[idx]=payload;else arr.push(payload);}else replaceObject(module,payload);}if(renderAfter)render();}
@@ -15900,11 +15927,63 @@ window.__v479JournalOwnsSync = true;
   async function processQueue(){if(processRunning||mode!=='business')return false;processRunning=true;try{const list=await idbAll();for(const op of list){if(op.status==='conflict'){lastConflict=lastConflict||{opId:op.opId,conflicts:[]};setStatus('存在待处理数据冲突','error',true);return false;}const ok=await sendOperation(op,true);if(!ok)return false;}if(!list.length)setStatus('业务表实时保存已就绪','ok');return true;}finally{processRunning=false;}}
   function scheduleRetry(){if(retryTimer)return;retryTimer=setTimeout(async()=>{retryTimer=null;await processQueue();const list=await idbAll();if(list.length&&!list.some(x=>x.status==='conflict'))scheduleRetry();},RETRY_MS);}
 
-  async function capture(reason){if(mode!=='business'){if(typeof legacySave==='function'){setStatus('兼容快照保存中','warn',true);const ok=await legacySave.call(W,reason||'legacy_fallback');setStatus(ok===false?'兼容保存失败':'兼容快照已保存',ok===false?'error':'warn');return ok!==false;}return false;}let op;try{op=createOperation(reason);}catch(e){alert('数据校验失败：'+(e.message||e));return false;}if(!op)return true;if(op.blocked){alert(op.blocked);return false;}try{await idbPut(op);}catch(e){alert('浏览器本地安全队列写入失败：'+(e.message||e));setStatus('本地保存失败','error',true);return false;}A(op.changes).forEach(applyChangeToShadow);setStatus('本机已保存 · 云端后台同步中','syncing',true);setTimeout(processQueue,0);return true;}
+  async function capture(reason){
+    if(mode!=='business'){
+      if(typeof legacySave==='function'){setStatus('兼容快照保存中','warn',true);const ok=await legacySave.call(W,reason||'legacy_fallback');setStatus(ok===false?'兼容保存失败':'兼容快照已保存',ok===false?'error':'warn');return ok!==false;}
+      return false;
+    }
+    // 页面数据可以先显示；真正执行修改时必须等待安全基线完成，避免错误差异和覆盖。
+    try{await shadowReadyPromise;}catch(e){alert('安全保存基线建立失败：'+(e.message||e));return false;}
+    let op;try{op=createOperation(reason);}catch(e){alert('数据校验失败：'+(e.message||e));return false;}
+    if(!op)return true;if(op.blocked){alert(op.blocked);return false;}
+    try{await idbPut(op);}catch(e){alert('浏览器本地安全队列写入失败：'+(e.message||e));setStatus('本地保存失败','error',true);return false;}
+    A(op.changes).forEach(applyChangeToShadow);setStatus('本机已保存 · 云端后台同步中','syncing',true);setTimeout(processQueue,0);return true;
+  }
   function queue(reason){captureChain=captureChain.catch(()=>true).then(()=>capture(reason||'saveData'));return captureChain;}
 
   async function applyPendingAfterLoad(){const list=await idbAll();for(const op of list){for(const c of A(op.changes)){if(c.action==='delete'){if(ARRAY_MODULES.has(c.module)){const arr=get(c.module,[]),i=A(arr).findIndex(x=>recordKey(c.module,x)===c.key);if(i>=0)arr.splice(i,1);}else replaceObject(c.module,{});}else{if(ARRAY_MODULES.has(c.module)){const arr=get(c.module,[]),i=A(arr).findIndex(x=>recordKey(c.module,x)===c.key);if(i>=0)arr[i]=clone(c.payload);else arr.push(clone(c.payload));}else replaceObject(c.module,c.payload);}applyChangeToShadow(c);}}return list.length;}
-  async function loadBusinessState(){const data=await callRpc('cms_get_state',{},12000);if(!data||data.schemaVersion==null)throw new Error('业务表返回数据格式无效');if(!data.migrationComplete){mode='legacy';const ok=typeof legacyLoad==='function'?await legacyLoad.call(W):false;setStatus('业务表待迁移 · 当前使用兼容快照','warn',true);mountButtons();return ok;}mode='business';revision=N(data.revision);applyState(data.state||{});resetShadow(state(),data.versions||{});const pending=await applyPendingAfterLoad();render();startRealtime();mountButtons();setStatus(pending?'已加载本机待上传操作 · 正在续传':'业务表实时保存已就绪',pending?'syncing':'ok',!!pending);setTimeout(processQueue,0);return true;}
+  function stateFromReadMaps(maps){
+    const st={};maps=maps||{};
+    MODULES.forEach(m=>{
+      const mm=maps[m]||{};
+      if(ARRAY_MODULES.has(m)) st[m]=Object.keys(mm).sort().map(k=>mm[k]);
+      else st[m]=mm[m]||{};
+    });
+    return st;
+  }
+  async function getFastBusinessState(){
+    try{
+      const fast=await callRpc('cms_get_fast_state_v481',{},15000);
+      if(fast&&fast.readModelVersion==='48.1.0')return fast;
+    }catch(e){
+      if(!isSchemaMissing(e))console.warn('V48.1 fast read unavailable; using compatible full read',e);
+    }
+    return callRpc('cms_get_state',{},30000);
+  }
+  async function loadBusinessState(){
+    const started=performance.now();
+    setStatus('正在读取云端业务数据','syncing',true);
+    const data=await getFastBusinessState();
+    if(!data||data.schemaVersion==null)throw new Error('业务表返回数据格式无效');
+    if(!data.migrationComplete){mode='legacy';const ok=typeof legacyLoad==='function'?await legacyLoad.call(W):false;setStatus('业务表待迁移 · 当前使用兼容快照','warn',true);mountButtons();return ok;}
+    mode='business';revision=N(data.revision);
+    const st=data.stateMaps?stateFromReadMaps(data.stateMaps):(data.state||{});
+    applyState(st);
+    // 数据先显示，不能再让用户面对空白首页等待整库初始化。
+    render();mountButtons();
+    setStatus('云端数据已显示 · 正在准备安全保存','syncing',true);
+    resetShadow(st,data.versions||{},data.stateMaps||null);
+    shadowReadyPromise=(async()=>{
+      await shadowReadyPromise;
+      const pending=await applyPendingAfterLoad();
+      render();
+      await startRealtime();
+      setStatus(pending?'已加载本机待上传操作 · 正在续传':`业务表实时保存已就绪 · ${(performance.now()-started).toFixed(0)}ms`,pending?'syncing':'ok',!!pending);
+      setTimeout(processQueue,0);
+      return true;
+    })();
+    return true;
+  }
   async function load(){try{return await loadBusinessState();}catch(e){if(isSchemaMissing(e)){mode='unavailable';const ok=typeof legacyLoad==='function'?await legacyLoad.call(W):false;setStatus('业务表未部署 · 当前使用兼容快照','warn',true);mountButtons();return ok;}console.error('V48 business load failed',e);mode='legacy';const ok=typeof legacyLoad==='function'?await legacyLoad.call(W):false;setStatus('业务表读取异常 · 已回退兼容数据','error',true);return ok;}}
 
   function moduleFromTable(table){return Object.keys(TABLES).find(k=>TABLES[k]===table)||'';}
@@ -15936,7 +16015,7 @@ window.__v479JournalOwnsSync = true;
   W.retryPendingBusinessOpsV480=async()=>{if(mode!=='business')return load();const ok=await processQueue();if(ok)alert('本机待上传操作已完成同步。');return ok;};
   W.resolveBusinessConflictsV480=resolveConflicts;
   W.createBusinessSnapshotBackupV480=backup;
-  W.showBusinessStorageStatusV480=async function(){const pending=await idbAll();const conflict=pending.filter(x=>x.status==='conflict').length;alert(`V48.0 业务表存储状态\n\n模式：${mode}\n云端修订号：${revision}\n本机待上传：${pending.length}\n待处理冲突：${conflict}\n\n日常保存：业务表逐行原子事务\n完整快照：仅用于备份和恢复`);};
+  W.showBusinessStorageStatusV480=async function(){const pending=await idbAll();const conflict=pending.filter(x=>x.status==='conflict').length;alert(`V48.1 业务表存储状态\n\n模式：${mode}\n云端修订号：${revision}\n本机待上传：${pending.length}\n待处理冲突：${conflict}\n\n日常保存：业务表逐行原子事务\n完整快照：仅用于备份和恢复`);};
   W.__v480Status=async()=>({version:VERSION,schemaVersion:SCHEMA_VERSION,mode,revision,pending:(await idbAll()).length,conflict:lastConflict,shadowModules:shadow.size});
   try{loadCloudState=W.loadCloudState;pullCloudStateAndRefresh=W.pullCloudStateAndRefresh;startRealtimeSync=W.startRealtimeSync;saveData=W.saveData;saveCloudState=W.saveCloudState;saveAndRenderContentKeepState=W.saveAndRenderContentKeepState;queueSaveV473=W.queueSaveV473;}catch(_){ }
 
@@ -15959,7 +16038,7 @@ window.__v479JournalOwnsSync = true;
 (function(){
   'use strict';
   const W=window;
-  const VERSION='V48.0 Business Row Storage + Login Hotfix';
+  const VERSION='V48.1 Fast Read Model + Login Hotfix';
   const MODULES=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans','factoryCalendar','storageConfig','demurrageConfig'];
   const OBJECTS=['nextIds','warningConfig'];
   const CORE=['containers','blList','containerBlMap','transportTasks','locationStock','returnRecords','pickupPlans','productionRecords','productionPlans'];
@@ -16004,7 +16083,14 @@ window.__v479JournalOwnsSync = true;
     const row={key:CACHE_KEY,userEmail:(W.cloudUser&&W.cloudUser.email)||(typeof cloudUser!=='undefined'&&cloudUser&&cloudUser.email)||'',savedAt:new Date().toISOString(),state:stateSnapshot()};
     return new Promise((resolve,reject)=>{const tx=db.transaction(CACHE_STORE,'readwrite');tx.objectStore(CACHE_STORE).put(row);tx.oncomplete=()=>resolve(true);tx.onerror=()=>reject(tx.error||new Error('启动缓存写入失败'));});
   }
-  function scheduleCache(delay){if(cacheTimer)clearTimeout(cacheTimer);cacheTimer=setTimeout(()=>{cacheTimer=null;writeCache().catch(e=>console.warn('V47.13 boot cache skipped',e));},delay==null?900:delay);}
+  function scheduleCache(delay){
+    if(cacheTimer)clearTimeout(cacheTimer);
+    cacheTimer=setTimeout(()=>{
+      cacheTimer=null;
+      const work=()=>writeCache().catch(e=>console.warn('V48.1 boot cache skipped',e));
+      if(typeof requestIdleCallback==='function')requestIdleCallback(work,{timeout:5000});else setTimeout(work,0);
+    },delay==null?15000:delay);
+  }
 
   function isLoginVisible(){const login=document.getElementById('loginPage'),main=document.getElementById('mainApp');return !!(login&&login.style.display!=='none'&&(!main||main.style.display==='none'));}
   function syncBadge(){
@@ -16035,8 +16121,15 @@ window.__v479JournalOwnsSync = true;
     if(coreCount()===0){try{if(typeof loadLocalDataOnly==='function')loadLocalDataOnly();}catch(e){console.warn('V47.13 local startup data skipped',e);}}
     const login=document.getElementById('loginPage'),main=document.getElementById('mainApp');if(login)login.style.display='none';if(main)main.style.display='block';
     const role=document.getElementById('currentRole'),name=document.getElementById('currentUser');if(role)role.innerText=mapped.role||'';if(name)name.innerText=mapped.name||mapped.email||user.email||'';
-    renderAll();
-    setSync('已登录 · 云端数据后台同步中','syncing',true);
+    if(coreCount()>0){
+      renderAll();
+      setSync('已登录 · 正在校验云端更新','syncing',true);
+    }else{
+      try{if(typeof renderSidebar==='function')renderSidebar();}catch(_){ }
+      const content=document.getElementById('mainContent');
+      if(content)content.innerHTML='<div class="card" style="min-height:220px;display:flex;align-items:center;justify-content:center"><div style="text-align:center;color:#52657a"><div style="font-size:30px;margin-bottom:14px">↻</div><div style="font-size:17px;font-weight:700">正在读取云端业务数据</div><div style="font-size:13px;margin-top:8px">不会下载旧快照；数据返回后直接显示</div></div></div>';
+      setSync('已登录 · 正在读取云端数据','syncing',true);
+    }
   }
 
   async function backgroundBootstrap(email){
@@ -16050,7 +16143,7 @@ window.__v479JournalOwnsSync = true;
         }
         if(typeof backgroundRealtime==='function'){try{backgroundRealtime.call(W);}catch(_){ }}
         if(typeof backgroundLoad==='function')await backgroundLoad.call(W,'v4713_background_login');
-        scheduleCache(100);
+        scheduleCache(20000);
         setSync('云端数据已同步','ok',2200);
         return true;
       }catch(e){
@@ -16119,7 +16212,7 @@ window.__v479JournalOwnsSync = true;
       const ok=await fastEnsureCloudSession();
       if(!ok&&document.getElementById('loginPage')?.style.display!=='none')throw new Error('账号已验证，但未能读取有效用户权限');
     }catch(e){
-      console.error('V48.0 email login failed',e);
+      console.error('V48.1 email login failed',e);
       alert('邮箱登录失败：'+(e&&e.message||e));
     }finally{
       if(btn){btn.disabled=false;btn.textContent=old||'邮箱 + 密码登录';}
@@ -16149,9 +16242,9 @@ window.__v479JournalOwnsSync = true;
   document.head.appendChild(style);
   function version(){
     try{
-      if(document.title!=='Sistema Inteligente de Monitoramento de Contêineres V48.0')document.title='Sistema Inteligente de Monitoramento de Contêineres V48.0';
-      const card=document.querySelector('.login-card');if(card){const sub=[...card.querySelectorAll('div,p')].find(el=>/V4\d|Stable|Clean|Safe|Instant Access|修复/i.test(S(el.textContent)));if(sub){const t='V48.0 Business Row Storage：登录即时进入；日常业务按行原子保存；完整快照仅用于备份。';if(S(sub.textContent)!==t)sub.textContent=t;}}
-      document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.(9|10|11|12)|Ordered Local-First|Full Basic Data Export|Shared Container|Import Validation/i.test(S(el.textContent))){if(S(el.textContent)!=='V48.0')el.textContent='V48.0';}});
+      if(document.title!=='Sistema Inteligente de Monitoramento de Contêineres V48.1')document.title='Sistema Inteligente de Monitoramento de Contêineres V48.1';
+      const card=document.querySelector('.login-card');if(card){const sub=[...card.querySelectorAll('div,p')].find(el=>/V4\d|Stable|Clean|Safe|Instant Access|修复/i.test(S(el.textContent)));if(sub){const t='V48.1 Fast Read Model：登录即时进入；逐行原子保存；服务器读取模型即时加载；完整快照仅用于备份。';if(S(sub.textContent)!==t)sub.textContent=t;}}
+      document.querySelectorAll('.status-badge,.badge,.version-badge').forEach(el=>{if(/V47\.(9|10|11|12)|Ordered Local-First|Full Basic Data Export|Shared Container|Import Validation/i.test(S(el.textContent))){if(S(el.textContent)!=='V48.1')el.textContent='V48.1';}});
       document.body.classList.toggle('v4713-login-visible',isLoginVisible());
     }catch(_){ }
   }
